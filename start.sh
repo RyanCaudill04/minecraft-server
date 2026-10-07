@@ -1,2 +1,3 @@
-java -Xms2G -Xmx4G -jar server.jar nogui 
+#!/bin/bash
 
+java -Xms8G -Xmx12G -jar paper.jar --nogui
