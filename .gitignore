@@ -1,0 +1,7 @@
+cache/
+.jar
+usercache.json
+logs/
+world/
+libraries/
+.paper/
