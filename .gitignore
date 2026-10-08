@@ -1,7 +1,20 @@
+# Runtime and generated data
 cache/
-.jar
-usercache.json
 logs/
-world/
+usercache.json
+session.lock
 libraries/
 .paper/
+
+# Generated dimensions and worlds. Preserve configuration separately.
+world*/
+
+# Downloaded server and plugin binaries are reproducible artifacts.
+*.jar
+
+# Machine-specific secrets and local overrides
+server.properties.local
+connection.private.md
+*.pem
+*.key
+id_*
