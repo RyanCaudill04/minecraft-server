@@ -11,6 +11,7 @@ world*/
 
 # Downloaded server and plugin binaries are reproducible artifacts.
 *.jar
+lazymc
 
 # Machine-specific secrets and local overrides
 server.properties.local

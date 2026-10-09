@@ -1,0 +1,54 @@
+# LazyMC proxy and idle-sleep configuration for this Paper server.
+#
+# LazyMC owns the public Minecraft port. It rewrites the backend listener
+# values in server.properties while it is running, then restores them when it
+# exits. Do not start start.sh alongside LazyMC.
+
+[public]
+# The address players (and the router port-forward) use.
+address = "0.0.0.0:25565"
+
+[server]
+# Paper listens only on loopback, behind the LazyMC proxy.
+address = "127.0.0.1:25566"
+directory = "."
+command = "./start.sh"
+
+# Paper can take a little while to load worlds and plugins on a Raspberry Pi.
+start_timeout = 300
+stop_timeout = 180
+
+# Honor existing IP bans before waking the server. Do not enable PROXY protocol
+# without also installing and configuring a compatible Paper plugin.
+block_banned_ips = true
+
+[time]
+# Stop Paper after five minutes with no players. Keep it online briefly after a
+# wake so status checks or a failed first join do not immediately stop it.
+sleep_after = 300
+minimum_online_time = 120
+
+[motd]
+sleeping = "§7Server is sleeping\n§aJoin to wake it up"
+starting = "§eServer is starting...\n§7Please wait, then reconnect if needed"
+stopping = "§7Server is going to sleep...\n§7Please try again shortly"
+from_server = true
+
+[join]
+# Hold the first player while Paper starts (up to 25 seconds), then give a
+# clear reconnect message if startup takes longer.
+methods = ["hold", "kick"]
+
+[join.hold]
+timeout = 25
+
+[join.kick]
+starting = "Server is starting...\n\nPlease reconnect in a moment."
+stopping = "Server is going to sleep...\n\nPlease reconnect in a moment."
+
+[advanced]
+# Required to keep the public proxy and private Paper listener in sync.
+rewrite_server_properties = true
+
+[config]
+version = "0.2.11"
