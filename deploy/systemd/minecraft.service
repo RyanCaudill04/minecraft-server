@@ -1,0 +1,25 @@
+# User unit for the Minecraft server. LazyMC owns the public port and starts
+# Paper (via start.sh) on demand, so systemd only manages LazyMC.
+#
+# Install on the Pi:
+#   ln -s ~/minecraft_server/deploy/systemd/minecraft.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now minecraft
+
+[Unit]
+Description=Minecraft server (LazyMC + Paper)
+
+[Service]
+WorkingDirectory=%h/minecraft_server
+ExecStart=%h/minecraft_server/lazymc start
+Restart=on-failure
+RestartSec=10
+
+# Send Ctrl+C to LazyMC only, so it can stop Paper cleanly. Allow longer than
+# LazyMC's stop_timeout (180s) before systemd kills whatever is left.
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=240
+
+[Install]
+WantedBy=default.target
