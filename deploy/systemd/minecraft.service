@@ -15,10 +15,10 @@ ExecStart=%h/minecraft_server/lazymc start
 Restart=on-failure
 RestartSec=10
 
-# Send Ctrl+C to every process, like a terminal does: Paper saves and exits on
-# SIGINT, and LazyMC does not forward the signal itself. Allow longer than
-# LazyMC's stop_timeout (180s) before systemd kills whatever is left.
-KillSignal=SIGINT
+# Send SIGTERM to every process: Paper saves and exits, and LazyMC exits. LazyMC
+# neither forwards signals to Paper nor quits on SIGINT, so neither the
+# KillMode=mixed nor the SIGINT setting works. Allow longer than LazyMC's
+# stop_timeout (180s) before systemd kills whatever is left.
 KillMode=control-group
 TimeoutStopSec=240
 
