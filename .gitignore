@@ -15,7 +15,13 @@ lazymc
 
 # Machine-specific secrets and local overrides
 server.properties.local
+server.properties
 connection.private.md
 *.pem
 *.key
 id_*
+
+# Plugins
+plugins/Chunky/tasks/
+plugins/spark/tmp/*.tmp
+plugins/spark/activity.json

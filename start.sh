@@ -15,4 +15,4 @@ while IFS= read -r -d '' library; do
   classpath="$classpath:$library"
 done < <(find "$libraries_dir" -type f -name '*.jar' -print0)
 
-exec java -Xms8G -Xmx12G -cp "$classpath" org.bukkit.craftbukkit.Main --nogui
+exec java -Xms10G -Xmx10G -cp "$classpath" org.bukkit.craftbukkit.Main --nogui
