@@ -1,0 +1,273 @@
+# CI/CD for the whole repo.
+#
+# Pull requests: work out which parts changed, run the checks for those
+# parts, and report one required check, ci-ok.
+# Pushes to main: the same checks, then publish a release if anything
+# deployable changed. The Pi's mc-agent timer installs the newest release.
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its older run. Runs on main never
+# cancel each other, so every merge gets released in order.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      play: ${{ steps.scopes.outputs.play }}
+      admin: ${{ steps.scopes.outputs.admin }}
+      mc_server: ${{ steps.scopes.outputs.mc_server }}
+      infra: ${{ steps.scopes.outputs.infra }}
+      deploy: ${{ steps.scopes.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect changed scopes
+        id: scopes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            files=$(git diff --name-only "$(git merge-base "origin/$BASE_REF" HEAD)" HEAD)
+          elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            files=$(git diff --name-only "$BEFORE" HEAD)
+          else
+            # Manual runs, or a push with no usable previous commit: check everything.
+            files=$(git ls-files)
+          fi
+          echo "Changed files:"
+          echo "$files"
+          echo "$files" | scripts/ci-changes.sh | tee -a "$GITHUB_OUTPUT"
+
+  go:
+    name: go (vet, test, build)
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: web/go.mod
+          cache: false
+      - name: gofmt
+        working-directory: web
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "::error::run gofmt -w"; exit 1; }
+      - name: vet
+        working-directory: web
+        run: go vet ./...
+      - name: test
+        working-directory: web
+        run: go test -race ./...
+      - name: build for the Pi
+        working-directory: web
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./...
+
+  play:
+    name: play.ryancaudill.dev
+    needs: changes
+    if: needs.changes.outputs.play == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: web/go.mod
+          cache: false
+      - name: JavaScript syntax
+        run: node --check sites/play/app.js
+      - name: Smoke test the built server
+        run: |
+          (cd web && go build -o "$RUNNER_TEMP/play" ./cmd/play)
+          mkdir -p "$RUNNER_TEMP/server"
+          # Nothing listens on these ports, so the server reads as offline.
+          "$RUNNER_TEMP/play" -dir sites/play -server "$RUNNER_TEMP/server" \
+            -addr 127.0.0.1:8082 -paper 127.0.0.1:1 -lazymc 127.0.0.1:2 &
+          for _ in $(seq 50); do curl -fs http://127.0.0.1:8082/ >/dev/null && break; sleep 0.1; done
+          curl -fsS http://127.0.0.1:8082/ | grep -q '<title>play.ryancaudill.dev</title>'
+          for asset in style.css app.js; do
+            grep -q "$asset" sites/play/index.html
+            curl -fsS -o /dev/null "http://127.0.0.1:8082/$asset"
+          done
+          curl -fsS http://127.0.0.1:8082/api/status | grep -q '"state":"offline"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/api/world)" = 503
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8082/api/status)" = 405
+
+  admin:
+    name: admin.ryancaudill.dev and static sites
+    needs: changes
+    if: needs.changes.outputs.admin == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: web/go.mod
+          cache: false
+      - name: Smoke test each static site
+        run: |
+          (cd web && go build -o "$RUNNER_TEMP/serve" ./cmd/serve)
+          for site in admin portfolio; do
+            port=$(sed -n 's/^ADDR=127\.0\.0\.1:\([0-9]*\)$/\1/p' "deploy/sites/$site.env")
+            test -n "$port" || { echo "::error::deploy/sites/$site.env must bind to 127.0.0.1"; exit 1; }
+            "$RUNNER_TEMP/serve" -dir "sites/$site" -addr "127.0.0.1:$port" &
+            for _ in $(seq 50); do curl -fs "http://127.0.0.1:$port/" >/dev/null && break; sleep 0.1; done
+            curl -fsS "http://127.0.0.1:$port/" | grep -q '<title>'
+            echo "$site OK on $port"
+          done
+
+  mc-server:
+    name: Minecraft server config
+    needs: changes
+    if: needs.changes.outputs.mc_server == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck start.sh
+        run: shellcheck start.sh
+      - name: lazymc.toml
+        run: |
+          python3 - <<'EOF'
+          import tomllib
+          with open("lazymc.toml", "rb") as f:
+              cfg = tomllib.load(f)
+          # play pings Paper here to tell "active" from "sleeping".
+          assert cfg["server"]["address"] == "127.0.0.1:25566", cfg["server"]["address"]
+          assert cfg["public"]["address"].endswith(":25565"), cfg["public"]["address"]
+          print("lazymc.toml OK")
+          EOF
+      - name: No secrets in tracked config
+        run: |
+          if git ls-files --error-unmatch server.properties >/dev/null 2>&1; then
+            echo "::error::server.properties must stay untracked; edit server.properties.example"
+            exit 1
+          fi
+          if grep -nE '^(management-server-secret|rcon\.password)=.+' server.properties.example; then
+            echo "::error::server.properties.example must not contain secrets"
+            exit 1
+          fi
+
+  infra:
+    name: deploy files, scripts and workflows
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: web/go.mod
+          cache: false
+      - name: actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint"
+      - name: shellcheck scripts
+        run: shellcheck scripts/*.sh
+      - name: Change detection tests
+        run: scripts/ci-changes_test.sh
+      - name: Build a release and verify its units
+        run: |
+          scripts/build-release.sh ci-check "$RUNNER_TEMP/dist"
+          (cd "$RUNNER_TEMP/dist" && sha256sum -c release.tar.gz.sha256)
+          # Unpack where the units expect it (%h/apps/current) and let
+          # systemd check them, including that every program exists.
+          current="$HOME/apps/current"
+          mkdir -p "$current" "$HOME/minecraft_server"
+          tar -xzf "$RUNNER_TEMP/dist/release.tar.gz" -C "$current"
+          units=$(mktemp -d)
+          cp "$current"/deploy/systemd/{play.service,mc-agent.service,mc-agent.timer} "$units/"
+          for site in admin portfolio; do cp "$current/deploy/systemd/site@.service" "$units/site@$site.service"; done
+          systemd-analyze --user --man=no verify "$units"/*
+          # Every unit and service the manifest names must be in the release.
+          python3 - "$current" <<'EOF'
+          import json, os, sys
+          root = sys.argv[1]
+          m = json.load(open(os.path.join(root, "deploy/release.json")))
+          for unit in m["units"]:
+              assert os.path.exists(os.path.join(root, "deploy/systemd", unit)), unit
+          for svc in m["services"]:
+              template = svc.split("@")[0] + "@.service" if "@" in svc else svc
+              assert template in m["units"], f"{svc} is not linked by units"
+          print("release.json OK")
+          EOF
+
+  # The one check branch protection requires. Scoped jobs that were skipped
+  # because nothing in their scope changed count as passing.
+  ci-ok:
+    name: ci-ok
+    needs: [changes, go, play, admin, mc-server, infra]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All required jobs passed or were skipped
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' >/dev/null
+          test "$(echo "$RESULTS" | jq -r '.changes.result')" = success
+
+  release:
+    name: release
+    needs: [changes, ci-ok]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && needs.changes.outputs.deploy == 'true'))
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write # create the release and its tag
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: web/go.mod
+          cache: false
+      - name: Next release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh release list --limit 200 --json tagName \
+            --jq '[.[].tagName | select(test("^r[0-9]+$")) | ltrimstr("r") | tonumber] | max // 0')
+          echo "tag=r$((last + 1))" | tee -a "$GITHUB_OUTPUT"
+      - name: Build
+        run: scripts/build-release.sh "${{ steps.tag.outputs.tag }}" dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release create "$TAG" dist/release.tar.gz dist/release.tar.gz.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes "Built from ${GITHUB_SHA} by run ${GITHUB_RUN_ID}. The Pi installs it within a few minutes."
