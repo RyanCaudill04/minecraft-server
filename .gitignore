@@ -28,3 +28,6 @@ id_*
 plugins/Chunky/tasks/
 plugins/spark/tmp/*.tmp
 plugins/spark/activity.json
+
+# Personal planning notes stay local; they are not for the public repo
+docs/
