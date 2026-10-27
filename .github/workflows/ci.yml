@@ -236,7 +236,11 @@ jobs:
   release:
     name: release
     needs: [changes, ci-ok]
+    # Without a status function, actions would add a silent success()
+    # success() fails on skipped jobs, so release would get skipped on a ci-ok success
     if: >-
+      !cancelled() &&
+      needs.ci-ok.result == 'success' &&
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'push' && needs.changes.outputs.deploy == 'true'))
