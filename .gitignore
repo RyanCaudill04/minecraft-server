@@ -7,7 +7,7 @@ libraries/
 .paper/
 
 # Generated dimensions and worlds. Preserve configuration separately.
-world*/
+/world*/
 
 # Downloaded server and plugin binaries are reproducible artifacts.
 *.jar
