@@ -43,6 +43,11 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BEFORE: ${{ github.event.before }}
         run: |
+          # Without pipefail, a failing ci-changes.sh is hidden by tee.
+          set -o pipefail
+          # By default git quotes paths with non-ASCII characters, which
+          # ci-changes.sh's patterns would never match.
+          git config core.quotePath false
           if [ "$EVENT" = pull_request ]; then
             files=$(git diff --name-only "$(git merge-base "origin/$BASE_REF" HEAD)" HEAD)
           elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then

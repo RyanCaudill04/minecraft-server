@@ -42,6 +42,13 @@ check "readme only"       'README.md\n'                            ''
 check "nothing"           ''                                       ''
 check "lookalike paths"   'web/cmd/player/x.go\nsites/playground/a\nmy-start.sh\n' 'deploy'
 check "mixed"             'sites/play/style.css\nlazymc.toml\n'    'play mc_server deploy'
+check "non-ASCII path"    'sites/play/caf\xc3\xa9.png\n'           'play deploy'
+
+# git quotes paths it can't print plainly; the script must refuse them.
+if printf '"sites/play/a\\"b.png"\n' | "$dir/ci-changes.sh" >/dev/null 2>&1; then
+  echo "FAIL quoted path: want a non-zero exit"
+  failures=$((failures + 1))
+fi
 
 if ((failures)); then
   echo "$failures failure(s)"

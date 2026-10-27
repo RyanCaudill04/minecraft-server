@@ -12,10 +12,20 @@
 #
 # A change to .github/ turns every scope on.
 #
-# Usage: git diff --name-only A B | scripts/ci-changes.sh
+# Paths must be unquoted, so turn off git's quoting of non-ASCII names.
+#
+# Usage: git -c core.quotePath=false diff --name-only A B | scripts/ci-changes.sh
 set -euo pipefail
 
 files=$(cat)
+
+# git still quotes paths containing ", \ or control characters. Fail
+# rather than silently match nothing.
+if grep -q '^"' <<<"$files"; then
+  echo "ci-changes.sh: quoted path in input, can't match it:" >&2
+  grep '^"' <<<"$files" >&2
+  exit 1
+fi
 
 touched() { grep -qE "$1" <<<"$files"; }
 
