@@ -1,0 +1,19 @@
+# Template user unit for the static sites. The instance name is the site:
+# site@play.service serves sites/play on the address in deploy/sites/play.env.
+#
+# Install on the Pi:
+#   ln -s ~/minecraft_server/deploy/systemd/site@.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now site@portfolio site@admin site@play
+
+[Unit]
+Description=Static site %i
+
+[Service]
+EnvironmentFile=%h/minecraft_server/deploy/sites/%i.env
+ExecStart=%h/minecraft_server/bin/serve -dir %h/minecraft_server/sites/%i -addr ${ADDR}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
