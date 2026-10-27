@@ -2,9 +2,51 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https://mc-heads.net">
   <title>play.ryancaudill.dev</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
 </head>
 <body>
-  <h1>play.ryancaudill.dev</h1>
+  <main>
+    <header>
+      <a href="https://ryancaudill.dev">ryancaudill.dev</a> <span class="sep">/</span> play
+    </header>
+
+    <section id="banner" class="banner" data-state="loading" aria-live="polite">
+      <span class="dot" aria-hidden="true"></span>
+      <div>
+        <h1 id="state-title">Checking server…</h1>
+        <p id="state-message">One moment.</p>
+      </div>
+    </section>
+
+    <section id="players" class="section" hidden>
+      <div class="row">
+        <h2>Players online</h2>
+        <span id="player-count" class="value">0 / 0</span>
+      </div>
+      <ul id="player-list" class="player-list"></ul>
+      <p id="player-more" class="muted" hidden></p>
+      <p id="player-empty" class="muted" hidden>Nobody online right now.</p>
+    </section>
+
+    <section class="section">
+      <div class="row">
+        <h2>Connect</h2>
+        <span class="value">
+          <code id="address">mc.ryancaudill.dev</code>
+          <button id="copy" type="button">Copy</button>
+        </span>
+      </div>
+      <div class="row" id="version-row" hidden>
+        <h2>Version</h2>
+        <span id="version" class="value"></span>
+      </div>
+    </section>
+
+    <footer id="updated" class="muted">&nbsp;</footer>
+  </main>
 </body>
 </html>

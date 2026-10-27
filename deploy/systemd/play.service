@@ -1,0 +1,19 @@
+# User unit for play.ryancaudill.dev: the status page and its /api/status
+# endpoint. Replaces site@play on the same port, so the tunnel route is unchanged.
+#
+# Install on the Pi:
+#   systemctl --user disable --now site@play
+#   ln -s ~/minecraft_server/deploy/systemd/play.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now play
+
+[Unit]
+Description=play.ryancaudill.dev status page
+
+[Service]
+ExecStart=%h/minecraft_server/bin/play -dir %h/minecraft_server/sites/play -addr 127.0.0.1:8082
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

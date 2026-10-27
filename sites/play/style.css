@@ -1,0 +1,159 @@
+:root {
+  --bg: #ffffff;
+  --text: #1f2328;
+  --muted: #656d76;
+  --border: #d0d7de;
+  --surface: #f6f8fa;
+
+  --active: #1a7f37;
+  --active-bg: #dafbe1;
+  --sleeping: #9a6700;
+  --sleeping-bg: #fff8c5;
+  --offline: #cf222e;
+  --offline-bg: #ffebe9;
+  --unknown: #656d76;
+  --unknown-bg: #eaeef2;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --text: #e6edf3;
+    --muted: #8d96a0;
+    --border: #30363d;
+    --surface: #161b22;
+
+    --active: #3fb950;
+    --active-bg: #12261e;
+    --sleeping: #d29922;
+    --sleeping-bg: #272115;
+    --offline: #f85149;
+    --offline-bg: #2d1517;
+    --unknown: #8d96a0;
+    --unknown-bg: #1c2128;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 48px 16px;
+}
+
+header {
+  color: var(--muted);
+  margin-bottom: 32px;
+}
+header a { color: inherit; text-decoration: none; }
+header a:hover { text-decoration: underline; }
+.sep { margin: 0 4px; }
+
+/* Status banner. Its color comes from data-state, set by app.js. */
+.banner {
+  --accent: var(--unknown);
+  --accent-bg: var(--unknown-bg);
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  min-height: 92px;
+  padding: 20px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-bg);
+  margin-bottom: 32px;
+  transition: background 0.3s, border-color 0.3s;
+}
+.banner[data-state="active"]   { --accent: var(--active);   --accent-bg: var(--active-bg); }
+.banner[data-state="sleeping"],
+.banner[data-state="starting"] { --accent: var(--sleeping); --accent-bg: var(--sleeping-bg); }
+.banner[data-state="offline"]  { --accent: var(--offline);  --accent-bg: var(--offline-bg); }
+
+.banner h1 { margin: 0; font-size: 1.25rem; }
+.banner p { margin: 2px 0 0; color: var(--muted); }
+
+.dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-top: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.banner[data-state="starting"] .dot,
+.banner[data-state="loading"] .dot { animation: pulse 1.2s ease-in-out infinite; }
+
+@keyframes pulse { 50% { opacity: 0.25; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .dot { animation: none !important; }
+}
+
+/* Sections and label/value rows. */
+.section { margin-bottom: 32px; }
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.row h2 { margin: 0; font-size: 1rem; font-weight: 600; }
+.value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+
+code {
+  font: 0.95rem ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+button {
+  font: inherit;
+  font-size: 0.875rem;
+  padding: 4px 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+
+.player-list {
+  list-style: none;
+  margin: 0;
+  padding: 12px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+.player-list li { display: flex; align-items: center; gap: 8px; }
+.player-list img {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  image-rendering: pixelated;
+}
+
+.muted { color: var(--muted); }
+.section > .muted { margin: 12px 0 0; }
+footer { font-size: 0.875rem; }
+
+/* Last data is kept but dimmed while the status API can't be reached. */
+body.stale .section { opacity: 0.5; }
