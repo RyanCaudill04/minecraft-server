@@ -29,7 +29,10 @@ echo "$tag" > "$stage/VERSION"
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='2000-01-01 00:00Z' \
   -C "$stage" -czf "$out/release.tar.gz" . 2>/dev/null \
   || tar -C "$stage" -czf "$out/release.tar.gz" .   # BSD tar on macOS lacks those flags
-(cd "$out" && sha256sum release.tar.gz > release.tar.gz.sha256 2>/dev/null \
-  || shasum -a 256 release.tar.gz > release.tar.gz.sha256)
+if command -v sha256sum >/dev/null; then
+  (cd "$out" && sha256sum release.tar.gz > release.tar.gz.sha256)
+else # macOS
+  (cd "$out" && shasum -a 256 release.tar.gz > release.tar.gz.sha256)
+fi
 
 echo "built $tag in $out"

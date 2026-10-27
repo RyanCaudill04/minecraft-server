@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -146,6 +147,11 @@ func Status(ctx context.Context, addr string) (*Response, error) {
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("ping: %w", ctxErr)
+		}
+		// The connection deadline is the context's deadline, so a read can
+		// time out a moment before the context itself reports expiry.
+		if _, ok := ctx.Deadline(); ok && errors.Is(err, os.ErrDeadlineExceeded) {
+			return nil, fmt.Errorf("ping: %w", context.DeadlineExceeded)
 		}
 		return nil, fmt.Errorf("ping: %w", err)
 	}
