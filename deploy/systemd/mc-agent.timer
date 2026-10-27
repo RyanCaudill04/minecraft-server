@@ -1,0 +1,13 @@
+# Checks for a new release every 2 minutes. Unauthenticated GitHub API calls
+# are limited to 60 an hour, so this uses 30.
+
+[Unit]
+Description=Check for new web app releases
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+RandomizedDelaySec=15s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,8 @@
+# Deploys the newest GitHub Release of this repo. Run by mc-agent.timer.
+
+[Unit]
+Description=Deploy the latest web app release
+
+[Service]
+Type=oneshot
+ExecStart=%h/apps/current/bin/mc-agent deploy
