@@ -2,8 +2,9 @@
 #
 # Pull requests: work out which parts changed, run the checks for those
 # parts, and report one required check, ci-ok.
-# Pushes to main: the same checks, then publish a release if anything
-# deployable changed. The Pi's mc-agent timer installs the newest release.
+# Pushes to main: the same checks for everything since the last release,
+# then publish a release if any of it is deployable. The Pi's mc-agent
+# timer installs the newest release.
 name: CI/CD
 
 on:
@@ -15,8 +16,10 @@ on:
 permissions:
   contents: read
 
-# A new push to a pull request cancels its older run. Runs on main never
-# cancel each other, so every merge gets released in order.
+# A new push to a pull request cancels its older run. Runs on main don't
+# cancel the running one, but GitHub keeps only one pending run per group,
+# so a newer merge replaces a waiting one. That's fine: each run on main
+# covers everything since the last release, so main always catches up.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -41,7 +44,6 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
-          BEFORE: ${{ github.event.before }}
         run: |
           # Without pipefail, a failing ci-changes.sh is hidden by tee.
           set -o pipefail
@@ -50,10 +52,24 @@ jobs:
           git config core.quotePath false
           if [ "$EVENT" = pull_request ]; then
             files=$(git diff --name-only "$(git merge-base "origin/$BASE_REF" HEAD)" HEAD)
-          elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            files=$(git diff --name-only "$BEFORE" HEAD)
+          elif [ "$EVENT" = push ]; then
+            # Diff against the newest release, not the previous push, so
+            # changes from a cancelled or failed run are picked up by the
+            # next one.
+            last=$(git tag -l 'r[0-9]*' --sort=-v:refname | grep -Ex -m1 'r[0-9]+' || true)
+            if [ -n "$last" ] && git merge-base --is-ancestor "$last" HEAD; then
+              echo "Comparing with $last"
+              files=$(git diff --name-only "$last" HEAD)
+            elif [ -n "$last" ] && git merge-base --is-ancestor HEAD "$last"; then
+              # A re-run of a commit that a newer release already includes.
+              echo "Already released in $last"
+              files=
+            else
+              # No release yet, or history was rewritten.
+              files=$(git ls-files)
+            fi
           else
-            # Manual runs, or a push with no usable previous commit: check everything.
+            # Manual runs: check everything.
             files=$(git ls-files)
           fi
           echo "Changed files:"
