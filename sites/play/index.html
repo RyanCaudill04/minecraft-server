@@ -9,44 +9,116 @@
   <script src="app.js" defer></script>
 </head>
 <body>
-  <main>
-    <header>
-      <a href="https://ryancaudill.dev">ryancaudill.dev</a> <span class="sep">/</span> play
-    </header>
+  <div class="app">
+    <aside class="sidebar">
+      <a class="brand" href="#overview">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>ryancaudill.dev<span class="brand-sub">/play</span></span>
+      </a>
 
-    <section id="banner" class="banner" data-state="loading" aria-live="polite">
-      <span class="dot" aria-hidden="true"></span>
+      <nav class="nav" aria-label="Sections">
+        <a href="#overview">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5"/><rect x="3" y="11" width="6" height="6" rx="1.5"/><rect x="11" y="11" width="6" height="6" rx="1.5"/></svg>
+          Overview
+        </a>
+        <a href="#players">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.2"/><path d="M3.5 17c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"/></svg>
+          Players
+        </a>
+        <a href="#world">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2.2 2.8 4.5 2.8 7s-.8 4.8-2.8 7c-2-2.2-2.8-4.5-2.8-7S8 5.2 10 3z"/></svg>
+          World
+        </a>
+        <a href="#leaderboards">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 17V11M10 17V4M16 17V8"/></svg>
+          Leaderboards
+        </a>
+      </nav>
+
+      <div class="sidebar-foot">
+        <span class="pill" data-state="loading"><span class="dot"></span><span id="pill-text">Checking…</span></span>
+      </div>
+    </aside>
+
+    <main class="content">
+      <section id="overview" class="section">
+        <header class="section-head">
+          <h1>Overview</h1>
+          <p class="muted" id="updated">&nbsp;</p>
+        </header>
+
+        <div class="grid overview-grid">
+          <article class="card status-card" id="status-card" data-state="loading" aria-live="polite">
+            <span class="eyebrow"><span class="dot"></span>Server status</span>
+            <h2 id="state-title">Checking…</h2>
+            <p id="state-message" class="muted">One moment.</p>
+            <div class="address">
+              <code id="address">mc.ryancaudill.dev</code>
+              <button id="copy" class="btn btn-primary" type="button">Copy address</button>
+            </div>
+          </article>
+
+          <article class="card metric">
+            <span class="eyebrow">Online now</span>
+            <div class="metric-value"><span id="online" data-count>0</span><span class="metric-unit" id="max"></span></div>
+            <div class="avatars" id="online-avatars"></div>
+            <p class="metric-sub" id="online-sub">&nbsp;</p>
+          </article>
+
+          <article class="card metric">
+            <span class="eyebrow">In-game time</span>
+            <div class="metric-value" id="clock">--:--</div>
+            <svg class="sky" viewBox="0 0 100 34" aria-hidden="true">
+              <path class="sky-arc" d="M8 30 A42 26 0 0 1 92 30"/>
+              <line class="sky-horizon" x1="2" y1="30" x2="98" y2="30"/>
+              <circle class="sky-body" id="sky-body" cx="8" cy="30" r="4"/>
+            </svg>
+            <p class="metric-sub" id="clock-sub">&nbsp;</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="players" class="section">
+        <header class="section-head">
+          <h2>Players</h2>
+          <p class="muted">Everyone who has joined. Select a player to see their stats.</p>
+        </header>
+        <div class="grid player-grid" id="player-grid"></div>
+      </section>
+
+      <section id="world" class="section">
+        <header class="section-head">
+          <h2>World</h2>
+          <p class="muted">From the last save. Updates while someone is playing.</p>
+        </header>
+        <div class="grid facts-grid" id="facts"></div>
+      </section>
+
+      <section id="leaderboards" class="section">
+        <header class="section-head">
+          <h2>Leaderboards</h2>
+        </header>
+        <div class="segmented" role="tablist" id="board-tabs"></div>
+        <article class="card board-card">
+          <ol class="board" id="board"></ol>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <div class="sheet-backdrop" id="backdrop" hidden></div>
+  <aside class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-name" hidden>
+    <button class="sheet-close" id="sheet-close" type="button" aria-label="Close">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+    </button>
+    <div class="sheet-head">
+      <img id="sheet-head" alt="" width="72" height="72">
       <div>
-        <h1 id="state-title">Checking server…</h1>
-        <p id="state-message">One moment.</p>
+        <h2 id="sheet-name"></h2>
+        <p id="sheet-seen" class="muted"></p>
       </div>
-    </section>
-
-    <section id="players" class="section" hidden>
-      <div class="row">
-        <h2>Players online</h2>
-        <span id="player-count" class="value">0 / 0</span>
-      </div>
-      <ul id="player-list" class="player-list"></ul>
-      <p id="player-more" class="muted" hidden></p>
-      <p id="player-empty" class="muted" hidden>Nobody online right now.</p>
-    </section>
-
-    <section class="section">
-      <div class="row">
-        <h2>Connect</h2>
-        <span class="value">
-          <code id="address">mc.ryancaudill.dev</code>
-          <button id="copy" type="button">Copy</button>
-        </span>
-      </div>
-      <div class="row" id="version-row" hidden>
-        <h2>Version</h2>
-        <span id="version" class="value"></span>
-      </div>
-    </section>
-
-    <footer id="updated" class="muted">&nbsp;</footer>
-  </main>
+    </div>
+    <dl class="sheet-stats" id="sheet-stats"></dl>
+  </aside>
 </body>
 </html>

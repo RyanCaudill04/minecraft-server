@@ -7,7 +7,7 @@ libraries/
 .paper/
 
 # Generated dimensions and worlds. Preserve configuration separately.
-world*/
+/world*/
 
 # Downloaded server and plugin binaries are reproducible artifacts.
 *.jar
@@ -28,3 +28,6 @@ id_*
 plugins/Chunky/tasks/
 plugins/spark/tmp/*.tmp
 plugins/spark/activity.json
+
+# Personal planning notes stay local; they are not for the public repo
+docs/

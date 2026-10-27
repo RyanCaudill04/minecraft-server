@@ -11,7 +11,7 @@
 Description=play.ryancaudill.dev status page
 
 [Service]
-ExecStart=%h/minecraft_server/bin/play -dir %h/minecraft_server/sites/play -addr 127.0.0.1:8082
+ExecStart=%h/minecraft_server/bin/play -dir %h/minecraft_server/sites/play -server %h/minecraft_server -addr 127.0.0.1:8082
 Restart=on-failure
 RestartSec=10
 
