@@ -1,0 +1,48 @@
+/* admin.ryancaudill.dev. Shared tokens, layout and components are in
+   /shared/base.css, which loads first. */
+
+/* A fixed warm accent, so admin never looks like the public play page. */
+:root { --accent-h: 18; }
+
+code {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--bg);
+  font: 500 0.875em ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* Release tags in metric cards keep the metric's size. */
+.metric-value .tag {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.metric-sub a,
+.planned a {
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: none;
+}
+.metric-sub a:hover,
+.planned a:hover { text-decoration: underline; }
+
+/* Cards for features that aren't built yet. */
+.planned {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  border-style: dashed;
+  box-shadow: none;
+}
+.planned ul { margin: 0; padding-left: 18px; color: var(--muted); }
+.planned li + li { margin-top: 2px; }
+
+.deploy-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+
+@media (max-width: 600px) {
+  .deploy-grid { grid-template-columns: minmax(0, 1fr); }
+}
