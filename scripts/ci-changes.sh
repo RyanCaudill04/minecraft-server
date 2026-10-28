@@ -3,9 +3,10 @@
 # scopes they touch, as key=true|false lines for $GITHUB_OUTPUT.
 #
 #   go         always true: Go vet and unit tests are cheap and cached
-#   play       play.ryancaudill.dev: its command, its site, or shared Go code
-#   admin      admin.ryancaudill.dev and the other static sites: serve,
-#              their sites, or shared Go code
+#   play       play.ryancaudill.dev: its command, its site, the shared
+#              stylesheet, or shared Go code
+#   admin      admin.ryancaudill.dev and the other static sites: admin,
+#              serve, their sites, the shared stylesheet, or shared Go code
 #   mc_server  the Minecraft server's own files (configs, jars, start.sh)
 #   infra      deploy files, scripts and workflows
 #   deploy     anything that ships in a release, so main publishes one
@@ -29,7 +30,7 @@ fi
 
 touched() { grep -qE "$1" <<<"$files"; }
 
-shared='^web/(internal/|go\.mod$|go\.sum$)'
+shared='^web/(internal/|go\.mod$|go\.sum$)|^sites/shared/'
 play=false admin=false mc_server=false infra=false deploy=false
 
 touched "$shared|^web/cmd/play/|^sites/play/" && play=true

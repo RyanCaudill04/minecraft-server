@@ -2,9 +2,129 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'">
   <title>admin.ryancaudill.dev</title>
+  <link rel="stylesheet" href="/shared/base.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
 </head>
 <body>
-  <h1>admin.ryancaudill.dev</h1>
+  <div class="app">
+    <aside class="sidebar">
+      <a class="brand" href="#overview">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>admin<span class="brand-sub">.ryancaudill.dev</span></span>
+      </a>
+
+      <nav class="nav" aria-label="Sections">
+        <a href="#overview">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5"/><rect x="3" y="11" width="6" height="6" rx="1.5"/><rect x="11" y="11" width="6" height="6" rx="1.5"/></svg>
+          Overview
+        </a>
+        <a href="#server">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3.5" width="14" height="5" rx="1.5"/><rect x="3" y="11.5" width="14" height="5" rx="1.5"/><path d="M6 6h.01M6 14h.01"/></svg>
+          Server
+        </a>
+        <a href="#console">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M6 8l2.5 2L6 12M10.5 12.5H14"/></svg>
+          Console
+        </a>
+        <a href="#deploys">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 13V3M6 7l4-4 4 4M4 13v2.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V13"/></svg>
+          Deploys
+        </a>
+      </nav>
+
+      <div class="sidebar-foot">
+        <span class="pill" data-state="loading"><span class="dot"></span><span id="pill-text">Checking…</span></span>
+      </div>
+    </aside>
+
+    <main class="content">
+      <section id="overview" class="section">
+        <header class="section-head">
+          <h1>Overview</h1>
+          <p class="muted" id="updated">&nbsp;</p>
+        </header>
+
+        <div class="grid overview-grid">
+          <article class="card status-card" data-state="loading" aria-live="polite">
+            <span class="eyebrow"><span class="dot"></span>Minecraft server</span>
+            <h2 id="state-title">Checking…</h2>
+            <p id="state-message" class="muted">One moment.</p>
+          </article>
+
+          <article class="card metric">
+            <span class="eyebrow">Online now</span>
+            <div class="metric-value"><span id="online">0</span><span class="metric-unit" id="max"></span></div>
+            <p class="metric-sub" id="online-sub">&nbsp;</p>
+          </article>
+
+          <article class="card metric">
+            <span class="eyebrow">Active release</span>
+            <div class="metric-value"><code class="tag" id="release">–</code></div>
+            <p class="metric-sub" id="release-sub">&nbsp;</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="server" class="section">
+        <header class="section-head">
+          <h2>Server</h2>
+          <p class="muted">Control the Minecraft server and its sleep state.</p>
+        </header>
+        <article class="card planned">
+          <span class="eyebrow">Coming next</span>
+          <ul>
+            <li>Start, stop and restart <code>minecraft.service</code></li>
+            <li>LazyMC sleep state</li>
+          </ul>
+          <a href="https://github.com/RyanCaudill04/minecraft-server/issues/26">#26 Build the admin app</a>
+        </article>
+      </section>
+
+      <section id="console" class="section">
+        <header class="section-head">
+          <h2>Console</h2>
+          <p class="muted">Send commands over RCON and read recent log output.</p>
+        </header>
+        <article class="card planned">
+          <span class="eyebrow">Coming next</span>
+          <ul>
+            <li>Run server commands</li>
+            <li>Recent log lines</li>
+          </ul>
+          <a href="https://github.com/RyanCaudill04/minecraft-server/issues/28">#28 RCON client and console</a>
+        </article>
+      </section>
+
+      <section id="deploys" class="section">
+        <header class="section-head">
+          <h2>Deploys</h2>
+          <p class="muted">Releases mc-agent installs from GitHub.</p>
+        </header>
+        <div class="grid deploy-grid">
+          <article class="card metric">
+            <span class="eyebrow">Active release</span>
+            <div class="metric-value"><code class="tag" id="deploy-release">–</code></div>
+            <p class="metric-sub">
+              <a id="deploy-link" href="https://github.com/RyanCaudill04/minecraft-server/releases">All releases</a>
+            </p>
+          </article>
+          <article class="card planned">
+            <span class="eyebrow">Coming next</span>
+            <ul>
+              <li>Installed releases and a failed tag</li>
+              <li>Deploy now and roll back</li>
+              <li>Results of the last deploy</li>
+            </ul>
+            <a href="https://github.com/RyanCaudill04/minecraft-server/issues/67">#67 Report deployed release status</a>
+            <a href="https://github.com/RyanCaudill04/minecraft-server/issues/10">#10 Surface deploy results</a>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
 </body>
 </html>

@@ -6,7 +6,7 @@
 Description=play.ryancaudill.dev dashboard
 
 [Service]
-ExecStart=%h/apps/current/bin/play -dir %h/apps/current/sites/play -server %h/minecraft_server -addr 127.0.0.1:8082
+ExecStart=%h/apps/current/bin/play -dir %h/apps/current/sites/play -shared %h/apps/current/sites/shared -server %h/minecraft_server -addr 127.0.0.1:8082
 Restart=on-failure
 RestartSec=10
 

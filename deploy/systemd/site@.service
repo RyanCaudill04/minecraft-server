@@ -1,5 +1,5 @@
 # Template user unit for the static sites. The instance name is the site:
-# site@admin.service serves sites/admin on the address in deploy/sites/admin.env.
+# site@portfolio.service serves sites/portfolio on the address in deploy/sites/portfolio.env.
 # Installed by mc-agent from the active release (~/apps/current).
 
 [Unit]
