@@ -121,13 +121,13 @@ jobs:
           (cd web && go build -o "$RUNNER_TEMP/play" ./cmd/play)
           mkdir -p "$RUNNER_TEMP/server"
           # Nothing listens on these ports, so the server reads as offline.
-          "$RUNNER_TEMP/play" -dir sites/play -server "$RUNNER_TEMP/server" \
+          "$RUNNER_TEMP/play" -dir sites/play -shared sites/shared -server "$RUNNER_TEMP/server" \
             -addr 127.0.0.1:8082 -paper 127.0.0.1:1 -lazymc 127.0.0.1:2 &
           for _ in $(seq 50); do curl -fs http://127.0.0.1:8082/ >/dev/null && break; sleep 0.1; done
           curl -fsS http://127.0.0.1:8082/ | grep -q '<title>play.ryancaudill.dev</title>'
-          for asset in style.css app.js; do
+          for asset in /shared/base.css style.css app.js; do
             grep -q "$asset" sites/play/index.html
-            curl -fsS -o /dev/null "http://127.0.0.1:8082/$asset"
+            curl -fsS -o /dev/null "http://127.0.0.1:8082/${asset#/}"
           done
           curl -fsS http://127.0.0.1:8082/api/status | grep -q '"state":"offline"'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/api/world)" = 503
@@ -146,10 +146,28 @@ jobs:
         with:
           go-version-file: web/go.mod
           cache: false
+      - name: JavaScript syntax
+        run: node --check sites/admin/app.js
+      - name: Smoke test the admin server
+        run: |
+          (cd web && go build -o "$RUNNER_TEMP/admin" ./cmd/admin)
+          apps=$(mktemp -d)
+          # Nothing listens on these ports, so the server reads as offline.
+          "$RUNNER_TEMP/admin" -dir sites/admin -shared sites/shared -apps "$apps" \
+            -addr 127.0.0.1:8081 -paper 127.0.0.1:1 -lazymc 127.0.0.1:2 &
+          for _ in $(seq 50); do curl -fs http://127.0.0.1:8081/ >/dev/null && break; sleep 0.1; done
+          curl -fsS http://127.0.0.1:8081/ | grep -q '<title>admin.ryancaudill.dev</title>'
+          for asset in /shared/base.css style.css app.js; do
+            grep -q "$asset" sites/admin/index.html
+            curl -fsS -o /dev/null "http://127.0.0.1:8081/${asset#/}"
+          done
+          curl -fsS http://127.0.0.1:8081/api/status | grep -q '"state":"offline"'
+          curl -fsS http://127.0.0.1:8081/api/deploy | grep -q '"active":""'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8081/api/status)" = 405
       - name: Smoke test each static site
         run: |
           (cd web && go build -o "$RUNNER_TEMP/serve" ./cmd/serve)
-          for site in admin portfolio; do
+          for site in portfolio; do
             port=$(sed -n 's/^ADDR=127\.0\.0\.1:\([0-9]*\)$/\1/p' "deploy/sites/$site.env")
             test -n "$port" || { echo "::error::deploy/sites/$site.env must bind to 127.0.0.1"; exit 1; }
             "$RUNNER_TEMP/serve" -dir "sites/$site" -addr "127.0.0.1:$port" &
@@ -222,8 +240,8 @@ jobs:
           mkdir -p "$current" "$HOME/minecraft_server"
           tar -xzf "$RUNNER_TEMP/dist/release.tar.gz" -C "$current"
           units=$(mktemp -d)
-          cp "$current"/deploy/systemd/{play.service,mc-agent.service,mc-agent.timer} "$units/"
-          for site in admin portfolio; do cp "$current/deploy/systemd/site@.service" "$units/site@$site.service"; done
+          cp "$current"/deploy/systemd/{play.service,admin.service,mc-agent.service,mc-agent.timer} "$units/"
+          for site in portfolio; do cp "$current/deploy/systemd/site@.service" "$units/site@$site.service"; done
           systemd-analyze --user --man=no verify "$units"/*
           # Every unit and service the manifest names must be in the release.
           python3 - "$current" <<'EOF'

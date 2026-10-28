@@ -1,0 +1,14 @@
+# User unit for admin.ryancaudill.dev: the admin page and its JSON API.
+# Installed by mc-agent from the active release (~/apps/current); deploy
+# state is read from ~/apps. Cloudflare Access sits in front of it.
+
+[Unit]
+Description=admin.ryancaudill.dev dashboard
+
+[Service]
+ExecStart=%h/apps/current/bin/admin -dir %h/apps/current/sites/admin -shared %h/apps/current/sites/shared -apps %h/apps -addr 127.0.0.1:8081
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
