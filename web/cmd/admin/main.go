@@ -1,11 +1,17 @@
 // Command admin serves admin.ryancaudill.dev: the static page in -dir plus a
 // JSON API about the server and its deploys. Cloudflare Access sits in
-// front of it; everything here is read-only for now.
+// front of it, and every request must also carry a valid Access token
+// (see package access); everything here is read-only for now.
 //
 //	GET /api/status  active, sleeping, starting or offline, and who is online
 //	GET /api/deploy  the release mc-agent has active
+//	GET /healthz     "ok", without a token, for mc-agent's health check
 //
-// Usage: admin -dir folder -shared folder [-apps folder] [-addr host:port] [-paper host:port] [-lazymc host:port]
+// The Access application is read from the environment: ACCESS_TEAM_DOMAIN
+// (e.g. myteam.cloudflareaccess.com) and ACCESS_AUD (its audience tag).
+// For local development, -dev-user skips the token check instead.
+//
+// Usage: admin -dir folder -shared folder [-apps folder] [-addr host:port] [-paper host:port] [-lazymc host:port] [-dev-user email]
 package main
 
 import (
@@ -15,8 +21,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/ryancaudill04/minecraft-server/web/internal/access"
 	"github.com/ryancaudill04/minecraft-server/web/internal/deploy"
 	"github.com/ryancaudill04/minecraft-server/web/internal/mcstatus"
 	"github.com/ryancaudill04/minecraft-server/web/internal/ping"
@@ -51,6 +59,48 @@ func newHandler(dir, sharedDir, appsDir string, c *mcstatus.Checker) http.Handle
 	return mux
 }
 
+// protect puts auth in front of h, except for /healthz: mc-agent's health
+// check has no token, and the route reveals nothing.
+func protect(h http.Handler, auth func(http.Handler) http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok\n"))
+	})
+	mux.Handle("/", auth(h))
+	return mux
+}
+
+// authFromEnv returns the token check for the Access application named in
+// the environment, or, if devUser is set, a stand-in that lets every
+// request through as devUser.
+func authFromEnv(devUser string) (func(http.Handler) http.Handler, error) {
+	if devUser != "" {
+		log.Printf("admin: WARNING: -dev-user is set, so every request runs as %s without a token", devUser)
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				next.ServeHTTP(w, r.WithContext(access.WithEmail(r.Context(), devUser)))
+			})
+		}, nil
+	}
+	var missing []string
+	team, aud := os.Getenv("ACCESS_TEAM_DOMAIN"), os.Getenv("ACCESS_AUD")
+	if team == "" {
+		missing = append(missing, "ACCESS_TEAM_DOMAIN")
+	}
+	if aud == "" {
+		missing = append(missing, "ACCESS_AUD")
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("set %s (see deploy/secrets.example.env), or -dev-user for local development", strings.Join(missing, " and "))
+	}
+	v := &access.Verifier{
+		Issuer: "https://" + team,
+		AUD:    aud,
+		HTTP:   &http.Client{Timeout: 10 * time.Second},
+	}
+	return v.Middleware, nil
+}
+
 func main() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -63,6 +113,7 @@ func main() {
 	paper := flag.String("paper", "127.0.0.1:25566", "Paper's address (answers only while awake)")
 	lazymc := flag.String("lazymc", "127.0.0.1:25565", "LazyMC's address (answers while Paper sleeps)")
 	timeout := flag.Duration("timeout", 2*time.Second, "how long to wait for each ping")
+	devUser := flag.String("dev-user", "", "skip the Access token check and act as this email (local development only)")
 	flag.Parse()
 
 	if *dir == "" || *sharedDir == "" {
@@ -78,10 +129,14 @@ func main() {
 			log.Fatalf("admin: %s is not a directory", d)
 		}
 	}
+	auth, err := authFromEnv(*devUser)
+	if err != nil {
+		log.Fatalf("admin: %v", err)
+	}
 	c := &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status}
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandler(*dir, *sharedDir, *appsDir, c),
+		Handler:           protect(newHandler(*dir, *sharedDir, *appsDir, c), auth),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("serving %s and the API on http://%s", *dir, *addr)

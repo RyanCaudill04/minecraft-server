@@ -8,9 +8,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ryancaudill04/minecraft-server/web/internal/access"
 	"github.com/ryancaudill04/minecraft-server/web/internal/mcstatus"
 	"github.com/ryancaudill04/minecraft-server/web/internal/ping"
 )
@@ -121,5 +123,53 @@ func TestRouting(t *testing.T) {
 		if resp.StatusCode != tt.want {
 			t.Errorf("%s %s = %d, want %d", tt.method, tt.path, resp.StatusCode, tt.want)
 		}
+	}
+}
+
+func TestProtect(t *testing.T) {
+	ts, _ := newTestServer(t)
+	denyAll := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+		})
+	}
+	h := protect(ts.Config.Handler, denyAll)
+
+	tests := []struct {
+		method, path string
+		want         int
+	}{
+		{"GET", "/healthz", http.StatusOK},
+		{"POST", "/healthz", http.StatusForbidden},
+		{"GET", "/", http.StatusForbidden},
+		{"GET", "/api/status", http.StatusForbidden},
+		{"GET", "/api/deploy", http.StatusForbidden},
+		{"GET", "/shared/base.css", http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(tt.method, tt.path, nil))
+		if rec.Code != tt.want {
+			t.Errorf("%s %s = %d, want %d", tt.method, tt.path, rec.Code, tt.want)
+		}
+	}
+}
+
+func TestAuthFromEnv(t *testing.T) {
+	t.Setenv("ACCESS_TEAM_DOMAIN", "")
+	t.Setenv("ACCESS_AUD", "")
+	if _, err := authFromEnv(""); err == nil || !strings.Contains(err.Error(), "ACCESS_TEAM_DOMAIN and ACCESS_AUD") {
+		t.Errorf("no config: err = %v, want one naming both keys", err)
+	}
+
+	auth, err := authFromEnv("dev@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var email string
+	h := auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { email = access.Email(r.Context()) }))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+	if email != "dev@example.com" {
+		t.Errorf("-dev-user: handler saw %q, want dev@example.com", email)
 	}
 }
