@@ -152,12 +152,13 @@ jobs:
         run: |
           (cd web && go build -o "$RUNNER_TEMP/admin" ./cmd/admin)
           apps=$(mktemp -d)
-          # Without the Access config (and no -dev-user), admin won't start.
-          set +e
-          env -u ACCESS_TEAM_DOMAIN -u ACCESS_AUD "$RUNNER_TEMP/admin" -dir sites/admin -shared sites/shared -apps "$apps" -addr 127.0.0.1:8083
-          code=$?
-          set -e
-          test "$code" = 1 || { echo "::error::admin without ACCESS_* exited $code, want 1"; exit 1; }
+          # Without the Access config, admin stays up for the health check
+          # but refuses everything else.
+          env -u ACCESS_TEAM_DOMAIN -u ACCESS_AUD \
+            "$RUNNER_TEMP/admin" -dir sites/admin -shared sites/shared -apps "$apps" -addr 127.0.0.1:8084 &
+          for _ in $(seq 50); do curl -fs http://127.0.0.1:8084/healthz >/dev/null && break; sleep 0.1; done
+          curl -fsS http://127.0.0.1:8084/healthz | grep -q ok
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8084/api/status)" = 503
           # With it, requests without a token get 403, except the health check.
           ACCESS_TEAM_DOMAIN=ci.cloudflareaccess.com ACCESS_AUD=ci \
             "$RUNNER_TEMP/admin" -dir sites/admin -shared sites/shared -apps "$apps" -addr 127.0.0.1:8083 &
@@ -290,8 +291,10 @@ jobs:
   release:
     name: release
     needs: [changes, ci-ok]
-    # Without a status function, actions would add a silent success()
-    # success() fails on skipped jobs, so release would get skipped on a ci-ok success
+    # An `if` without a status function gets an implicit success(), which
+    # is false when any job upstream was skipped, so release would be
+    # skipped even after ci-ok passed. !cancelled() replaces it, and the
+    # explicit ci-ok check still blocks a release when CI failed.
     if: >-
       !cancelled() &&
       needs.ci-ok.result == 'success' &&

@@ -6,7 +6,7 @@
 // Access sends a signed JWT in the Cf-Access-Jwt-Assertion header. Its
 // signing keys are published at <issuer>/cdn-cgi/access/certs and rotate,
 // so they're cached by key ID and fetched again when an unknown ID shows
-// up. Only RS256 is accepted, which is what Access signs with; accepting
+// up, at most once every 10 seconds. Only RS256 is accepted, which is what Access signs with; accepting
 // anything else invites algorithm-confusion bugs.
 package access
 
@@ -32,8 +32,8 @@ import (
 const Header = "Cf-Access-Jwt-Assertion"
 
 const (
-	leeway       = time.Minute // clock skew allowed on exp and nbf
-	refetchEvery = time.Minute // most often an unknown key ID refetches the keys
+	leeway       = time.Minute      // clock skew allowed on exp and nbf
+	refetchEvery = 10 * time.Second // most often an unknown key ID refetches the keys
 )
 
 // Verifier checks Access tokens for one Access application.
@@ -43,9 +43,11 @@ type Verifier struct {
 	HTTP   *http.Client
 	Now    func() time.Time // replaced in tests
 
-	mu      sync.Mutex
-	keys    map[string]*rsa.PublicKey // by key ID
-	fetched time.Time
+	mu   sync.Mutex                // guards keys; never held during a fetch
+	keys map[string]*rsa.PublicKey // by key ID
+
+	fetchMu sync.Mutex // one fetch at a time; guards tried
+	tried   time.Time  // when the last fetch started
 }
 
 // Verify checks token's signature, audience, issuer and lifetime, and
@@ -139,28 +141,42 @@ func Email(ctx context.Context) string {
 }
 
 // key returns the public key with ID kid, fetching the key set if kid is
-// new. Fetches are limited to one per refetchEvery, so tokens with made-up
-// key IDs can't make every request call Cloudflare.
+// new. Requests for a cached key never wait on a fetch. Fetch attempts,
+// failed ones included, are limited to one per refetchEvery, so tokens with
+// made-up key IDs can't make every request call Cloudflare. A failed fetch
+// keeps the keys already cached.
 func (v *Verifier) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-
-	if k, ok := v.keys[kid]; ok {
+	if k := v.cached(kid); k != nil {
 		return k, nil
 	}
-	if !v.fetched.IsZero() && v.now().Sub(v.fetched) < refetchEvery {
+	v.fetchMu.Lock()
+	defer v.fetchMu.Unlock()
+	// Another request may have fetched it while this one waited.
+	if k := v.cached(kid); k != nil {
+		return k, nil
+	}
+	if !v.tried.IsZero() && v.now().Sub(v.tried) < refetchEvery {
 		return nil, fmt.Errorf("unknown key %q", kid)
 	}
-	v.fetched = v.now()
-	keys, err := v.fetchKeys(ctx)
+	v.tried = v.now()
+	// The keys are shared, so one visitor leaving doesn't cancel the fetch.
+	keys, err := v.fetchKeys(context.WithoutCancel(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("fetching keys: %w", err)
 	}
+	v.mu.Lock()
 	v.keys = keys
-	if k, ok := v.keys[kid]; ok {
+	v.mu.Unlock()
+	if k := v.cached(kid); k != nil {
 		return k, nil
 	}
 	return nil, fmt.Errorf("unknown key %q", kid)
+}
+
+func (v *Verifier) cached(kid string) *rsa.PublicKey {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.keys[kid]
 }
 
 func (v *Verifier) fetchKeys(ctx context.Context) (map[string]*rsa.PublicKey, error) {

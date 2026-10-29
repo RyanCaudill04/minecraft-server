@@ -158,14 +158,14 @@ func TestProtect(t *testing.T) {
 func TestAuthFromEnv(t *testing.T) {
 	t.Setenv("ACCESS_TEAM_DOMAIN", "")
 	t.Setenv("ACCESS_AUD", "")
-	if _, err := authFromEnv(""); err == nil || !strings.Contains(err.Error(), "ACCESS_TEAM_DOMAIN and ACCESS_AUD") {
-		t.Errorf("no config: err = %v, want one naming both keys", err)
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+	rec := httptest.NewRecorder()
+	authFromEnv("")(ok).ServeHTTP(rec, httptest.NewRequest("GET", "/api/status", nil))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "ACCESS_TEAM_DOMAIN and ACCESS_AUD") {
+		t.Errorf("no config: %d %q, want 503 naming both keys", rec.Code, rec.Body.String())
 	}
 
-	auth, err := authFromEnv("dev@example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := authFromEnv("dev@example.com")
 	var email string
 	h := auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { email = access.Email(r.Context()) }))
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))

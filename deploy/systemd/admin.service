@@ -2,7 +2,7 @@
 # Installed by mc-agent from the active release (~/apps/current); deploy
 # state is read from ~/apps. Cloudflare Access sits in front of it, and
 # admin checks its token too, configured from secrets.env (see
-# deploy/secrets.example.env). Without that file admin exits at startup.
+# deploy/secrets.example.env). Without it admin answers 503 until it's set.
 
 [Unit]
 Description=admin.ryancaudill.dev dashboard

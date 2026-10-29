@@ -9,7 +9,9 @@
 //
 // The Access application is read from the environment: ACCESS_TEAM_DOMAIN
 // (e.g. myteam.cloudflareaccess.com) and ACCESS_AUD (its audience tag).
-// For local development, -dev-user skips the token check instead.
+// Without them admin still starts, so a deploy's health check passes, but
+// answers everything except /healthz with 503 until they're set. For local
+// development, -dev-user skips the token check instead.
 //
 // Usage: admin -dir folder -shared folder [-apps folder] [-addr host:port] [-paper host:port] [-lazymc host:port] [-dev-user email]
 package main
@@ -72,15 +74,16 @@ func protect(h http.Handler, auth func(http.Handler) http.Handler) http.Handler 
 
 // authFromEnv returns the token check for the Access application named in
 // the environment, or, if devUser is set, a stand-in that lets every
-// request through as devUser.
-func authFromEnv(devUser string) (func(http.Handler) http.Handler, error) {
+// request through as devUser. If the environment is incomplete, it
+// returns a check that refuses everything with 503, and logs why.
+func authFromEnv(devUser string) func(http.Handler) http.Handler {
 	if devUser != "" {
 		log.Printf("admin: WARNING: -dev-user is set, so every request runs as %s without a token", devUser)
 		return func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				next.ServeHTTP(w, r.WithContext(access.WithEmail(r.Context(), devUser)))
 			})
-		}, nil
+		}
 	}
 	var missing []string
 	team, aud := os.Getenv("ACCESS_TEAM_DOMAIN"), os.Getenv("ACCESS_AUD")
@@ -91,14 +94,20 @@ func authFromEnv(devUser string) (func(http.Handler) http.Handler, error) {
 		missing = append(missing, "ACCESS_AUD")
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("set %s (see deploy/secrets.example.env), or -dev-user for local development", strings.Join(missing, " and "))
+		msg := fmt.Sprintf("admin isn't configured: set %s in ~/.config/minecraft/secrets.env (see deploy/secrets.example.env)", strings.Join(missing, " and "))
+		log.Printf("admin: %s; refusing every request until then", msg)
+		return func(http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, msg, http.StatusServiceUnavailable)
+			})
+		}
 	}
 	v := &access.Verifier{
 		Issuer: "https://" + team,
 		AUD:    aud,
 		HTTP:   &http.Client{Timeout: 10 * time.Second},
 	}
-	return v.Middleware, nil
+	return v.Middleware
 }
 
 func main() {
@@ -129,10 +138,7 @@ func main() {
 			log.Fatalf("admin: %s is not a directory", d)
 		}
 	}
-	auth, err := authFromEnv(*devUser)
-	if err != nil {
-		log.Fatalf("admin: %v", err)
-	}
+	auth := authFromEnv(*devUser)
 	c := &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status}
 	srv := &http.Server{
 		Addr:              *addr,

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,17 +36,31 @@ func mustKey() *rsa.PrivateKey {
 	return k
 }
 
+// issuer is a fake Access team serving its signing keys.
+type issuer struct {
+	fetches atomic.Int32
+	fail    atomic.Bool                   // answer 500
+	stall   atomic.Pointer[chan struct{}] // if set, wait for it to close before answering
+}
+
 // newVerifier returns a Verifier whose issuer serves signer's public key
-// as "k1", and a count of how many times the keys were fetched.
-func newVerifier(t *testing.T) (*Verifier, *atomic.Int32) {
+// as "k1", and the issuer.
+func newVerifier(t *testing.T) (*Verifier, *issuer) {
 	t.Helper()
-	var fetches atomic.Int32
+	iss := &issuer{}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/cdn-cgi/access/certs" {
 			http.NotFound(w, r)
 			return
 		}
-		fetches.Add(1)
+		iss.fetches.Add(1)
+		if c := iss.stall.Load(); c != nil {
+			<-*c
+		}
+		if iss.fail.Load() {
+			http.Error(w, "down", http.StatusInternalServerError)
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
 			"kid": "k1",
 			"kty": "RSA",
@@ -56,7 +71,14 @@ func newVerifier(t *testing.T) (*Verifier, *atomic.Int32) {
 	}))
 	t.Cleanup(ts.Close)
 	v := &Verifier{Issuer: ts.URL, AUD: aud, Now: func() time.Time { return now }}
-	return v, &fetches
+	return v, iss
+}
+
+// withKid returns a token like a good one, but naming key ID kid.
+func withKid(t *testing.T, v *Verifier, kid string) string {
+	header := goodHeader()
+	header["kid"] = kid
+	return sign(t, signer, header, goodClaims(v.Issuer))
 }
 
 // sign makes a token from header and claims, signed with key.
@@ -158,7 +180,7 @@ func TestVerifyMalformed(t *testing.T) {
 }
 
 func TestKeyFetching(t *testing.T) {
-	v, fetches := newVerifier(t)
+	v, iss := newVerifier(t)
 	ctx := context.Background()
 	good := sign(t, signer, goodHeader(), goodClaims(v.Issuer))
 
@@ -167,26 +189,97 @@ func TestKeyFetching(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if n := fetches.Load(); n != 1 {
+	if n := iss.fetches.Load(); n != 1 {
 		t.Errorf("3 tokens with a known key fetched the keys %d times, want 1", n)
 	}
 
-	// An unknown key ID refetches, but at most once a minute.
-	header := goodHeader()
-	header["kid"] = "rotated"
-	unknown := sign(t, signer, header, goodClaims(v.Issuer))
+	// An unknown key ID refetches, but at most once every 10 seconds.
 	clock := now
 	v.Now = func() time.Time { return clock }
-
+	unknown := withKid(t, v, "rotated")
 	v.Verify(ctx, unknown)
-	if n := fetches.Load(); n != 1 {
-		t.Errorf("an unknown key within a minute fetched again: %d fetches, want 1", n)
+	if n := iss.fetches.Load(); n != 1 {
+		t.Errorf("an unknown key within 10s fetched again: %d fetches, want 1", n)
 	}
-	clock = now.Add(2 * time.Minute)
+	clock = now.Add(11 * time.Second)
 	v.Verify(ctx, unknown)
 	v.Verify(ctx, unknown)
-	if n := fetches.Load(); n != 2 {
-		t.Errorf("an unknown key after a minute: %d fetches, want 2", n)
+	if n := iss.fetches.Load(); n != 2 {
+		t.Errorf("an unknown key after 10s: %d fetches, want 2", n)
+	}
+}
+
+func TestCachedKeyDoesntWaitForAFetch(t *testing.T) {
+	v, iss := newVerifier(t)
+	ctx := context.Background()
+	good := sign(t, signer, goodHeader(), goodClaims(v.Issuer))
+	if _, err := v.Verify(ctx, good); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stall the next fetch, and start one with an unknown key ID.
+	v.Now = func() time.Time { return now.Add(time.Minute) }
+	stall := make(chan struct{})
+	iss.stall.Store(&stall)
+	fetching := make(chan struct{})
+	go func() {
+		v.Verify(ctx, withKid(t, v, "rotated"))
+		close(fetching)
+	}()
+	for iss.fetches.Load() < 2 {
+		time.Sleep(time.Millisecond)
+	}
+
+	done := make(chan error)
+	go func() {
+		_, err := v.Verify(ctx, good)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Verify with a cached key: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Error("Verify with a cached key waited for a stalled key fetch")
+	}
+	close(stall)
+	<-fetching
+}
+
+func TestConcurrentUnknownKeysFetchOnce(t *testing.T) {
+	v, iss := newVerifier(t)
+	// k1 isn't cached yet, so each of these needs a fetch.
+	token := sign(t, signer, goodHeader(), goodClaims(v.Issuer))
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Go(func() {
+			if _, err := v.Verify(context.Background(), token); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if n := iss.fetches.Load(); n != 1 {
+		t.Errorf("10 concurrent requests fetched the keys %d times, want 1", n)
+	}
+}
+
+func TestFailedFetchKeepsCachedKeys(t *testing.T) {
+	v, iss := newVerifier(t)
+	ctx := context.Background()
+	good := sign(t, signer, goodHeader(), goodClaims(v.Issuer))
+	if _, err := v.Verify(ctx, good); err != nil {
+		t.Fatal(err)
+	}
+
+	iss.fail.Store(true)
+	v.Now = func() time.Time { return now.Add(time.Minute) }
+	if _, err := v.Verify(ctx, withKid(t, v, "rotated")); err == nil {
+		t.Fatal("an unknown key verified while the issuer was down")
+	}
+	if _, err := v.Verify(ctx, good); err != nil {
+		t.Errorf("a failed fetch dropped the cached keys: %v", err)
 	}
 }
 
