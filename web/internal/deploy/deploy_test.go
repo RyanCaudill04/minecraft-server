@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -462,5 +463,190 @@ func TestRollbackWithNothingElse(t *testing.T) {
 	}
 	if err := h.d.Rollback(context.Background()); err == nil {
 		t.Error("want an error with only one release installed")
+	}
+}
+
+// publishWith publishes a release with manifest m, healthy unless
+// healthPath says otherwise, shipping a unit file for each of m.Units.
+func (h *harness) publishWith(t *testing.T, tag, healthPath string, m Manifest) {
+	m.Health = []string{h.health.URL + healthPath}
+	manifest, _ := json.Marshal(m)
+	files := []entry{{name: ManifestPath, body: string(manifest)}}
+	for _, unit := range m.Units {
+		files = append(files, entry{name: "deploy/systemd/" + unit, body: "[Unit]\n"})
+	}
+	h.github.publish(tag, tarball(t, files))
+}
+
+func (h *harness) linked(unit string) bool {
+	_, err := os.Lstat(filepath.Join(h.d.UnitDir, unit))
+	return err == nil
+}
+
+// before reports whether call a comes before call b in calls.
+func before(calls []string, a, b string) bool {
+	i, j := slices.Index(calls, a), slices.Index(calls, b)
+	return i >= 0 && j >= 0 && i < j
+}
+
+var withOldAndAdmin = Manifest{
+	Units:    []string{"play.service", "old.service", "site@.service", "mc-agent.timer"},
+	Services: []string{"play.service", "old.service", "site@admin.service"},
+	Timers:   []string{"mc-agent.timer"},
+}
+
+var withoutThem = Manifest{
+	Units:    []string{"play.service", "site@.service", "mc-agent.timer"},
+	Services: []string{"play.service", "site@portfolio.service"},
+	Timers:   []string{"mc-agent.timer"},
+}
+
+func TestUpgradeRemovesDroppedUnits(t *testing.T) {
+	h := newHarness(t)
+	h.publishWith(t, "r1", "/ok", withOldAndAdmin)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.takeCalls()
+
+	h.publishWith(t, "r2", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls := h.takeCalls()
+	// site@admin.service is an instance: its template stays, but it goes.
+	for _, unit := range []string{"old.service", "site@admin.service"} {
+		if !before(calls, "stop "+unit, "restart play.service site@portfolio.service") ||
+			!slices.Contains(calls, "disable "+unit) {
+			t.Errorf("%s wasn't stopped and disabled before the restart: %q", unit, calls)
+		}
+	}
+	if slices.Contains(calls, "stop play.service") {
+		t.Errorf("a kept service was stopped: %q", calls)
+	}
+	if h.linked("old.service") {
+		t.Error("old.service is still linked")
+	}
+	if !h.linked("site@.service") {
+		t.Error("the site@.service template was unlinked, but r2 still ships it")
+	}
+
+	// Once removed, they aren't removed again on the next deploy.
+	h.publishWith(t, "r3", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range h.takeCalls() {
+		if strings.HasPrefix(c, "stop ") {
+			t.Errorf("r3 stopped something again: %q", c)
+		}
+	}
+}
+
+func TestRollbackRemovesTheFailedReleasesUnits(t *testing.T) {
+	h := newHarness(t)
+	h.d.HealthTimeout = 300 * time.Millisecond
+	h.publishWith(t, "r1", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.takeCalls()
+
+	// r2 adds new.service and fails its health check.
+	r2 := withoutThem
+	r2.Units = append(slices.Clone(r2.Units), "new.service")
+	r2.Services = append(slices.Clone(r2.Services), "new.service")
+	h.publishWith(t, "r2", "/bad", r2)
+	if err := h.d.Run(context.Background()); err == nil {
+		t.Fatal("want r2 to fail")
+	}
+	if got := h.current(t); got != "r1" {
+		t.Fatalf("current = %q, want r1", got)
+	}
+	calls := h.takeCalls()
+	if !slices.Contains(calls, "stop new.service") || !slices.Contains(calls, "disable new.service") {
+		t.Errorf("new.service wasn't stopped and disabled on rollback: %q", calls)
+	}
+	if h.linked("new.service") {
+		t.Error("new.service is still linked after the rollback")
+	}
+}
+
+func TestInterruptedDeployIsCleanedUp(t *testing.T) {
+	h := newHarness(t)
+	h.publishWith(t, "r1", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.takeCalls()
+
+	// An agent that died partway through a deploy left ghost.service
+	// recorded, linked and enabled.
+	ghost := filepath.Join(h.d.Apps, "current", "deploy", "systemd", "ghost.service")
+	if err := os.Symlink(ghost, filepath.Join(h.d.UnitDir, "ghost.service")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.writeManaged(union(&withoutThem, &Manifest{Units: []string{"ghost.service"}, Services: []string{"ghost.service"}})); err != nil {
+		t.Fatal(err)
+	}
+
+	h.publishWith(t, "r2", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls := h.takeCalls(); !slices.Contains(calls, "stop ghost.service") {
+		t.Errorf("ghost.service wasn't stopped: %q", calls)
+	}
+	if h.linked("ghost.service") {
+		t.Error("ghost.service is still linked")
+	}
+}
+
+func TestFirstRunWithoutManagedFile(t *testing.T) {
+	h := newHarness(t)
+	h.publishWith(t, "r1", "/ok", withOldAndAdmin)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.takeCalls()
+	// r1 was installed by an agent that didn't record what it managed.
+	if err := os.Remove(h.d.managedFile()); err != nil {
+		t.Fatal(err)
+	}
+
+	h.publishWith(t, "r2", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls := h.takeCalls()
+	for _, unit := range []string{"old.service", "site@admin.service"} {
+		if !slices.Contains(calls, "stop "+unit) {
+			t.Errorf("%s wasn't removed using r1's manifest: %q", unit, calls)
+		}
+	}
+}
+
+func TestKeepsLinksOutsideApps(t *testing.T) {
+	h := newHarness(t)
+	h.publishWith(t, "r1", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// A hand-installed unit, linked from the server's checkout, that
+	// managed.json somehow lists.
+	if err := os.Symlink("/home/pi/minecraft_server/deploy/systemd/minecraft.service", filepath.Join(h.d.UnitDir, "minecraft.service")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.writeManaged(union(&withoutThem, &Manifest{Units: []string{"minecraft.service"}})); err != nil {
+		t.Fatal(err)
+	}
+
+	h.publishWith(t, "r2", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !h.linked("minecraft.service") {
+		t.Error("a link outside apps was removed")
 	}
 }

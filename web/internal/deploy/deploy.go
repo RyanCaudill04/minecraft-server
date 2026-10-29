@@ -10,6 +10,11 @@
 // services listed in the release's deploy/release.json, and waits for its
 // health URLs. If any step fails, it switches back to the previous release
 // and records the tag as failed, so a broken release isn't retried.
+//
+// Units a release no longer lists are stopped, disabled and unlinked. The
+// agent records what it manages in <apps>/managed.json, so this also works
+// after a rollback or an interrupted deploy, and for template instances
+// such as site@admin.service whose template is still shipped.
 package deploy
 
 import (
@@ -28,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -95,6 +101,7 @@ type Deployer struct {
 func (d *Deployer) releasesDir() string { return filepath.Join(d.Apps, "releases") }
 func (d *Deployer) currentLink() string { return filepath.Join(d.Apps, "current") }
 func (d *Deployer) failedFile() string  { return filepath.Join(d.Apps, "failed") }
+func (d *Deployer) managedFile() string { return filepath.Join(d.Apps, "managed.json") }
 
 // Current returns the tag of the active release, or "" if none is active.
 func (d *Deployer) Current() (string, error) {
@@ -264,12 +271,15 @@ func (d *Deployer) Activate(ctx context.Context, tag string) error {
 	if err != nil {
 		return err
 	}
+	// What the previous release runs, for when managed.json doesn't exist
+	// yet (an agent from before it was added). Nil if unreadable.
+	from, _ := readManifest(d.currentLink())
 	if err := d.switchTo(tag); err != nil {
 		return err
 	}
 	d.Log.Printf("activating %s (was %q)", tag, previous)
 
-	if err := d.apply(ctx); err != nil {
+	if err := d.apply(ctx, from); err != nil {
 		d.Log.Printf("%s failed: %v", tag, err)
 		os.WriteFile(d.failedFile(), []byte(tag+"\n"), 0o644)
 		if previous == "" {
@@ -279,7 +289,8 @@ func (d *Deployer) Activate(ctx context.Context, tag string) error {
 		if rbErr := d.switchTo(previous); rbErr != nil {
 			return errors.Join(err, fmt.Errorf("rollback: %w", rbErr))
 		}
-		if rbErr := d.apply(ctx); rbErr != nil {
+		failed, _ := readManifest(filepath.Join(d.releasesDir(), tag))
+		if rbErr := d.apply(ctx, failed); rbErr != nil {
 			return errors.Join(err, fmt.Errorf("rollback: %w", rbErr))
 		}
 		return fmt.Errorf("deploy: %s failed and was rolled back to %s: %w", tag, previous, err)
@@ -323,16 +334,32 @@ func (d *Deployer) switchTo(tag string) error {
 }
 
 // apply links the current release's units, then reloads, enables and
-// restarts them and waits until every health URL answers.
-func (d *Deployer) apply(ctx context.Context) error {
+// restarts them and waits until every health URL answers. First it stops,
+// disables and unlinks what the agent managed before (managed.json and
+// from, the release being replaced) that this release no longer lists.
+func (d *Deployer) apply(ctx context.Context, from *Manifest) error {
 	m, err := readManifest(d.currentLink())
 	if err != nil {
 		return err
 	}
 
+	old, err := d.readManaged()
+	if err != nil {
+		return err
+	}
+	old = union(old, from)
+	// Record everything first, so a deploy interrupted from here on still
+	// leaves a list the next run can clean up from.
+	if err := d.writeManaged(union(old, m)); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(d.UnitDir, 0o755); err != nil {
 		return err
 	}
+	// Before anything restarts: a removed service may hold a port that a
+	// new one needs.
+	d.remove(ctx, minus(old, m))
+
 	for _, unit := range m.Units {
 		// Link through current, so the next switch updates the unit too.
 		target := filepath.Join(d.currentLink(), "deploy", "systemd", unit)
@@ -363,7 +390,115 @@ func (d *Deployer) apply(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return d.writeManaged(&Manifest{Units: m.Units, Services: m.Services, Timers: m.Timers})
+}
+
+// remove stops and disables r's services and timers, and removes r's unit
+// links. It only removes links that point into Apps, so units installed by
+// hand (minecraft.service) are never touched. Failures are logged, not
+// returned: a unit whose file is already gone can't be disabled, and a
+// service that really is still running fails the health check instead.
+func (d *Deployer) remove(ctx context.Context, r *Manifest) {
+	for _, unit := range append(append([]string{}, r.Services...), r.Timers...) {
+		d.Log.Printf("removing %s: no longer in the release", unit)
+		// Separate calls: disable fails once the unit file is gone, but a
+		// loaded unit can still be stopped.
+		for _, verb := range []string{"stop", "disable"} {
+			if err := d.Systemctl(ctx, verb, unit); err != nil {
+				d.Log.Printf("systemctl %s %s: %v", verb, unit, err)
+			}
+		}
+	}
+	for _, unit := range r.Units {
+		link := filepath.Join(d.UnitDir, unit)
+		target, err := os.Readlink(link)
+		if err != nil {
+			continue // missing, or not a link we made
+		}
+		if rel, err := filepath.Rel(d.Apps, target); err != nil || !filepath.IsLocal(rel) {
+			d.Log.Printf("keeping %s: it links outside %s", link, d.Apps)
+			continue
+		}
+		d.Log.Printf("unlinking %s", unit)
+		if err := os.Remove(link); err != nil {
+			d.Log.Printf("unlinking %s: %v", unit, err)
+		}
+	}
+}
+
+// readManaged returns the units, services and timers the agent last
+// recorded, or nil if it hasn't recorded any.
+func (d *Deployer) readManaged() (*Manifest, error) {
+	data, err := os.ReadFile(d.managedFile())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var m Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("decoding %s: %w", d.managedFile(), err)
+	}
+	if err := checkNames(&m); err != nil {
+		return nil, fmt.Errorf("%s: %w", d.managedFile(), err)
+	}
+	return &m, nil
+}
+
+// writeManaged replaces managed.json atomically.
+func (d *Deployer) writeManaged(m *Manifest) error {
+	data, err := json.Marshal(Manifest{Units: m.Units, Services: m.Services, Timers: m.Timers})
+	if err != nil {
+		return err
+	}
+	tmp := d.managedFile() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, d.managedFile())
+}
+
+// union returns the units, services and timers in any of ms, without
+// duplicates. Nil manifests are skipped.
+func union(ms ...*Manifest) *Manifest {
+	var u Manifest
+	for _, m := range ms {
+		if m == nil {
+			continue
+		}
+		u.Units = appendNew(u.Units, m.Units)
+		u.Services = appendNew(u.Services, m.Services)
+		u.Timers = appendNew(u.Timers, m.Timers)
+	}
+	return &u
+}
+
+// minus returns the units, services and timers in a but not in b.
+func minus(a, b *Manifest) *Manifest {
+	without := func(xs, drop []string) []string {
+		var out []string
+		for _, x := range xs {
+			if !slices.Contains(drop, x) {
+				out = append(out, x)
+			}
+		}
+		return out
+	}
+	return &Manifest{
+		Units:    without(a.Units, b.Units),
+		Services: without(a.Services, b.Services),
+		Timers:   without(a.Timers, b.Timers),
+	}
+}
+
+func appendNew(xs, add []string) []string {
+	for _, x := range add {
+		if !slices.Contains(xs, x) {
+			xs = append(xs, x)
+		}
+	}
+	return xs
 }
 
 func (d *Deployer) waitHealthy(ctx context.Context, url string) error {
@@ -458,10 +593,8 @@ func readManifest(dir string) (*Manifest, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("decoding manifest: %w", err)
 	}
-	for _, name := range append(append(append([]string{}, m.Units...), m.Services...), m.Timers...) {
-		if name == "" || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, "-") {
-			return nil, fmt.Errorf("manifest: invalid unit name %q", name)
-		}
+	if err := checkNames(&m); err != nil {
+		return nil, fmt.Errorf("manifest: %w", err)
 	}
 	for _, unit := range m.Units {
 		if _, err := os.Stat(filepath.Join(dir, "deploy", "systemd", unit)); err != nil {
@@ -469,6 +602,16 @@ func readManifest(dir string) (*Manifest, error) {
 		}
 	}
 	return &m, nil
+}
+
+// checkNames rejects unit names that could be read as a path or a flag.
+func checkNames(m *Manifest) error {
+	for _, name := range append(append(append([]string{}, m.Units...), m.Services...), m.Timers...) {
+		if name == "" || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, "-") {
+			return fmt.Errorf("invalid unit name %q", name)
+		}
+	}
+	return nil
 }
 
 // extract unpacks a gzipped tarball into dest. It accepts only regular
