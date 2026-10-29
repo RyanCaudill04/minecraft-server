@@ -650,3 +650,39 @@ func TestKeepsLinksOutsideApps(t *testing.T) {
 		t.Error("a link outside apps was removed")
 	}
 }
+
+func TestUnlinksUnitsShadowingTheRelease(t *testing.T) {
+	h := newHarness(t)
+	if err := os.MkdirAll(h.d.UnitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Installed by hand before mc-agent existed: the instance links to the
+	// template in the git checkout, which systemd prefers over the
+	// release's site@.service.
+	checkout := "/home/pi/minecraft_server/deploy/systemd/site@.service"
+	if err := os.Symlink(checkout, filepath.Join(h.d.UnitDir, "site@portfolio.service")); err != nil {
+		t.Fatal(err)
+	}
+
+	h.publishWith(t, "r1", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.linked("site@portfolio.service") {
+		t.Error("site@portfolio.service still shadows the release's template")
+	}
+	if calls := h.takeCalls(); !before(calls, "reenable site@portfolio.service", "restart play.service site@portfolio.service") {
+		t.Errorf("site@portfolio.service wasn't re-enabled before the restart: %q", calls)
+	}
+
+	// Once fixed, later deploys don't re-enable it again.
+	h.publishWith(t, "r2", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range h.takeCalls() {
+		if strings.HasPrefix(c, "reenable") {
+			t.Errorf("r2 re-enabled again: %q", c)
+		}
+	}
+}

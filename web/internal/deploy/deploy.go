@@ -371,6 +371,10 @@ func (d *Deployer) apply(ctx context.Context, from *Manifest) error {
 	}
 
 	steps := [][]string{{"daemon-reload"}}
+	if shadowed := d.unshadow(m); len(shadowed) > 0 {
+		// Their enable links may point at the old file too.
+		steps = append(steps, append([]string{"reenable"}, shadowed...))
+	}
 	if len(m.Services) > 0 {
 		steps = append(steps,
 			append([]string{"enable"}, m.Services...),
@@ -424,6 +428,45 @@ func (d *Deployer) remove(ctx context.Context, r *Manifest) {
 			d.Log.Printf("unlinking %s: %v", unit, err)
 		}
 	}
+}
+
+// unshadow removes links in the unit folder named after one of m's
+// services or timers, such as site@portfolio.service, that point outside
+// Apps. systemd prefers a unit file with the exact name over the
+// release's template, so such a link would keep the service running from
+// wherever it points instead of from the release. It returns the names it
+// unlinked. Regular files are only warned about: those were written by
+// hand on purpose.
+func (d *Deployer) unshadow(m *Manifest) []string {
+	var unlinked []string
+	for _, name := range append(append([]string{}, m.Services...), m.Timers...) {
+		if slices.Contains(m.Units, name) {
+			continue // linked into the release just above
+		}
+		path := filepath.Join(d.UnitDir, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			d.Log.Printf("warning: %s overrides the release's unit for %s", path, name)
+			continue
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			continue
+		}
+		if rel, err := filepath.Rel(d.Apps, target); err == nil && filepath.IsLocal(rel) {
+			continue
+		}
+		d.Log.Printf("unlinking %s: it points at %s instead of the release", path, target)
+		if err := os.Remove(path); err != nil {
+			d.Log.Printf("unlinking %s: %v", path, err)
+			continue
+		}
+		unlinked = append(unlinked, name)
+	}
+	return unlinked
 }
 
 // readManaged returns the units, services and timers the agent last
