@@ -63,8 +63,11 @@
 
           <article class="card metric">
             <span class="eyebrow">Active release</span>
-            <div class="metric-value"><code class="tag" id="release">–</code></div>
-            <p class="metric-sub" id="release-sub">&nbsp;</p>
+            <div class="release-head">
+              <div class="metric-value"><code class="tag" id="release">–</code></div>
+              <span class="kind" id="release-kind" hidden></span>
+            </div>
+            <p class="metric-sub clamp" id="release-sub">&nbsp;</p>
           </article>
         </div>
       </section>
@@ -105,12 +108,34 @@
           <p class="muted">Releases mc-agent installs from GitHub.</p>
         </header>
         <div class="grid deploy-grid">
-          <article class="card metric">
-            <span class="eyebrow">Active release</span>
-            <div class="metric-value"><code class="tag" id="deploy-release">–</code></div>
-            <p class="metric-sub">
-              <a id="deploy-link" href="https://github.com/RyanCaudill04/minecraft-server/releases">All releases</a>
-            </p>
+          <article class="card release-strip">
+            <div class="cell">
+              <span class="eyebrow">Active release</span>
+              <div class="release-head">
+                <div class="metric-value"><code class="tag" id="deploy-release">–</code></div>
+                <span class="kind" id="deploy-kind" hidden></span>
+              </div>
+            </div>
+            <div class="cell">
+              <span class="eyebrow">Released</span>
+              <span class="value" id="deploy-released">–</span>
+              <span class="at" id="deploy-released-at"></span>
+            </div>
+            <div class="cell">
+              <span class="eyebrow">Applied</span>
+              <span class="value" id="deploy-applied">–</span>
+              <span class="at" id="deploy-applied-at"></span>
+            </div>
+            <div class="cell">
+              <span class="eyebrow">Changes</span>
+              <span class="value" id="deploy-count">–</span>
+              <span class="at" id="deploy-breakdown"></span>
+            </div>
+          </article>
+          <article class="card changes">
+            <span class="eyebrow">What changed</span>
+            <ul class="change-list" id="deploy-changes"></ul>
+            <p class="muted" id="deploy-changes-empty">&nbsp;</p>
           </article>
           <article class="card planned">
             <span class="eyebrow">Coming next</span>

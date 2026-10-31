@@ -16,6 +16,9 @@
 // <apps>/managed.json, so this also works after a rollback, for template
 // instances such as site@admin.service whose template is still shipped, and
 // on the deploy after one that was interrupted.
+//
+// Each switch of current is recorded in <apps>/active.json with its time,
+// so the admin page can show when the active release was applied.
 package deploy
 
 import (
@@ -49,10 +52,15 @@ const (
 // ManifestPath is where the manifest lives inside a release.
 const ManifestPath = "deploy/release.json"
 
+// NotesPath is where a release's notes live inside it. Releases built
+// before notes were added don't have them.
+const NotesPath = "deploy/notes.json"
+
 // Limits on what a release may contain.
 const (
 	maxReleaseBytes = 200 << 20
 	maxChecksumSize = 1 << 10
+	maxNotesSize    = 1 << 20
 )
 
 var validTag = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -63,6 +71,29 @@ type Manifest struct {
 	Services []string `json:"services"` // enabled and restarted on every deploy
 	Timers   []string `json:"timers"`   // enabled and started
 	Health   []string `json:"health"`   // URLs that must answer 200 after a deploy
+}
+
+// Applied records which release current was last switched to, and when.
+// It is <apps>/active.json.
+type Applied struct {
+	Tag string    `json:"tag"`
+	At  time.Time `json:"applied_at"`
+}
+
+// Notes describe what changed in a release. They are deploy/notes.json,
+// written by scripts/release-notes.sh.
+type Notes struct {
+	Tag        string    `json:"tag"`
+	Kind       string    `json:"kind"` // feature, fix or other
+	ReleasedAt time.Time `json:"released_at"`
+	Changes    []Change  `json:"changes"`
+}
+
+// Change is one PR in a release, or a commit pushed without one.
+type Change struct {
+	PR    int    `json:"pr,omitzero"` // 0 for a commit pushed without a PR
+	Title string `json:"title"`
+	Kind  string `json:"kind"` // feature, fix or other
 }
 
 // Release is one GitHub Release.
@@ -103,6 +134,7 @@ func (d *Deployer) releasesDir() string { return filepath.Join(d.Apps, "releases
 func (d *Deployer) currentLink() string { return filepath.Join(d.Apps, "current") }
 func (d *Deployer) failedFile() string  { return filepath.Join(d.Apps, "failed") }
 func (d *Deployer) managedFile() string { return filepath.Join(d.Apps, "managed.json") }
+func (d *Deployer) appliedFile() string { return filepath.Join(d.Apps, "active.json") }
 
 // Current returns the tag of the active release, or "" if none is active.
 func (d *Deployer) Current() (string, error) {
@@ -114,6 +146,49 @@ func (d *Deployer) Current() (string, error) {
 		return "", err
 	}
 	return filepath.Base(target), nil
+}
+
+// Notes returns the active release's notes, or nil if nothing is active or
+// the release has none.
+func (d *Deployer) Notes() (*Notes, error) {
+	f, err := os.Open(filepath.Join(d.currentLink(), NotesPath))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var n Notes
+	if err := json.NewDecoder(io.LimitReader(f, maxNotesSize)).Decode(&n); err != nil {
+		return nil, fmt.Errorf("deploy: reading %s: %w", NotesPath, err)
+	}
+	return &n, nil
+}
+
+// LastApplied returns when the active release was switched to, or nil if
+// that isn't recorded: nothing is active, or an agent from before
+// active.json was added switched to it.
+func (d *Deployer) LastApplied() (*Applied, error) {
+	current, err := d.Current()
+	if err != nil || current == "" {
+		return nil, err
+	}
+	data, err := os.ReadFile(d.appliedFile())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var a Applied
+	if err := json.Unmarshal(data, &a); err != nil {
+		return nil, fmt.Errorf("deploy: reading %s: %w", d.appliedFile(), err)
+	}
+	if a.Tag != current {
+		return nil, nil
+	}
+	return &a, nil
 }
 
 // Latest asks GitHub for the newest published release.
@@ -350,7 +425,19 @@ func (d *Deployer) switchTo(tag string) error {
 	if err := os.Symlink(filepath.Join("releases", tag), tmp); err != nil {
 		return err
 	}
-	return os.Rename(tmp, d.currentLink())
+	if err := os.Rename(tmp, d.currentLink()); err != nil {
+		return err
+	}
+	// Only a record for the admin page: current has already switched, so
+	// failing to write it mustn't fail the deploy.
+	data, err := json.Marshal(Applied{Tag: tag, At: time.Now().UTC()})
+	if err == nil {
+		err = d.writeFile(d.appliedFile(), data)
+	}
+	if err != nil {
+		d.Log.Printf("recording when %s was applied: %v", tag, err)
+	}
+	return nil
 }
 
 // retire stops, disables and unlinks what the agent manages now that next
@@ -558,14 +645,19 @@ func (d *Deployer) readManaged() *Manifest {
 	return &m
 }
 
-// writeManaged replaces managed.json atomically and durably, so a power
-// cut can't leave it half written.
+// writeManaged records m in managed.json.
 func (d *Deployer) writeManaged(m *Manifest) error {
 	data, err := json.Marshal(Manifest{Units: m.Units, Services: m.Services, Timers: m.Timers})
 	if err != nil {
 		return err
 	}
-	tmp := d.managedFile() + ".tmp"
+	return d.writeFile(d.managedFile(), data)
+}
+
+// writeFile replaces path, a file in Apps, atomically and durably, so a
+// power cut can't leave it half written.
+func (d *Deployer) writeFile(path string, data []byte) error {
+	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
 		return err
@@ -578,7 +670,7 @@ func (d *Deployer) writeManaged(m *Manifest) error {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(tmp, d.managedFile())
+		err = os.Rename(tmp, path)
 	}
 	if err != nil {
 		os.Remove(tmp)
