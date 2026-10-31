@@ -8,9 +8,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,6 +43,7 @@ func mustKey() *rsa.PrivateKey {
 type issuer struct {
 	fetches atomic.Int32
 	fail    atomic.Bool                   // answer 500
+	extra   []map[string]string           // more keys, served before k1; set before the first fetch
 	stall   atomic.Pointer[chan struct{}] // if set, wait for it to close before answering
 }
 
@@ -61,13 +65,13 @@ func newVerifier(t *testing.T) (*Verifier, *issuer) {
 			http.Error(w, "down", http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
+		json.NewEncoder(w).Encode(map[string]any{"keys": append(slices.Clone(iss.extra), map[string]string{
 			"kid": "k1",
 			"kty": "RSA",
 			"alg": "RS256",
 			"n":   base64.RawURLEncoding.EncodeToString(signer.N.Bytes()),
 			"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(signer.E)).Bytes()),
-		}}})
+		})})
 	}))
 	t.Cleanup(ts.Close)
 	v := &Verifier{Issuer: ts.URL, AUD: aud, Now: func() time.Time { return now }}
@@ -312,5 +316,59 @@ func TestMiddleware(t *testing.T) {
 		if tt.body != "" && rec.Body.String() != tt.body {
 			t.Errorf("%s: handler saw email %q, want %q", tt.name, rec.Body.String(), tt.body)
 		}
+	}
+}
+
+func TestBadKeysAreSkipped(t *testing.T) {
+	v, iss := newVerifier(t)
+	small := mustSmallKey(t)
+	iss.extra = []map[string]string{
+		{"kid": "garbled", "kty": "RSA", "n": "!!!", "e": "AQAB"},
+		{"kid": "even-e", "kty": "RSA", "n": base64.RawURLEncoding.EncodeToString(signer.N.Bytes()), "e": "Ag"},
+		{"kid": "small", "kty": "RSA", "n": base64.RawURLEncoding.EncodeToString(small.N.Bytes()), "e": "AQAB"},
+	}
+	ctx := context.Background()
+	if _, err := v.Verify(ctx, sign(t, signer, goodHeader(), goodClaims(v.Issuer))); err != nil {
+		t.Errorf("bad keys next to k1 broke it: %v", err)
+	}
+	header := goodHeader()
+	header["kid"] = "small"
+	if _, err := v.Verify(ctx, sign(t, small, header, goodClaims(v.Issuer))); err == nil {
+		t.Error("a token signed by a 1024-bit key verified")
+	}
+}
+
+func mustSmallKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	k, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+func TestRejectionsAreRateLimitedInTheLog(t *testing.T) {
+	v, _ := newVerifier(t)
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	clock := now
+	v.Now = func() time.Time { return clock }
+	h := v.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	refuse := func() {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set(Header, "junk")
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	for range 50 {
+		refuse()
+	}
+	clock = clock.Add(11 * time.Second)
+	refuse()
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[1], "and 49 more") {
+		t.Errorf("log = %q, want 2 lines, the second counting 49 more", lines)
 	}
 }

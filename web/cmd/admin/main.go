@@ -62,15 +62,42 @@ func newHandler(dir, sharedDir, appsDir string, c *mcstatus.Checker) http.Handle
 }
 
 // protect puts auth in front of h, except for /healthz: mc-agent's health
-// check has no token, and the route reveals nothing.
+// check has no token. /healthz runs GET /api/deploy through h without auth,
+// so it checks the app itself, and answers only ok or unavailable.
+// An unconfigured admin is healthy: it's up, and refusing everyone.
 func protect(h http.Handler, auth func(http.Handler) http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		probe := &statusOnly{code: http.StatusOK}
+		req, err := http.NewRequestWithContext(r.Context(), "GET", "/api/deploy", nil)
+		if err == nil {
+			h.ServeHTTP(probe, req)
+		}
+		if err != nil || probe.code != http.StatusOK {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		w.Write([]byte("ok\n"))
 	})
 	mux.Handle("/", auth(h))
 	return mux
 }
+
+// statusOnly is a ResponseWriter that keeps the status code and drops
+// the body, so /healthz never passes on what the API returns.
+type statusOnly struct {
+	code   int
+	header http.Header
+}
+
+func (s *statusOnly) Header() http.Header {
+	if s.header == nil {
+		s.header = http.Header{}
+	}
+	return s.header
+}
+func (s *statusOnly) Write(b []byte) (int, error) { return len(b), nil }
+func (s *statusOnly) WriteHeader(code int)        { s.code = code }
 
 // authFromEnv returns the token check for the Access application named in
 // the environment, or, if devUser is set, a stand-in that lets every
@@ -86,28 +113,36 @@ func authFromEnv(devUser string) func(http.Handler) http.Handler {
 		}
 	}
 	var missing []string
-	team, aud := os.Getenv("ACCESS_TEAM_DOMAIN"), os.Getenv("ACCESS_AUD")
-	if team == "" {
+	issuer, ok := teamIssuer(os.Getenv("ACCESS_TEAM_DOMAIN"))
+	aud := strings.TrimSpace(os.Getenv("ACCESS_AUD"))
+	if !ok {
 		missing = append(missing, "ACCESS_TEAM_DOMAIN")
 	}
 	if aud == "" {
 		missing = append(missing, "ACCESS_AUD")
 	}
 	if len(missing) > 0 {
-		msg := fmt.Sprintf("admin isn't configured: set %s in ~/.config/minecraft/secrets.env (see deploy/secrets.example.env)", strings.Join(missing, " and "))
-		log.Printf("admin: %s; refusing every request until then", msg)
+		log.Printf("admin: not configured: set %s in ~/.config/minecraft/secrets.env (see deploy/secrets.example.env), then restart admin; refusing every request until then", strings.Join(missing, " and "))
 		return func(http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				http.Error(w, msg, http.StatusServiceUnavailable)
+				// Details are in the log, not for whoever is asking.
+				http.Error(w, "admin isn't configured yet", http.StatusServiceUnavailable)
 			})
 		}
 	}
-	v := &access.Verifier{
-		Issuer: "https://" + team,
-		AUD:    aud,
-		HTTP:   &http.Client{Timeout: 10 * time.Second},
-	}
+	v := &access.Verifier{Issuer: issuer, AUD: aud}
 	return v.Middleware
+}
+
+// teamIssuer turns ACCESS_TEAM_DOMAIN into the issuer URL tokens carry. It
+// accepts the domain pasted as a URL too (https://myteam.cloudflareaccess.com/),
+// and reports false if what's left isn't a plain host name.
+func teamIssuer(domain string) (string, bool) {
+	host := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(domain), "https://"), "/")
+	if host == "" || strings.ContainsAny(host, "/:@ ") {
+		return "", false
+	}
+	return "https://" + host, true
 }
 
 func main() {
