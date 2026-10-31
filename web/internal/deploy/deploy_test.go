@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -167,18 +168,40 @@ func newHarness(t *testing.T) *harness {
 		Systemctl: func(ctx context.Context, args ...string) error {
 			h.mu.Lock()
 			defer h.mu.Unlock()
-			h.calls = append(h.calls, strings.Join(args, " "))
-			current, _ := h.d.Current()
-			if h.failWhen != nil && h.failWhen(current, args) {
-				return errors.New("unit failed")
+			err := h.systemctl(args)
+			call := strings.Join(args, " ")
+			if err != nil {
+				call += " (failed)"
 			}
-			return nil
+			h.calls = append(h.calls, call)
+			return err
 		},
 	}
 	if err := os.MkdirAll(h.d.Apps, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return h
+}
+
+// systemctl is the fake systemctl's behavior; calls are recorded by the
+// caller, with failed ones marked.
+func (h *harness) systemctl(args []string) error {
+	current, _ := h.d.Current()
+	if h.failWhen != nil && h.failWhen(current, args) {
+		return errors.New("unit failed")
+	}
+	// Like systemctl, disable needs each unit's file to exist.
+	if args[0] == "disable" {
+		for _, unit := range args[1:] {
+			if strings.HasPrefix(unit, "-") {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(h.d.UnitDir, unitFile(unit))); err != nil {
+				return fmt.Errorf("unit file %s does not exist", unit)
+			}
+		}
+	}
+	return nil
 }
 
 func (h *harness) publish(t *testing.T, tag, healthPath string) {
@@ -462,5 +485,257 @@ func TestRollbackWithNothingElse(t *testing.T) {
 	}
 	if err := h.d.Rollback(context.Background()); err == nil {
 		t.Error("want an error with only one release installed")
+	}
+}
+
+// publishWith publishes a release with manifest m, healthy unless
+// healthPath says otherwise, shipping a unit file for each of m.Units.
+func (h *harness) publishWith(t *testing.T, tag, healthPath string, m Manifest) {
+	m.Health = []string{h.health.URL + healthPath}
+	manifest, _ := json.Marshal(m)
+	files := []entry{{name: ManifestPath, body: string(manifest)}}
+	for _, unit := range m.Units {
+		files = append(files, entry{name: "deploy/systemd/" + unit, body: "[Unit]\n"})
+	}
+	h.github.publish(tag, tarball(t, files))
+}
+
+func (h *harness) linked(unit string) bool {
+	_, err := os.Lstat(filepath.Join(h.d.UnitDir, unit))
+	return err == nil
+}
+
+// before reports whether call a comes before call b in calls.
+func before(calls []string, a, b string) bool {
+	i, j := slices.Index(calls, a), slices.Index(calls, b)
+	return i >= 0 && j >= 0 && i < j
+}
+
+// disabledAt returns the index of the first successful "disable --now"
+// call in calls that names unit, or -1.
+func disabledAt(calls []string, unit string) int {
+	return slices.IndexFunc(calls, func(c string) bool {
+		if strings.HasSuffix(c, " (failed)") {
+			return false
+		}
+		f := strings.Fields(c)
+		return len(f) > 2 && f[0] == "disable" && f[1] == "--now" && slices.Contains(f[2:], unit)
+	})
+}
+
+var withOldAndAdmin = Manifest{
+	Units:    []string{"play.service", "old.service", "site@.service", "mc-agent.timer"},
+	Services: []string{"play.service", "old.service", "site@admin.service"},
+	Timers:   []string{"mc-agent.timer"},
+}
+
+var withoutThem = Manifest{
+	Units:    []string{"play.service", "site@.service", "mc-agent.timer"},
+	Services: []string{"play.service", "site@portfolio.service"},
+	Timers:   []string{"mc-agent.timer"},
+}
+
+func TestUpgradeRemovesDroppedUnits(t *testing.T) {
+	h := newHarness(t)
+	h.publishWith(t, "r1", "/ok", withOldAndAdmin)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.takeCalls()
+
+	h.publishWith(t, "r2", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls := h.takeCalls()
+	// site@admin.service is an instance: its template stays, but it goes.
+	restart := slices.Index(calls, "restart play.service site@portfolio.service")
+	for _, unit := range []string{"old.service", "site@admin.service"} {
+		if i := disabledAt(calls, unit); i < 0 || i > restart {
+			t.Errorf("%s wasn't stopped and disabled before the restart: %q", unit, calls)
+		}
+	}
+	if disabledAt(calls, "play.service") >= 0 {
+		t.Errorf("a kept service was stopped: %q", calls)
+	}
+	// It all went in one call, which only works while the files exist.
+	if calls[0] != "disable --now old.service site@admin.service" {
+		t.Errorf("first call = %q, want both disabled together", calls[0])
+	}
+	if h.linked("old.service") {
+		t.Error("old.service is still linked")
+	}
+	if !h.linked("site@.service") {
+		t.Error("the site@.service template was unlinked, but r2 still ships it")
+	}
+
+	// Once removed, they aren't removed again on the next deploy.
+	h.publishWith(t, "r3", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range h.takeCalls() {
+		if strings.HasPrefix(c, "disable") {
+			t.Errorf("r3 disabled something again: %q", c)
+		}
+	}
+}
+
+func TestRollbackRemovesTheFailedReleasesUnits(t *testing.T) {
+	h := newHarness(t)
+	h.d.HealthTimeout = 300 * time.Millisecond
+	h.publishWith(t, "r1", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.takeCalls()
+
+	// r2 adds new.service and fails its health check.
+	r2 := withoutThem
+	r2.Units = append(slices.Clone(r2.Units), "new.service")
+	r2.Services = append(slices.Clone(r2.Services), "new.service")
+	h.publishWith(t, "r2", "/bad", r2)
+	if err := h.d.Run(context.Background()); err == nil {
+		t.Fatal("want r2 to fail")
+	}
+	if got := h.current(t); got != "r1" {
+		t.Fatalf("current = %q, want r1", got)
+	}
+	calls := h.takeCalls()
+	// While r2's unit file still exists, so the real disable succeeds.
+	if !slices.Contains(calls, "disable --now new.service") {
+		t.Errorf("new.service wasn't stopped and disabled on rollback: %q", calls)
+	}
+	if h.linked("new.service") {
+		t.Error("new.service is still linked after the rollback")
+	}
+}
+
+func TestInterruptedDeployIsCleanedUp(t *testing.T) {
+	h := newHarness(t)
+	h.publishWith(t, "r1", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.takeCalls()
+
+	// An agent that died partway through a deploy left ghost.service
+	// recorded, linked and enabled.
+	ghost := filepath.Join(h.d.Apps, "current", "deploy", "systemd", "ghost.service")
+	if err := os.WriteFile(ghost, []byte("[Unit]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(ghost, filepath.Join(h.d.UnitDir, "ghost.service")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.writeManaged(union(&withoutThem, &Manifest{Units: []string{"ghost.service"}, Services: []string{"ghost.service"}})); err != nil {
+		t.Fatal(err)
+	}
+
+	h.publishWith(t, "r2", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls := h.takeCalls(); disabledAt(calls, "ghost.service") < 0 {
+		t.Errorf("ghost.service wasn't stopped: %q", calls)
+	}
+	if h.linked("ghost.service") {
+		t.Error("ghost.service is still linked")
+	}
+}
+
+func TestFirstRunWithoutManagedFile(t *testing.T) {
+	h := newHarness(t)
+	h.publishWith(t, "r1", "/ok", withOldAndAdmin)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.takeCalls()
+	// r1 was installed by an agent that didn't record what it managed.
+	if err := os.Remove(h.d.managedFile()); err != nil {
+		t.Fatal(err)
+	}
+
+	h.publishWith(t, "r2", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls := h.takeCalls()
+	for _, unit := range []string{"old.service", "site@admin.service"} {
+		if disabledAt(calls, unit) < 0 {
+			t.Errorf("%s wasn't removed using r1's manifest: %q", unit, calls)
+		}
+	}
+}
+
+func TestKeepsLinksOutsideApps(t *testing.T) {
+	h := newHarness(t)
+	h.publishWith(t, "r1", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// A hand-installed unit, linked from the server's checkout, that
+	// managed.json somehow lists.
+	if err := os.Symlink("/home/pi/minecraft_server/deploy/systemd/minecraft.service", filepath.Join(h.d.UnitDir, "minecraft.service")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.writeManaged(union(&withoutThem, &Manifest{Units: []string{"minecraft.service"}, Services: []string{"minecraft.service"}})); err != nil {
+		t.Fatal(err)
+	}
+	h.takeCalls()
+
+	h.publishWith(t, "r2", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !h.linked("minecraft.service") {
+		t.Error("a link outside apps was removed")
+	}
+	if calls := h.takeCalls(); disabledAt(calls, "minecraft.service") >= 0 {
+		t.Errorf("a hand-installed service was stopped: %q", calls)
+	}
+}
+
+func TestRefusesToReplaceHandInstalledUnits(t *testing.T) {
+	h := newHarness(t)
+	h.d.HealthTimeout = 300 * time.Millisecond
+	if err := os.MkdirAll(h.d.UnitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hand := "/home/pi/minecraft_server/deploy/systemd/play.service"
+	if err := os.Symlink(hand, filepath.Join(h.d.UnitDir, "play.service")); err != nil {
+		t.Fatal(err)
+	}
+
+	h.publishWith(t, "r1", "/ok", withoutThem)
+	err := h.d.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "installed by hand") {
+		t.Fatalf("err = %v, want a refusal to replace the hand-installed link", err)
+	}
+	if got, _ := os.Readlink(filepath.Join(h.d.UnitDir, "play.service")); got != hand {
+		t.Errorf("play.service now links to %q, want it left at %q", got, hand)
+	}
+}
+
+func TestUnreadableManagedFileDoesntBlockDeploys(t *testing.T) {
+	h := newHarness(t)
+	h.publishWith(t, "r1", "/ok", withOldAndAdmin)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.takeCalls()
+	// A power cut left it truncated.
+	if err := os.WriteFile(h.d.managedFile(), []byte(`{"units": ["pla`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h.publishWith(t, "r2", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatalf("a corrupt managed.json blocked the deploy: %v", err)
+	}
+	// It fell back to r1's manifest.
+	if calls := h.takeCalls(); disabledAt(calls, "old.service") < 0 {
+		t.Errorf("old.service wasn't removed: %q", calls)
 	}
 }
