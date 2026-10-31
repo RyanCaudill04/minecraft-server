@@ -68,11 +68,18 @@ func WriteJSON(w http.ResponseWriter, name string, v any) {
 // Static serves the site's files from dir, and the files every site
 // shares from sharedDir under /shared/. Folders without an index.html are
 // 404s rather than file listings.
+//
+// Every response is no-cache: a release replaces these files in place, so
+// Cloudflare and browsers must check with us before reusing a copy, or a
+// cached app.js from the last release runs against the new index.html.
 func Static(dir, sharedDir string) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /shared/", http.StripPrefix("/shared/", http.FileServer(noListings{http.Dir(sharedDir)})))
 	mux.Handle("GET /", http.FileServer(noListings{http.Dir(dir)}))
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // noListings hides folders that have no index.html, so http.FileServer
