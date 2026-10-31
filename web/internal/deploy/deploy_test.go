@@ -739,3 +739,88 @@ func TestUnreadableManagedFileDoesntBlockDeploys(t *testing.T) {
 		t.Errorf("old.service wasn't removed: %q", calls)
 	}
 }
+
+func TestUnlinksUnitsShadowingTheRelease(t *testing.T) {
+	h := newHarness(t)
+	if err := os.MkdirAll(h.d.UnitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Installed by hand before mc-agent existed: the instance links to the
+	// template in the git checkout, which systemd prefers over the
+	// release's site@.service.
+	checkout := "/home/pi/minecraft_server/deploy/systemd/site@.service"
+	if err := os.Symlink(checkout, filepath.Join(h.d.UnitDir, "site@portfolio.service")); err != nil {
+		t.Fatal(err)
+	}
+
+	h.publishWith(t, "r1", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.linked("site@portfolio.service") {
+		t.Error("site@portfolio.service still shadows the release's template")
+	}
+	// The usual enable after daemon-reload moves its enable links; nothing
+	// extra is needed, so an interrupted fix-up is finished by any later run.
+	if got := h.takeCalls(); !reflect.DeepEqual(got, []string{
+		"daemon-reload",
+		"enable play.service site@portfolio.service",
+		"restart play.service site@portfolio.service",
+		"enable --now mc-agent.timer",
+	}) {
+		t.Errorf("systemctl calls = %q", got)
+	}
+}
+
+func TestKeepsLinksThatAreNotShadowing(t *testing.T) {
+	h := newHarness(t)
+	h.publishWith(t, "r1", "/ok", withoutThem)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// A relative link to the release's own template, through current.
+	rel, err := filepath.Rel(h.d.UnitDir, filepath.Join(h.d.Apps, "current", "deploy", "systemd", "site@.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(rel, filepath.Join(h.d.UnitDir, "site@portfolio.service")); err != nil {
+		t.Fatal(err)
+	}
+	// A hand-installed unit that's no template instance of the release.
+	m := withoutThem
+	m.Services = append(slices.Clone(m.Services), "minecraft.service")
+	if err := os.Symlink("/home/pi/minecraft_server/deploy/systemd/minecraft.service", filepath.Join(h.d.UnitDir, "minecraft.service")); err != nil {
+		t.Fatal(err)
+	}
+
+	h.publishWith(t, "r2", "/ok", m)
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !h.linked("site@portfolio.service") {
+		t.Error("a relative link into the release was removed")
+	}
+	if !h.linked("minecraft.service") {
+		t.Error("a hand-installed unit the release doesn't ship was removed")
+	}
+}
+
+func TestShadowingFileFailsTheDeploy(t *testing.T) {
+	h := newHarness(t)
+	if err := os.MkdirAll(h.d.UnitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(h.d.UnitDir, "site@portfolio.service")
+	if err := os.WriteFile(path, []byte("[Service]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h.publishWith(t, "r1", "/ok", withoutThem)
+	err := h.d.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "overrides the release") {
+		t.Fatalf("err = %v, want the shadowing file named", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the hand-written file was removed: %v", err)
+	}
+}

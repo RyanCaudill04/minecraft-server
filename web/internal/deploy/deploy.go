@@ -404,6 +404,13 @@ func (d *Deployer) apply(ctx context.Context) error {
 		}
 	}
 
+	// After the links above, so a template is in place before an
+	// instance's own link stops hiding it. The enable below then moves the
+	// instance's enable links to the release too.
+	if err := d.unshadow(m); err != nil {
+		return err
+	}
+
 	steps := [][]string{{"daemon-reload"}}
 	if len(m.Services) > 0 {
 		steps = append(steps,
@@ -468,6 +475,39 @@ func (d *Deployer) remove(ctx context.Context, r *Manifest) {
 			d.Log.Printf("unlinking %s: %v", unit, err)
 		}
 	}
+}
+
+// unshadow removes links in the unit folder named after one of m's
+// template instances, such as site@portfolio.service, when the release
+// ships the template. systemd prefers a unit file with the instance's exact
+// name over the template, so such a link (left from installing by hand)
+// would keep the service running from wherever it points instead of the
+// release. A regular file in that place fails the deploy: it was written on
+// purpose, and the release can't run the service while it's there.
+func (d *Deployer) unshadow(m *Manifest) error {
+	for _, name := range slices.Concat(m.Services, m.Timers) {
+		template := unitFile(name)
+		if template == name || !slices.Contains(m.Units, template) || slices.Contains(m.Units, name) {
+			continue // not an instance of a template the release ships
+		}
+		path := filepath.Join(d.UnitDir, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			return fmt.Errorf("deploy: %s overrides the release's %s; remove it to let the release run %s", path, template, name)
+		}
+		if d.linksInto(path, d.currentLink()) {
+			continue // the release's own file, by another path
+		}
+		target, _ := os.Readlink(path)
+		d.Log.Printf("unlinking %s: it points at %s instead of the release's %s", path, target, template)
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // linksInto reports whether path is a symlink to somewhere inside dir.
