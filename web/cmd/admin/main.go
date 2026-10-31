@@ -3,7 +3,8 @@
 // front of it; everything here is read-only for now.
 //
 //	GET /api/status  active, sleeping, starting or offline, and who is online
-//	GET /api/deploy  the release mc-agent has active
+//	GET /api/deploy  the release mc-agent has active, what changed in it,
+//	                 and when it was released and applied
 //
 // Usage: admin -dir folder -shared folder [-apps folder] [-addr host:port] [-paper host:port] [-lazymc host:port]
 package main
@@ -23,9 +24,14 @@ import (
 	"github.com/ryancaudill04/minecraft-server/web/internal/site"
 )
 
-// Deploy is the JSON body of GET /api/deploy.
+// Deploy is the JSON body of GET /api/deploy. Releases built before notes
+// were added have only active and applied_at.
 type Deploy struct {
-	Active string `json:"active"` // release tag, or "" if none is active
+	Active     string          `json:"active"`        // release tag, or "" if none is active
+	Kind       string          `json:"kind,omitzero"` // feature, fix or other
+	Changes    []deploy.Change `json:"changes,omitzero"`
+	ReleasedAt time.Time       `json:"released_at,omitzero"` // when CI built it
+	AppliedAt  time.Time       `json:"applied_at,omitzero"`  // when mc-agent last switched to it
 }
 
 // newHandler routes the API and serves the static page from dir and the
@@ -45,7 +51,20 @@ func newHandler(dir, sharedDir, appsDir string, c *mcstatus.Checker) http.Handle
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		site.WriteJSON(w, "admin: deploy", Deploy{Active: active})
+		res := Deploy{Active: active}
+		// The notes and applied time only add detail, so a problem with
+		// either still shows the active release.
+		if n, err := agent.Notes(); err != nil {
+			log.Printf("admin: deploy notes: %v", err)
+		} else if n != nil && n.Tag == active {
+			res.Kind, res.Changes, res.ReleasedAt = n.Kind, n.Changes, n.ReleasedAt
+		}
+		if a, err := agent.LastApplied(); err != nil {
+			log.Printf("admin: deploy applied time: %v", err)
+		} else if a != nil {
+			res.AppliedAt = a.At
+		}
+		site.WriteJSON(w, "admin: deploy", res)
 	})
 	mux.Handle("GET /", site.Static(dir, sharedDir))
 	return mux

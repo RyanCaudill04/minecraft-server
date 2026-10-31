@@ -52,10 +52,15 @@ const (
 // ManifestPath is where the manifest lives inside a release.
 const ManifestPath = "deploy/release.json"
 
+// NotesPath is where a release's notes live inside it. Releases built
+// before notes were added don't have them.
+const NotesPath = "deploy/notes.json"
+
 // Limits on what a release may contain.
 const (
 	maxReleaseBytes = 200 << 20
 	maxChecksumSize = 1 << 10
+	maxNotesSize    = 1 << 20
 )
 
 var validTag = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -73,6 +78,22 @@ type Manifest struct {
 type Applied struct {
 	Tag string    `json:"tag"`
 	At  time.Time `json:"applied_at"`
+}
+
+// Notes describe what changed in a release. They are deploy/notes.json,
+// written by scripts/release-notes.sh.
+type Notes struct {
+	Tag        string    `json:"tag"`
+	Kind       string    `json:"kind"` // feature, fix or other
+	ReleasedAt time.Time `json:"released_at"`
+	Changes    []Change  `json:"changes"`
+}
+
+// Change is one PR in a release, or a commit pushed without one.
+type Change struct {
+	PR    int    `json:"pr,omitzero"` // 0 for a commit pushed without a PR
+	Title string `json:"title"`
+	Kind  string `json:"kind"` // feature, fix or other
 }
 
 // Release is one GitHub Release.
@@ -125,6 +146,24 @@ func (d *Deployer) Current() (string, error) {
 		return "", err
 	}
 	return filepath.Base(target), nil
+}
+
+// Notes returns the active release's notes, or nil if nothing is active or
+// the release has none.
+func (d *Deployer) Notes() (*Notes, error) {
+	f, err := os.Open(filepath.Join(d.currentLink(), NotesPath))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var n Notes
+	if err := json.NewDecoder(io.LimitReader(f, maxNotesSize)).Decode(&n); err != nil {
+		return nil, fmt.Errorf("deploy: reading %s: %w", NotesPath, err)
+	}
+	return &n, nil
 }
 
 // LastApplied returns when the active release was switched to, or nil if

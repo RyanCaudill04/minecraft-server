@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -121,5 +122,89 @@ func TestRouting(t *testing.T) {
 		if resp.StatusCode != tt.want {
 			t.Errorf("%s %s = %d, want %d", tt.method, tt.path, resp.StatusCode, tt.want)
 		}
+	}
+}
+
+// activate makes tag the active release in apps, as mc-agent would, and
+// writes its notes and applied record if they're given.
+func activate(t *testing.T, apps, tag, notes, applied string) {
+	t.Helper()
+	release := filepath.Join(apps, "releases", tag)
+	if err := os.MkdirAll(filepath.Join(release, "deploy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(release, filepath.Join(apps, "current")); err != nil {
+		t.Fatal(err)
+	}
+	if notes != "" {
+		if err := os.WriteFile(filepath.Join(release, "deploy", "notes.json"), []byte(notes), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if applied != "" {
+		if err := os.WriteFile(filepath.Join(apps, "active.json"), []byte(applied), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAPIDeployDetails(t *testing.T) {
+	ts, apps := newTestServer(t)
+	activate(t, apps, "r7",
+		`{"tag":"r7","kind":"feature","released_at":"2026-10-31T22:17:02Z","changes":[
+			{"pr":90,"title":"Ship release notes","kind":"feature"},
+			{"pr":null,"title":"Direct push","kind":"other"}]}`,
+		`{"tag":"r7","applied_at":"2026-10-31T22:20:00Z"}`)
+
+	resp, err := http.Get(ts.URL + "/api/deploy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"active":      "r7",
+		"kind":        "feature",
+		"released_at": "2026-10-31T22:17:02Z",
+		"applied_at":  "2026-10-31T22:20:00Z",
+		"changes": []any{
+			map[string]any{"pr": float64(90), "title": "Ship release notes", "kind": "feature"},
+			map[string]any{"title": "Direct push", "kind": "other"},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("/api/deploy = %v, want %v", got, want)
+	}
+}
+
+func TestAPIDeployWithoutDetails(t *testing.T) {
+	tests := []struct {
+		name, notes, applied string
+	}{
+		{"release from before notes", "", ""},
+		{"broken files", "{not json", "{not json"},
+		{"another release's notes and time", `{"tag":"r6","kind":"fix"}`, `{"tag":"r6","applied_at":"2026-10-31T22:20:00Z"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts, apps := newTestServer(t)
+			activate(t, apps, "r7", tt.notes, tt.applied)
+
+			resp, err := http.Get(ts.URL + "/api/deploy")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var got map[string]any
+			if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			if want := map[string]any{"active": "r7"}; resp.StatusCode != http.StatusOK || !reflect.DeepEqual(got, want) {
+				t.Errorf("/api/deploy = %d %v, want 200 %v", resp.StatusCode, got, want)
+			}
+		})
 	}
 }
