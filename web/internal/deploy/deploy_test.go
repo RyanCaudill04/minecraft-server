@@ -824,3 +824,111 @@ func TestShadowingFileFailsTheDeploy(t *testing.T) {
 		t.Errorf("the hand-written file was removed: %v", err)
 	}
 }
+
+func (h *harness) applied(t *testing.T) *Applied {
+	t.Helper()
+	a, err := h.d.LastApplied()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// appliedBetween fails unless the active release is tag, recorded as
+// applied between from and to.
+func (h *harness) appliedBetween(t *testing.T, tag string, from, to time.Time) {
+	t.Helper()
+	a := h.applied(t)
+	if a == nil {
+		t.Fatalf("no applied time recorded, want %s", tag)
+	}
+	if a.Tag != tag || a.At.Before(from) || a.At.After(to) {
+		t.Errorf("applied = %s at %v, want %s between %v and %v", a.Tag, a.At, tag, from, to)
+	}
+}
+
+func TestRecordsWhenAReleaseIsApplied(t *testing.T) {
+	h := newHarness(t)
+	if a := h.applied(t); a != nil {
+		t.Errorf("applied = %+v before any deploy, want nil", a)
+	}
+
+	h.publish(t, "r1", "/ok")
+	before := time.Now()
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.appliedBetween(t, "r1", before, time.Now())
+
+	// An up-to-date run doesn't switch, so the time stays.
+	first := h.applied(t).At
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.applied(t).At; !got.Equal(first) {
+		t.Errorf("applied at %v after an up-to-date run, want %v", got, first)
+	}
+}
+
+func TestRecordsWhenARollbackIsApplied(t *testing.T) {
+	h := newHarness(t)
+	h.d.HealthTimeout = 300 * time.Millisecond
+	h.publish(t, "r1", "/ok")
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// r2 fails its health check; r1 is applied again, so it gets a new time.
+	h.publish(t, "r2", "/bad")
+	before := time.Now()
+	if err := h.d.Run(context.Background()); err == nil {
+		t.Fatal("want r2 to fail")
+	}
+	h.appliedBetween(t, "r1", before, time.Now())
+
+	// The rollback command too.
+	h.publish(t, "r3", "/ok")
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Rollback picks the newest other release; make that r1, not r2.
+	h.age(t, "r3", time.Minute)
+	h.age(t, "r1", 10*time.Minute)
+	h.age(t, "r2", 20*time.Minute)
+	before = time.Now()
+	if err := h.d.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.appliedBetween(t, "r1", before, time.Now())
+}
+
+func TestAppliedTimeOfAnotherReleaseIsIgnored(t *testing.T) {
+	h := newHarness(t)
+	h.publish(t, "r1", "/ok")
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// As if an agent from before active.json switched to r1 after r0.
+	data, _ := json.Marshal(Applied{Tag: "r0", At: time.Now()})
+	if err := os.WriteFile(filepath.Join(h.d.Apps, "active.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if a := h.applied(t); a != nil {
+		t.Errorf("applied = %+v, want nil when it names another release", a)
+	}
+}
+
+func TestUnwritableAppliedTimeDoesntFailTheDeploy(t *testing.T) {
+	h := newHarness(t)
+	// A folder where active.json goes makes writing it fail.
+	if err := os.Mkdir(filepath.Join(h.d.Apps, "active.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.publish(t, "r1", "/ok")
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q, want r1", got)
+	}
+}
