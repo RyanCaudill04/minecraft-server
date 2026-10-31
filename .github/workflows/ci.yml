@@ -152,9 +152,25 @@ jobs:
         run: |
           (cd web && go build -o "$RUNNER_TEMP/admin" ./cmd/admin)
           apps=$(mktemp -d)
-          # Nothing listens on these ports, so the server reads as offline.
+          # Without the Access config, admin stays up for the health check
+          # but refuses everything else.
+          env -u ACCESS_TEAM_DOMAIN -u ACCESS_AUD \
+            "$RUNNER_TEMP/admin" -dir sites/admin -shared sites/shared -apps "$apps" -addr 127.0.0.1:8084 &
+          for _ in $(seq 50); do curl -fs http://127.0.0.1:8084/healthz >/dev/null && break; sleep 0.1; done
+          curl -fsS http://127.0.0.1:8084/healthz | grep -q ok
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8084/api/status)" = 503
+          # With it, requests without a token get 403, except the health check.
+          ACCESS_TEAM_DOMAIN=ci.cloudflareaccess.com ACCESS_AUD=ci \
+            "$RUNNER_TEMP/admin" -dir sites/admin -shared sites/shared -apps "$apps" -addr 127.0.0.1:8083 &
+          for _ in $(seq 50); do curl -fs http://127.0.0.1:8083/healthz >/dev/null && break; sleep 0.1; done
+          curl -fsS http://127.0.0.1:8083/healthz | grep -q ok
+          for path in / /api/status /api/deploy; do
+            test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8083$path")" = 403
+          done
+          # The rest runs as a dev user. Nothing listens on these ports, so
+          # the server reads as offline.
           "$RUNNER_TEMP/admin" -dir sites/admin -shared sites/shared -apps "$apps" \
-            -addr 127.0.0.1:8081 -paper 127.0.0.1:1 -lazymc 127.0.0.1:2 &
+            -addr 127.0.0.1:8081 -paper 127.0.0.1:1 -lazymc 127.0.0.1:2 -dev-user ci@example.com &
           for _ in $(seq 50); do curl -fs http://127.0.0.1:8081/ >/dev/null && break; sleep 0.1; done
           curl -fsS http://127.0.0.1:8081/ | grep -q '<title>admin.ryancaudill.dev</title>'
           for asset in /shared/base.css style.css app.js; do
@@ -275,8 +291,10 @@ jobs:
   release:
     name: release
     needs: [changes, ci-ok]
-    # Without a status function, actions would add a silent success()
-    # success() fails on skipped jobs, so release would get skipped on a ci-ok success
+    # An `if` without a status function gets an implicit success(), which
+    # is false when any job upstream was skipped, so release would be
+    # skipped even after ci-ok passed. !cancelled() replaces it, and the
+    # explicit ci-ok check still blocks a release when CI failed.
     if: >-
       !cancelled() &&
       needs.ci-ok.result == 'success' &&

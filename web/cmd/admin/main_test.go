@@ -8,9 +8,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ryancaudill04/minecraft-server/web/internal/access"
 	"github.com/ryancaudill04/minecraft-server/web/internal/mcstatus"
 	"github.com/ryancaudill04/minecraft-server/web/internal/ping"
 )
@@ -120,6 +122,93 @@ func TestRouting(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != tt.want {
 			t.Errorf("%s %s = %d, want %d", tt.method, tt.path, resp.StatusCode, tt.want)
+		}
+	}
+}
+
+func TestProtect(t *testing.T) {
+	ts, _ := newTestServer(t)
+	denyAll := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+		})
+	}
+	h := protect(ts.Config.Handler, denyAll)
+
+	tests := []struct {
+		method, path string
+		want         int
+	}{
+		{"GET", "/healthz", http.StatusOK},
+		{"POST", "/healthz", http.StatusForbidden},
+		{"GET", "/", http.StatusForbidden},
+		{"GET", "/api/status", http.StatusForbidden},
+		{"GET", "/api/deploy", http.StatusForbidden},
+		{"GET", "/shared/base.css", http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(tt.method, tt.path, nil))
+		if rec.Code != tt.want {
+			t.Errorf("%s %s = %d, want %d", tt.method, tt.path, rec.Code, tt.want)
+		}
+	}
+}
+
+func TestAuthFromEnv(t *testing.T) {
+	t.Setenv("ACCESS_TEAM_DOMAIN", "")
+	t.Setenv("ACCESS_AUD", "")
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+	rec := httptest.NewRecorder()
+	authFromEnv("")(ok).ServeHTTP(rec, httptest.NewRequest("GET", "/api/status", nil))
+	if rec.Code != http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "ACCESS_") {
+		t.Errorf("no config: %d %q, want 503 without config details", rec.Code, rec.Body.String())
+	}
+
+	auth := authFromEnv("dev@example.com")
+	var email string
+	h := auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { email = access.Email(r.Context()) }))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+	if email != "dev@example.com" {
+		t.Errorf("-dev-user: handler saw %q, want dev@example.com", email)
+	}
+}
+
+func TestHealthzChecksTheApp(t *testing.T) {
+	ts, apps := newTestServer(t)
+	allow := func(h http.Handler) http.Handler { return h }
+	h := protect(ts.Config.Handler, allow)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "ok\n" {
+		t.Errorf("healthy: %d %q, want 200 ok", rec.Code, rec.Body.String())
+	}
+
+	// current isn't a link, so /api/deploy fails, and so does /healthz,
+	// without saying why.
+	if err := os.WriteFile(filepath.Join(apps, "current"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "current") {
+		t.Errorf("broken deploy state: %d %q, want a bare 503", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTeamIssuer(t *testing.T) {
+	for in, want := range map[string]string{
+		"myteam.cloudflareaccess.com":           "https://myteam.cloudflareaccess.com",
+		" https://myteam.cloudflareaccess.com/": "https://myteam.cloudflareaccess.com",
+		"":                                      "",
+		"http://myteam.cloudflareaccess.com":    "",
+		"myteam.cloudflareaccess.com/path":      "",
+		"user@myteam.cloudflareaccess.com":      "",
+	} {
+		got, ok := teamIssuer(in)
+		if got != want || ok != (want != "") {
+			t.Errorf("teamIssuer(%q) = %q, %v; want %q", in, got, ok, want)
 		}
 	}
 }
