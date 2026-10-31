@@ -41,8 +41,87 @@ code {
 .planned ul { margin: 0; padding-left: 18px; color: var(--muted); }
 .planned li + li { margin-top: 2px; }
 
-.deploy-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+/* The active release over its list of changes. */
+.deploy-grid { grid-template-columns: minmax(0, 1fr); }
 
-@media (max-width: 600px) {
-  .deploy-grid { grid-template-columns: minmax(0, 1fr); }
+.release-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* A long title stops at two lines; the full one is in its tooltip. */
+.clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+/* One row of facts about the active release: tag, times, change count. */
+.release-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) repeat(3, minmax(0, 1fr));
+}
+.release-strip .cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 20px;
+  border-left: 1px solid var(--border);
+}
+.release-strip .cell:first-child { padding-left: 0; border-left: 0; }
+/* Labels line up along the top; the big tag and each value with its
+   date line up along the bottom. */
+.release-strip .release-head { margin-top: auto; }
+.release-strip .value {
+  margin-top: auto;
+  padding-top: 4px;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.release-strip .at { color: var(--muted); font-size: 0.75rem; }
+/* What kind of release or change: feature, fix or other. */
+.kind {
+  --kind: var(--gray);
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--kind) 14%, transparent);
+  color: color-mix(in srgb, var(--kind) 80%, var(--text));
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.kind[data-kind="feature"] { --kind: var(--green); }
+.kind[data-kind="fix"]     { --kind: var(--amber); }
+
+.changes { display: flex; flex-direction: column; gap: 10px; }
+.change-list { margin: 0; padding: 0; list-style: none; }
+.change-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.change-list li:first-child { border-top: 0; padding-top: 0; }
+.change-list .title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.change-list a {
+  flex: none;
+  color: var(--accent);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+}
+.change-list a:hover { text-decoration: underline; }
+/* One width for every badge, so the titles line up. */
+.change-list .kind { align-self: center; min-width: 64px; text-align: center; }
+
+/* Narrow screens: the strip becomes two columns. */
+@media (max-width: 760px) {
+  .release-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 16px; }
+  .release-strip .cell:first-child { grid-column: 1 / -1; }
+  .release-strip .cell:nth-child(2) { padding-left: 0; border-left: 0; }
+  .release-strip .cell:nth-child(3) { padding-left: 20px; border-left: 1px solid var(--border); }
+  .release-strip .cell:nth-child(4) { padding-left: 0; border-left: 0; }
 }
