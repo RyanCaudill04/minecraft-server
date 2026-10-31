@@ -11,10 +11,11 @@
 // health URLs. If any step fails, it switches back to the previous release
 // and records the tag as failed, so a broken release isn't retried.
 //
-// Units a release no longer lists are stopped, disabled and unlinked. The
-// agent records what it manages in <apps>/managed.json, so this also works
-// after a rollback or an interrupted deploy, and for template instances
-// such as site@admin.service whose template is still shipped.
+// Units a release no longer lists are stopped, disabled and unlinked before
+// current switches. The agent records what it manages in
+// <apps>/managed.json, so this also works after a rollback, for template
+// instances such as site@admin.service whose template is still shipped, and
+// on the deploy after one that was interrupted.
 package deploy
 
 import (
@@ -271,26 +272,29 @@ func (d *Deployer) Activate(ctx context.Context, tag string) error {
 	if err != nil {
 		return err
 	}
-	// What the previous release runs, for when managed.json doesn't exist
-	// yet (an agent from before it was added). Nil if unreadable.
-	from, _ := readManifest(d.currentLink())
+	next, err := readManifest(filepath.Join(d.releasesDir(), tag))
+	if err != nil {
+		return fmt.Errorf("deploy: %s: %w", tag, err)
+	}
+	// While current still points at the release that has the unit files,
+	// so they can be disabled.
+	if err := d.retire(ctx, next); err != nil {
+		return err
+	}
 	if err := d.switchTo(tag); err != nil {
 		return err
 	}
 	d.Log.Printf("activating %s (was %q)", tag, previous)
 
-	if err := d.apply(ctx, from); err != nil {
+	if err := d.apply(ctx); err != nil {
 		d.Log.Printf("%s failed: %v", tag, err)
 		os.WriteFile(d.failedFile(), []byte(tag+"\n"), 0o644)
 		if previous == "" {
 			return fmt.Errorf("deploy: %s failed with nothing to roll back to: %w", tag, err)
 		}
 		d.Log.Printf("rolling back to %s", previous)
-		if rbErr := d.switchTo(previous); rbErr != nil {
-			return errors.Join(err, fmt.Errorf("rollback: %w", rbErr))
-		}
-		failed, _ := readManifest(filepath.Join(d.releasesDir(), tag))
-		if rbErr := d.apply(ctx, failed); rbErr != nil {
+		rbErr := d.rollBackTo(ctx, previous)
+		if rbErr != nil {
 			return errors.Join(err, fmt.Errorf("rollback: %w", rbErr))
 		}
 		return fmt.Errorf("deploy: %s failed and was rolled back to %s: %w", tag, previous, err)
@@ -299,6 +303,22 @@ func (d *Deployer) Activate(ctx context.Context, tag string) error {
 	os.Remove(d.failedFile())
 	d.Log.Printf("%s is active", tag)
 	return d.prune()
+}
+
+// rollBackTo reactivates tag after the current release failed, first
+// removing whatever the failed release added.
+func (d *Deployer) rollBackTo(ctx context.Context, tag string) error {
+	m, err := readManifest(filepath.Join(d.releasesDir(), tag))
+	if err != nil {
+		return err
+	}
+	if err := d.retire(ctx, m); err != nil {
+		return err
+	}
+	if err := d.switchTo(tag); err != nil {
+		return err
+	}
+	return d.apply(ctx)
 }
 
 // Rollback activates the newest installed release other than the current
@@ -333,48 +353,65 @@ func (d *Deployer) switchTo(tag string) error {
 	return os.Rename(tmp, d.currentLink())
 }
 
+// retire stops, disables and unlinks what the agent manages now that next
+// doesn't list. It runs before current switches to next, while the unit
+// files still exist: systemctl can't disable a unit whose file is gone.
+// It records the union of both first, so a deploy interrupted after this
+// still leaves a list the next deploy can clean up from.
+func (d *Deployer) retire(ctx context.Context, next *Manifest) error {
+	old := d.readManaged()
+	if old == nil {
+		// managed.json is missing (an agent from before it was added) or
+		// unreadable: fall back to what the current release lists.
+		if _, err := os.Lstat(d.currentLink()); err == nil {
+			if old, err = readManifest(d.currentLink()); err != nil {
+				d.Log.Printf("can't tell what the current release runs, so nothing is removed: %v", err)
+			}
+		}
+	}
+	if err := d.writeManaged(union(old, next)); err != nil {
+		return err
+	}
+	if old != nil {
+		// Before anything restarts: a removed service may hold a port that
+		// a new one needs.
+		d.remove(ctx, minus(old, next))
+	}
+	return nil
+}
+
 // apply links the current release's units, then reloads, enables and
-// restarts them and waits until every health URL answers. First it stops,
-// disables and unlinks what the agent managed before (managed.json and
-// from, the release being replaced) that this release no longer lists.
-func (d *Deployer) apply(ctx context.Context, from *Manifest) error {
+// restarts them and waits until every health URL answers.
+func (d *Deployer) apply(ctx context.Context) error {
 	m, err := readManifest(d.currentLink())
 	if err != nil {
 		return err
 	}
 
-	old, err := d.readManaged()
-	if err != nil {
-		return err
-	}
-	old = union(old, from)
-	// Record everything first, so a deploy interrupted from here on still
-	// leaves a list the next run can clean up from.
-	if err := d.writeManaged(union(old, m)); err != nil {
-		return err
-	}
 	if err := os.MkdirAll(d.UnitDir, 0o755); err != nil {
 		return err
 	}
-	// Before anything restarts: a removed service may hold a port that a
-	// new one needs.
-	d.remove(ctx, minus(old, m))
-
 	for _, unit := range m.Units {
 		// Link through current, so the next switch updates the unit too.
 		target := filepath.Join(d.currentLink(), "deploy", "systemd", unit)
 		link := filepath.Join(d.UnitDir, unit)
+		if _, err := os.Lstat(link); err == nil && !d.linksInto(link, d.Apps) {
+			return fmt.Errorf("deploy: %s was installed by hand; remove it to let the release manage %s", link, unit)
+		}
 		os.Remove(link)
 		if err := os.Symlink(target, link); err != nil {
 			return err
 		}
 	}
 
-	steps := [][]string{{"daemon-reload"}}
-	if shadowed := d.unshadow(m); len(shadowed) > 0 {
-		// Their enable links may point at the old file too.
-		steps = append(steps, append([]string{"reenable"}, shadowed...))
+	// After the links above, so a template is in place before an
+	// instance's own link stops hiding it. The enable below then moves the
+	// instance's enable links to the release too.
+	if err := d.unshadow(m); err != nil {
+		return err
 	}
+
+	steps := [][]string{{"daemon-reload"}}
 	if len(m.Services) > 0 {
 		steps = append(steps,
 			append([]string{"enable"}, m.Services...),
@@ -394,33 +431,43 @@ func (d *Deployer) apply(ctx context.Context, from *Manifest) error {
 			return err
 		}
 	}
-	return d.writeManaged(&Manifest{Units: m.Units, Services: m.Services, Timers: m.Timers})
+	return d.writeManaged(m)
 }
 
-// remove stops and disables r's services and timers, and removes r's unit
-// links. It only removes links that point into Apps, so units installed by
-// hand (minecraft.service) are never touched. Failures are logged, not
-// returned: a unit whose file is already gone can't be disabled, and a
-// service that really is still running fails the health check instead.
+// remove stops, disables and unlinks r's units. It only touches units
+// whose unit file (or template, for an instance such as site@admin.service)
+// is linked into Apps, so units installed by hand, such as
+// minecraft.service, are never stopped or unlinked even if a release once
+// listed them. Failures are logged, not returned: a service that really is
+// still running fails the next health check instead.
 func (d *Deployer) remove(ctx context.Context, r *Manifest) {
-	for _, unit := range append(append([]string{}, r.Services...), r.Timers...) {
+	var stop []string
+	for _, unit := range slices.Concat(r.Services, r.Timers) {
+		if !d.linksInto(filepath.Join(d.UnitDir, unitFile(unit)), d.Apps) {
+			d.Log.Printf("keeping %s: the release doesn't provide it", unit)
+			continue
+		}
 		d.Log.Printf("removing %s: no longer in the release", unit)
-		// Separate calls: disable fails once the unit file is gone, but a
-		// loaded unit can still be stopped.
-		for _, verb := range []string{"stop", "disable"} {
-			if err := d.Systemctl(ctx, verb, unit); err != nil {
-				d.Log.Printf("systemctl %s %s: %v", verb, unit, err)
+		stop = append(stop, unit)
+	}
+	if len(stop) > 0 {
+		if err := d.Systemctl(ctx, append([]string{"disable", "--now"}, stop...)...); err != nil {
+			// One bad unit fails the whole call, so retry each on its own.
+			d.Log.Printf("systemctl disable --now: %v; retrying one at a time", err)
+			for _, unit := range stop {
+				if err := d.Systemctl(ctx, "disable", "--now", unit); err != nil {
+					d.Log.Printf("systemctl disable --now %s: %v", unit, err)
+				}
 			}
 		}
 	}
 	for _, unit := range r.Units {
 		link := filepath.Join(d.UnitDir, unit)
-		target, err := os.Readlink(link)
-		if err != nil {
-			continue // missing, or not a link we made
+		if _, err := os.Lstat(link); err != nil {
+			continue
 		}
-		if rel, err := filepath.Rel(d.Apps, target); err != nil || !filepath.IsLocal(rel) {
-			d.Log.Printf("keeping %s: it links outside %s", link, d.Apps)
+		if !d.linksInto(link, d.Apps) {
+			d.Log.Printf("keeping %s: it wasn't linked by the agent", link)
 			continue
 		}
 		d.Log.Printf("unlinking %s", unit)
@@ -431,17 +478,17 @@ func (d *Deployer) remove(ctx context.Context, r *Manifest) {
 }
 
 // unshadow removes links in the unit folder named after one of m's
-// services or timers, such as site@portfolio.service, that point outside
-// Apps. systemd prefers a unit file with the exact name over the
-// release's template, so such a link would keep the service running from
-// wherever it points instead of from the release. It returns the names it
-// unlinked. Regular files are only warned about: those were written by
-// hand on purpose.
-func (d *Deployer) unshadow(m *Manifest) []string {
-	var unlinked []string
-	for _, name := range append(append([]string{}, m.Services...), m.Timers...) {
-		if slices.Contains(m.Units, name) {
-			continue // linked into the release just above
+// template instances, such as site@portfolio.service, when the release
+// ships the template. systemd prefers a unit file with the instance's exact
+// name over the template, so such a link (left from installing by hand)
+// would keep the service running from wherever it points instead of the
+// release. A regular file in that place fails the deploy: it was written on
+// purpose, and the release can't run the service while it's there.
+func (d *Deployer) unshadow(m *Manifest) error {
+	for _, name := range slices.Concat(m.Services, m.Timers) {
+		template := unitFile(name)
+		if template == name || !slices.Contains(m.Units, template) || slices.Contains(m.Units, name) {
+			continue // not an instance of a template the release ships
 		}
 		path := filepath.Join(d.UnitDir, name)
 		info, err := os.Lstat(path)
@@ -449,57 +496,99 @@ func (d *Deployer) unshadow(m *Manifest) []string {
 			continue
 		}
 		if info.Mode()&fs.ModeSymlink == 0 {
-			d.Log.Printf("warning: %s overrides the release's unit for %s", path, name)
-			continue
+			return fmt.Errorf("deploy: %s overrides the release's %s; remove it to let the release run %s", path, template, name)
 		}
-		target, err := os.Readlink(path)
-		if err != nil {
-			continue
+		if d.linksInto(path, d.currentLink()) {
+			continue // the release's own file, by another path
 		}
-		if rel, err := filepath.Rel(d.Apps, target); err == nil && filepath.IsLocal(rel) {
-			continue
-		}
-		d.Log.Printf("unlinking %s: it points at %s instead of the release", path, target)
+		target, _ := os.Readlink(path)
+		d.Log.Printf("unlinking %s: it points at %s instead of the release's %s", path, target, template)
 		if err := os.Remove(path); err != nil {
-			d.Log.Printf("unlinking %s: %v", path, err)
-			continue
+			return err
 		}
-		unlinked = append(unlinked, name)
 	}
-	return unlinked
+	return nil
+}
+
+// linksInto reports whether path is a symlink to somewhere inside dir.
+// Relative targets are resolved from the link's folder.
+func (d *Deployer) linksInto(path, dir string) bool {
+	target, err := os.Readlink(path)
+	if err != nil {
+		return false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(path), target)
+	}
+	rel, err := filepath.Rel(dir, target)
+	return err == nil && filepath.IsLocal(rel)
+}
+
+// unitFile returns the file a unit is loaded from: the template for an
+// instance (site@admin.service -> site@.service), else the unit itself.
+func unitFile(unit string) string {
+	if at := strings.Index(unit, "@"); at >= 0 {
+		if dot := strings.LastIndex(unit, "."); dot > at {
+			return unit[:at+1] + unit[dot:]
+		}
+	}
+	return unit
 }
 
 // readManaged returns the units, services and timers the agent last
-// recorded, or nil if it hasn't recorded any.
-func (d *Deployer) readManaged() (*Manifest, error) {
+// recorded, or nil if it hasn't recorded any or the record is unreadable.
+// An unreadable record is logged rather than returned, so it can't block
+// every deploy (and every rollback) until someone deletes it by hand.
+func (d *Deployer) readManaged() *Manifest {
 	data, err := os.ReadFile(d.managedFile())
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
+		return nil
 	}
 	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("decoding %s: %w", d.managedFile(), err)
+	if err == nil {
+		err = json.Unmarshal(data, &m)
 	}
-	if err := checkNames(&m); err != nil {
-		return nil, fmt.Errorf("%s: %w", d.managedFile(), err)
+	if err == nil {
+		err = checkNames(&m)
 	}
-	return &m, nil
+	if err != nil {
+		d.Log.Printf("ignoring %s: %v", d.managedFile(), err)
+		return nil
+	}
+	return &m
 }
 
-// writeManaged replaces managed.json atomically.
+// writeManaged replaces managed.json atomically and durably, so a power
+// cut can't leave it half written.
 func (d *Deployer) writeManaged(m *Manifest) error {
 	data, err := json.Marshal(Manifest{Units: m.Units, Services: m.Services, Timers: m.Timers})
 	if err != nil {
 		return err
 	}
 	tmp := d.managedFile() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	f, err := os.Create(tmp)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, d.managedFile())
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, d.managedFile())
+	}
+	if err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if dir, err := os.Open(d.Apps); err == nil {
+		dir.Sync()
+		dir.Close()
+	}
+	return nil
 }
 
 // union returns the units, services and timers in any of ms, without
