@@ -143,5 +143,11 @@ func TestStatic(t *testing.T) {
 		if tt.body != "" && string(body) != tt.body {
 			t.Errorf("%s %s body = %q, want %q", tt.method, tt.path, body, tt.body)
 		}
+		// A release replaces files in place, so nothing may reuse a copy
+		// without checking first. (http.FileServer drops the header from
+		// its errors, which is fine: only files need it.)
+		if got := resp.Header.Get("Cache-Control"); resp.StatusCode == http.StatusOK && got != "no-cache" {
+			t.Errorf("%s %s Cache-Control = %q, want %q", tt.method, tt.path, got, "no-cache")
+		}
 	}
 }
