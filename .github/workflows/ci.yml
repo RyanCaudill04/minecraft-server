@@ -230,6 +230,8 @@ jobs:
         run: shellcheck scripts/*.sh
       - name: Change detection tests
         run: scripts/ci-changes_test.sh
+      - name: Release notes tests
+        run: scripts/release-notes_test.sh
       - name: Build a release and verify its units
         run: |
           scripts/build-release.sh ci-check "$RUNNER_TEMP/dist"
@@ -287,10 +289,12 @@ jobs:
     environment: production
     permissions:
       contents: write # create the release and its tag
+      pull-requests: read # get info for release notes from PRs in release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # read merged PRs
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: web/go.mod
@@ -303,8 +307,17 @@ jobs:
           last=$(gh release list --limit 200 --json tagName \
             --jq '[.[].tagName | select(test("^r[0-9]+$")) | ltrimstr("r") | tonumber] | max // 0')
           echo "tag=r$((last + 1))" | tee -a "$GITHUB_OUTPUT"
+      - name: Release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # Without pipefail, a failing release-changes.sh is hidden.
+          set -o pipefail
+          scripts/release-changes.sh | scripts/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.json"
+          cat "$RUNNER_TEMP/notes.json"
       - name: Build
-        run: scripts/build-release.sh "${{ steps.tag.outputs.tag }}" dist
+        run: scripts/build-release.sh "${{ steps.tag.outputs.tag }}" dist "$RUNNER_TEMP/notes.json"
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
