@@ -152,9 +152,7 @@ func (c *Client) command(cmd string) (string, error) {
 	if err := c.write(id, typeCommand, cmd); err != nil {
 		return "", err
 	}
-	if err := c.write(end, typeResponse, ""); err != nil {
-		return "", err
-	}
+	sentEnd := false
 	var out strings.Builder
 	for {
 		p, err := c.read()
@@ -163,6 +161,12 @@ func (c *Client) command(cmd string) (string, error) {
 		}
 		switch p.id {
 		case id:
+			if !sentEnd {
+				if err := c.write(end, typeResponse, ""); err != nil {
+					return "", err
+				}
+				sentEnd = true
+			}
 			if out.Len()+len(p.body) > maxOutput {
 				return "", fmt.Errorf("output longer than %d bytes", maxOutput)
 			}
