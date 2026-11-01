@@ -237,7 +237,7 @@ const UNIT = {
   activating: { title: "Starting…", message: () => "systemd is starting LazyMC." },
   deactivating: { title: "Stopping…", message: () => "Paper is saving the world. This can take a few minutes." },
   inactive: { title: "Stopped", message: () => "LazyMC and Paper are off. Nobody can join until it's started." },
-  failed: { title: "Failed", message: () => "systemd gave up on it. Start it again, or check journalctl --user -u minecraft." },
+  failed: { title: "Failed", message: () => "systemd gave up on it. Start it again, or check journalctl --user-unit minecraft." },
   unknown: { title: "Unknown", message: () => "admin can't read the unit's state from systemd." },
 };
 
@@ -307,7 +307,13 @@ function renderUnit() {
     stop: can && st === "active",
     restart: can && st === "active",
   };
-  for (const b of card.querySelectorAll("[data-action]")) b.disabled = !enabled[b.dataset.action];
+  for (const b of card.querySelectorAll("[data-action]")) {
+    const off = !enabled[b.dataset.action];
+    // Disabling the focused button would drop focus to the top of the
+    // page, so keep it on the card instead.
+    if (off && b === document.activeElement) card.focus();
+    b.disabled = off;
+  }
 }
 
 function setNote(text, isError = false) {

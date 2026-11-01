@@ -93,6 +93,8 @@ code {
   color: var(--text);
 }
 .confirm::backdrop { background: rgba(0, 0, 0, 0.35); backdrop-filter: blur(2px); }
+/* The page behind the dialog stays put while it's open. */
+html:has(dialog[open]) { overflow: hidden; }
 .confirm form { display: flex; flex-direction: column; gap: 10px; }
 .confirm .actions { justify-content: flex-end; margin-top: 8px; }
 
