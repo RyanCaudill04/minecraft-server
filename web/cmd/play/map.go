@@ -10,9 +10,10 @@ import (
 
 // mapCSP lets squaremap's page load only its own files. It fetches tiles
 // and shows them as blob: URLs, and Leaflet positions them with inline
-// style attributes, so styles need 'unsafe-inline'; scripts don't.
+// style attributes, so styles need 'unsafe-inline'; scripts don't. Only play's
+// own pages may frame it, for the preview on the main page.
 const mapCSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; " +
-	"frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+	"frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
 
 // noPlayers stands in for squaremap's tiles/players.json, so the map never
 // shows where anyone is. Showing positions would need a filter by the

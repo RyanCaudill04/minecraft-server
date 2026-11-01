@@ -388,6 +388,31 @@ function countTo(node, to) {
   requestAnimationFrame(step);
 }
 
+// ---------- Map preview ----------
+
+// The preview is squaremap's own page in a frame. Before loading it, ask
+// whether the map exists, so an unrendered map shows the placeholder instead
+// of an error page. The frame loads once; the map refreshes its own tiles.
+async function loadMapPreview() {
+  const card = $("map-card");
+  try {
+    const res = await fetch("/map/", { method: "HEAD", cache: "no-store" });
+    if (!res.ok) return false;
+  } catch {
+    return false;
+  }
+  const frame = $("map-frame");
+  frame.addEventListener("load", () => (card.dataset.ready = "true"), { once: true });
+  frame.src = "/map/";
+  return true;
+}
+
+// Try again every minute until the map shows up.
+async function mapPreviewLoop() {
+  if (!(await loadMapPreview())) setTimeout(mapPreviewLoop, 60_000);
+}
+mapPreviewLoop();
+
 // ---------- Startup ----------
 
 // Each click restarts the reset, so the label always shows for 2 s.

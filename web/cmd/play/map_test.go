@@ -195,3 +195,13 @@ func TestMapIsReadOnly(t *testing.T) {
 		}
 	}
 }
+
+// The main page frames the map for its preview, so the map allows play's own
+// pages as ancestors and nobody else's.
+func TestMapFramedOnlyBySelf(t *testing.T) {
+	h, _ := newMapServer(t)
+	csp := get(h, "/map/").Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "frame-ancestors 'self'") {
+		t.Errorf("Content-Security-Policy %q, want frame-ancestors 'self'", csp)
+	}
+}

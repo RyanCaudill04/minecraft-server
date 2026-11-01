@@ -26,6 +26,10 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.2"/><path d="M3.5 17c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"/></svg>
           Players
         </a>
+        <a href="#map">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
+          Map
+        </a>
         <a href="#world">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2.2 2.8 4.5 2.8 7s-.8 4.8-2.8 7c-2-2.2-2.8-4.5-2.8-7S8 5.2 10 3z"/></svg>
           World
@@ -33,10 +37,6 @@
         <a href="#leaderboards">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 17V11M10 17V4M16 17V8"/></svg>
           Leaderboards
-        </a>
-        <a href="/map/">
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
-          Map
         </a>
       </nav>
 
@@ -81,6 +81,27 @@
             <p class="metric-sub" id="clock-sub">&nbsp;</p>
           </article>
         </div>
+      </section>
+
+      <section id="map" class="section">
+        <header class="section-head">
+          <h2>Map</h2>
+          <p class="muted">A look at the world from above.</p>
+        </header>
+        <article class="card map-card" id="map-card" data-ready="false">
+          <div class="map-stage">
+            <div class="map-placeholder">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
+              <p>The map isn't ready yet.</p>
+              <p class="muted">It appears once the server has rendered the world.</p>
+            </div>
+            <iframe id="map-frame" title="Preview of the world map" tabindex="-1" aria-hidden="true" loading="lazy"></iframe>
+          </div>
+          <div class="map-foot">
+            <p class="muted">Live preview of the overworld.</p>
+            <a class="btn btn-primary" id="map-open" href="/map/">Open the full map</a>
+          </div>
+        </article>
       </section>
 
       <section id="players" class="section">
