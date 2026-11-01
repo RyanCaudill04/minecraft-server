@@ -1,10 +1,18 @@
 // Package deploy installs releases of this repo's web apps on the Pi.
 //
-// A release is a GitHub Release with two assets: release.tar.gz (binaries,
-// sites and unit files) and release.tar.gz.sha256. Releases are unpacked
-// into <apps>/releases/<tag>, and <apps>/current is a symlink to the active
-// one. Unit files are linked into the systemd user folder through current,
-// so switching the link switches every unit at once.
+// The Pi runs several tracks (see Agent), each released and deployed on
+// its own. A Deployer handles one of them, in its own folder: a track
+// "play" has tags play-r1, play-r2, ... and lives in <apps>/play. Before
+// tracks, one release held everything, with tags r1, r2, ... in <apps>
+// itself; a Deployer with no Track still handles that layout, which the
+// Agent moves away from.
+//
+// A release is a GitHub Release with two assets: an archive of binaries,
+// sites and unit files (play-linux-arm64.tar.gz, or release.tar.gz for the
+// single release) and its .sha256. Releases are unpacked into
+// <dir>/releases/<tag>, and <dir>/current is a symlink to the active one.
+// Unit files are linked into the systemd user folder through current, so
+// switching the link switches every unit of the track at once.
 //
 // A deploy switches current, links and reloads the units, restarts the
 // services listed in the release's deploy/release.json, and waits for its
@@ -56,11 +64,16 @@ import (
 	"time"
 )
 
-// Asset names in each GitHub Release.
+// Asset names of the single release from before tracks. A track's archive
+// is TrackTarball(track), with the same ".sha256" suffix for its checksum.
 const (
 	TarballName  = "release.tar.gz"
 	ChecksumName = TarballName + ".sha256"
 )
+
+// TrackTarball returns the archive asset of a track's releases, named per
+// architecture so other boards can be added later.
+func TrackTarball(track string) string { return track + "-linux-arm64.tar.gz" }
 
 // ManifestPath is where the manifest lives inside a release.
 const ManifestPath = "deploy/release.json"
@@ -81,6 +94,9 @@ var validTag = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // Manifest says how to activate a release. It is deploy/release.json.
 type Manifest struct {
+	// Track is the track the release belongs to, "" for the single release.
+	// A Deployer refuses to install a release made for another track.
+	Track    string   `json:"track,omitzero"`
 	Units    []string `json:"units"`    // files in deploy/systemd to link into the user unit folder
 	Services []string `json:"services"` // enabled and restarted on every deploy
 	Timers   []string `json:"timers"`   // enabled and started
@@ -112,11 +128,14 @@ type Change struct {
 
 // Release is one GitHub Release.
 type Release struct {
-	Tag    string `json:"tag_name"`
-	Assets []struct {
-		Name string `json:"name"`
-		URL  string `json:"browser_download_url"`
-	} `json:"assets"`
+	Tag    string  `json:"tag_name"`
+	Assets []Asset `json:"assets"`
+}
+
+// Asset is one file attached to a Release.
+type Asset struct {
+	Name string `json:"name"`
+	URL  string `json:"browser_download_url"`
 }
 
 func (r *Release) assetURL(name string) (string, error) {
@@ -128,12 +147,22 @@ func (r *Release) assetURL(name string) (string, error) {
 	return "", fmt.Errorf("release %s has no %s asset", r.Tag, name)
 }
 
-// Deployer installs and activates releases.
+// Deployer installs and activates the releases of one track.
 type Deployer struct {
 	Repo    string // GitHub "owner/name"
 	API     string // GitHub API base URL, e.g. https://api.github.com
-	Apps    string // folder holding releases/ and the current link
+	Apps    string // folder holding releases/ and the current link: <apps>/<track>, or <apps> for the single release
 	UnitDir string // systemd user unit folder, e.g. ~/.config/systemd/user
+
+	// Track is the track deployed, e.g. "play": its tags are play-r<N>
+	// and its archive TrackTarball(Track). "" is the single release from
+	// before tracks: tags r<N> and release.tar.gz.
+	Track string
+	// GitHub lists releases. Nil makes one from API and HTTP for each call.
+	GitHub *GitHub
+	// Adopt lists folders, besides Apps, whose unit links this Deployer may
+	// replace. The move to tracks sets it to the single release's folders.
+	Adopt []string
 
 	HTTP *http.Client
 	// Systemctl runs "systemctl --user" with args; replaced in tests.
@@ -217,30 +246,44 @@ func (d *Deployer) LastApplied() (*Applied, error) {
 	return &a, nil
 }
 
-// Latest asks GitHub for the newest published release.
+// tagPrefix is what the track's tags start with, before "r<N>".
+func (d *Deployer) tagPrefix() string {
+	if d.Track == "" {
+		return ""
+	}
+	return d.Track + "-"
+}
+
+// tarball is the name of the track's archive asset.
+func (d *Deployer) tarball() string {
+	if d.Track == "" {
+		return TarballName
+	}
+	return TrackTarball(d.Track)
+}
+
+// Latest returns the track's newest published release: the highest N
+// among its <prefix>r<N> tags in the repo's newest releases. GitHub's own
+// "latest" release can't be used, since there is one per repo, not per
+// track. It returns an error wrapping ErrNoRelease if there is none.
 func (d *Deployer) Latest(ctx context.Context) (*Release, error) {
-	url := fmt.Sprintf("%s/repos/%s/releases/latest", d.API, d.Repo)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	gh := d.GitHub
+	if gh == nil {
+		gh = &GitHub{API: d.API, HTTP: d.HTTP, Log: d.Log}
+	}
+	rels, err := gh.Releases(ctx, d.Repo)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := d.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("deploy: fetching latest release: %w", err)
+	rel := newest(rels, d.tagPrefix())
+	if rel == nil {
+		what := "release"
+		if d.Track != "" {
+			what = d.Track + " release"
+		}
+		return nil, fmt.Errorf("deploy: %w: no %s among the newest %d", ErrNoRelease, what, perPage)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("deploy: fetching latest release: %s", resp.Status)
-	}
-	var rel Release
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil {
-		return nil, fmt.Errorf("deploy: decoding latest release: %w", err)
-	}
-	if !validTag.MatchString(rel.Tag) {
-		return nil, fmt.Errorf("deploy: invalid release tag %q", rel.Tag)
-	}
-	return &rel, nil
+	return rel, nil
 }
 
 // Run deploys the latest release unless it is already active or has
@@ -253,7 +296,11 @@ func (d *Deployer) Run(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
+	return d.run(ctx)
+}
 
+// run is Run without the lock, for a caller that holds it.
+func (d *Deployer) run(ctx context.Context) error {
 	if err := d.resume(ctx); err != nil {
 		return err
 	}
@@ -370,11 +417,11 @@ func (d *Deployer) Install(ctx context.Context, rel *Release) error {
 	d.sweep()
 	d.Log.Printf("installing %s", rel.Tag)
 
-	sumURL, err := rel.assetURL(ChecksumName)
+	sumURL, err := rel.assetURL(d.tarball() + ".sha256")
 	if err != nil {
 		return err
 	}
-	tarURL, err := rel.assetURL(TarballName)
+	tarURL, err := rel.assetURL(d.tarball())
 	if err != nil {
 		return err
 	}
@@ -412,6 +459,9 @@ func (d *Deployer) Install(ctx context.Context, rel *Release) error {
 	m, err := readManifest(staging)
 	if err == nil {
 		err = checkRelease(m)
+	}
+	if err == nil && m.Track != d.Track {
+		err = fmt.Errorf("manifest: the release is for track %q, not %q", m.Track, d.Track)
 	}
 	if err != nil {
 		os.RemoveAll(staging)
@@ -586,7 +636,11 @@ func (d *Deployer) Rollback(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
+	return d.rollback(ctx)
+}
 
+// rollback is Rollback without the lock, for a caller that holds it.
+func (d *Deployer) rollback(ctx context.Context) error {
 	current, err := d.Current()
 	if err != nil {
 		return err
@@ -617,6 +671,11 @@ func (d *Deployer) Unpin() error {
 		return err
 	}
 	defer unlock()
+	return d.unpinCmd()
+}
+
+// unpinCmd is Unpin without the lock, for a caller that holds it.
+func (d *Deployer) unpinCmd() error {
 	if readTag(d.pinnedFile()) == "" {
 		d.Log.Printf("nothing is pinned")
 	}
@@ -903,7 +962,7 @@ func (d *Deployer) apply(ctx context.Context, checkAgent bool) error {
 		// Link through current, so the next switch updates the unit too.
 		target := filepath.Join(d.currentLink(), "deploy", "systemd", unit)
 		link := filepath.Join(d.UnitDir, unit)
-		if _, err := os.Lstat(link); err == nil && !d.linksInto(link, d.Apps) {
+		if _, err := os.Lstat(link); err == nil && !d.owns(link) {
 			return fmt.Errorf("deploy: %s was installed by hand; remove it to let the release manage %s", link, unit)
 		}
 		os.Remove(link)
@@ -1023,6 +1082,12 @@ func (d *Deployer) unshadow(m *Manifest) error {
 	return nil
 }
 
+// owns reports whether the unit link at path is one this Deployer may
+// replace: it points into Apps, or into one of the Adopt folders.
+func (d *Deployer) owns(path string) bool {
+	return d.linksInto(path, d.Apps) || slices.ContainsFunc(d.Adopt, func(dir string) bool { return d.linksInto(path, dir) })
+}
+
 // linksInto reports whether path is a symlink to somewhere inside dir.
 // Relative targets are resolved from the link's folder.
 func (d *Deployer) linksInto(path, dir string) bool {
@@ -1083,6 +1148,11 @@ func (d *Deployer) writeManaged(m *Manifest) error {
 // writeFile replaces path, a file in Apps, atomically and durably, so a
 // power cut can't leave it half written.
 func (d *Deployer) writeFile(path string, data []byte) error {
+	return writeFile(path, data)
+}
+
+// writeFile replaces path atomically and durably.
+func writeFile(path string, data []byte) error {
 	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
@@ -1102,7 +1172,7 @@ func (d *Deployer) writeFile(path string, data []byte) error {
 		os.Remove(tmp)
 		return err
 	}
-	syncDir(d.Apps)
+	syncDir(filepath.Dir(path))
 	return nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -76,47 +77,61 @@ func releaseFiles(t *testing.T, healthURL string) []entry {
 	}
 }
 
-// fakeGitHub serves releases and their assets.
+// fakeGitHub serves a repo's release list and the releases' assets.
 type fakeGitHub struct {
 	*httptest.Server
 	mu        sync.Mutex
-	latest    string
+	order     []string // published tags, oldest first
 	tarballs  map[string][]byte
 	checksums map[string]string // overrides the real checksum
+	lists     int               // release list requests
+	notMod    int               // of which answered 304
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
 	g := &fakeGitHub{tarballs: map[string][]byte{}, checksums: map[string]string{}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /repos/o/r/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /repos/o/r/releases", func(w http.ResponseWriter, r *http.Request) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
-		if g.latest == "" {
-			http.NotFound(w, r)
+		g.lists++
+		rels := []Release{}
+		for _, tag := range slices.Backward(g.order) {
+			name := assetName(tag)
+			rels = append(rels, Release{Tag: tag, Assets: []Asset{
+				{Name: name, URL: g.URL + "/dl/" + url.PathEscape(tag) + "/" + name},
+				{Name: name + ".sha256", URL: g.URL + "/dl/" + url.PathEscape(tag) + "/" + name + ".sha256"},
+			}})
+		}
+		body, _ := json.Marshal(rels)
+		sum := sha256.Sum256(body)
+		etag := `"` + hex.EncodeToString(sum[:8]) + `"`
+		if r.Header.Get("If-None-Match") == etag {
+			g.notMod++
+			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		fmt.Fprintf(w, `{"tag_name": %q, "assets": [
-			{"name": %q, "browser_download_url": "%s/dl/%s/%s"},
-			{"name": %q, "browser_download_url": "%s/dl/%s/%s"}]}`,
-			g.latest,
-			TarballName, g.URL, g.latest, TarballName,
-			ChecksumName, g.URL, g.latest, ChecksumName)
+		w.Header().Set("ETag", etag)
+		w.Write(body)
 	})
 	mux.HandleFunc("GET /dl/{tag}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		tag := r.PathValue("tag")
 		data := g.tarballs[tag]
+		name := assetName(tag)
 		switch r.PathValue("name") {
-		case TarballName:
+		case name:
 			w.Write(data)
-		case ChecksumName:
+		case name + ".sha256":
 			sum := sha256.Sum256(data)
 			hexSum := hex.EncodeToString(sum[:])
 			if s, ok := g.checksums[tag]; ok {
 				hexSum = s
 			}
-			fmt.Fprintf(w, "%s  %s\n", hexSum, TarballName)
+			fmt.Fprintf(w, "%s  %s\n", hexSum, name)
+		default:
+			http.NotFound(w, r)
 		}
 	})
 	g.Server = httptest.NewServer(mux)
@@ -124,11 +139,20 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 	return g
 }
 
+// assetName is the archive a tag is published with: <track>-r<N> tags
+// carry the track's archive, others release.tar.gz.
+func assetName(tag string) string {
+	if track, _, ok := strings.Cut(tag, "-r"); ok && !strings.ContainsAny(track, "/.") {
+		return TrackTarball(track)
+	}
+	return TarballName
+}
+
 func (g *fakeGitHub) publish(tag string, data []byte) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.tarballs[tag] = data
-	g.latest = tag
+	g.order = append(slices.DeleteFunc(g.order, func(t string) bool { return t == tag }), tag)
 }
 
 // health serves /ok (200) and /bad (500).
