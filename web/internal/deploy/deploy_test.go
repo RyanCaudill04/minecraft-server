@@ -83,10 +83,23 @@ type fakeGitHub struct {
 	latest    string
 	tarballs  map[string][]byte
 	checksums map[string]string // overrides the real checksum
+	// names are the tarball assets each release has, all with the same
+	// contents and each with a checksum file. Defaults to what
+	// build-release.sh publishes.
+	names     []string
+	downloads []string // tarball names downloaded, in order
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
-	g := &fakeGitHub{tarballs: map[string][]byte{}, checksums: map[string]string{}}
+	g := &fakeGitHub{
+		tarballs:  map[string][]byte{},
+		checksums: map[string]string{},
+		names: []string{
+			TarballName("linux", "arm64"),
+			TarballName("linux", "amd64"),
+			LegacyTarballName,
+		},
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /repos/o/r/releases/latest", func(w http.ResponseWriter, r *http.Request) {
 		g.mu.Lock()
@@ -95,29 +108,40 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 			http.NotFound(w, r)
 			return
 		}
-		fmt.Fprintf(w, `{"tag_name": %q, "assets": [
-			{"name": %q, "browser_download_url": "%s/dl/%s/%s"},
-			{"name": %q, "browser_download_url": "%s/dl/%s/%s"}]}`,
-			g.latest,
-			TarballName, g.URL, g.latest, TarballName,
-			ChecksumName, g.URL, g.latest, ChecksumName)
+		type asset struct {
+			Name string `json:"name"`
+			URL  string `json:"browser_download_url"`
+		}
+		var assets []asset
+		for _, name := range g.names {
+			for _, n := range []string{name, name + ChecksumSuffix} {
+				assets = append(assets, asset{n, fmt.Sprintf("%s/dl/%s/%s", g.URL, g.latest, n)})
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"tag_name": g.latest, "assets": assets})
 	})
 	mux.HandleFunc("GET /dl/{tag}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		tag := r.PathValue("tag")
 		data := g.tarballs[tag]
-		switch r.PathValue("name") {
-		case TarballName:
-			w.Write(data)
-		case ChecksumName:
-			sum := sha256.Sum256(data)
-			hexSum := hex.EncodeToString(sum[:])
-			if s, ok := g.checksums[tag]; ok {
-				hexSum = s
-			}
-			fmt.Fprintf(w, "%s  %s\n", hexSum, TarballName)
+		name := r.PathValue("name")
+		tarName := strings.TrimSuffix(name, ChecksumSuffix)
+		if !slices.Contains(g.names, tarName) {
+			http.NotFound(w, r)
+			return
 		}
+		if name == tarName {
+			g.downloads = append(g.downloads, name)
+			w.Write(data)
+			return
+		}
+		sum := sha256.Sum256(data)
+		hexSum := hex.EncodeToString(sum[:])
+		if s, ok := g.checksums[tag]; ok {
+			hexSum = s
+		}
+		fmt.Fprintf(w, "%s  %s\n", hexSum, tarName)
 	})
 	g.Server = httptest.NewServer(mux)
 	t.Cleanup(g.Close)
@@ -129,6 +153,12 @@ func (g *fakeGitHub) publish(tag string, data []byte) {
 	defer g.mu.Unlock()
 	g.tarballs[tag] = data
 	g.latest = tag
+}
+
+func (g *fakeGitHub) downloaded() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.downloads)
 }
 
 // health serves /ok (200) and /bad (500).
@@ -165,6 +195,8 @@ func newHarness(t *testing.T) *harness {
 		HealthTimeout: time.Second,
 		Keep:          3,
 		Log:           log.New(io.Discard, "", 0),
+		GOOS:          "linux",
+		GOARCH:        "arm64",
 		Systemctl: func(ctx context.Context, args ...string) error {
 			h.mu.Lock()
 			defer h.mu.Unlock()
@@ -269,6 +301,65 @@ func TestFreshDeploy(t *testing.T) {
 	}
 	if info.Mode().Perm()&0o100 == 0 {
 		t.Errorf("bin/play mode %v lost its executable bit", info.Mode())
+	}
+}
+
+func TestInstallsTheTarballForItsPlatform(t *testing.T) {
+	for _, arch := range []string{"arm64", "amd64"} {
+		t.Run(arch, func(t *testing.T) {
+			h := newHarness(t)
+			h.d.GOARCH = arch
+			h.publish(t, "r1", "/ok")
+
+			if err := h.d.Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{TarballName("linux", arch)}
+			if got := h.github.downloaded(); !reflect.DeepEqual(got, want) {
+				t.Errorf("downloaded %q, want %q", got, want)
+			}
+			if got := h.current(t); got != "r1" {
+				t.Errorf("current = %q, want r1", got)
+			}
+		})
+	}
+}
+
+func TestOldReleasesInstallTheirArm64Tarball(t *testing.T) {
+	h := newHarness(t)
+	h.github.names = []string{LegacyTarballName}
+	h.publish(t, "r1", "/ok")
+
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{LegacyTarballName}; !reflect.DeepEqual(h.github.downloaded(), want) {
+		t.Errorf("downloaded %q, want %q", h.github.downloaded(), want)
+	}
+}
+
+func TestNoTarballForThePlatform(t *testing.T) {
+	for name, assets := range map[string][]string{
+		"old release": {LegacyTarballName},
+		"other arch":  {TarballName("linux", "arm64")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.d.GOARCH = "amd64"
+			h.github.names = assets
+			h.publish(t, "r1", "/ok")
+
+			err := h.d.Run(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "has no build for linux/amd64") {
+				t.Fatalf("err = %v, want a missing build error", err)
+			}
+			if len(h.github.downloaded()) != 0 {
+				t.Errorf("downloaded %q, want nothing", h.github.downloaded())
+			}
+			if got := h.current(t); got != "" {
+				t.Errorf("current = %q, want none", got)
+			}
+		})
 	}
 }
 

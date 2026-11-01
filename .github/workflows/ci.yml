@@ -97,9 +97,12 @@ jobs:
       - name: test
         working-directory: web
         run: go test -race ./...
-      - name: build for the Pi
+      - name: build for each release architecture
         working-directory: web
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./...
+        run: |
+          for arch in arm64 amd64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build ./...
+          done
 
   play:
     name: play.ryancaudill.dev
@@ -235,12 +238,16 @@ jobs:
       - name: Build a release and verify its units
         run: |
           scripts/build-release.sh ci-check "$RUNNER_TEMP/dist"
-          (cd "$RUNNER_TEMP/dist" && sha256sum -c release.tar.gz.sha256)
-          # Unpack where the units expect it (%h/apps/current) and let
-          # systemd check them, including that every program exists.
+          (cd "$RUNNER_TEMP/dist" && sha256sum -c ./*.sha256)
+          # Agents that only know release.tar.gz must keep getting arm64.
+          cmp "$RUNNER_TEMP/dist/release.tar.gz" "$RUNNER_TEMP/dist/release-linux-arm64.tar.gz"
+          # Unpack the runner's build where the units expect it
+          # (%h/apps/current) and let systemd check them, including that
+          # every program exists and runs here.
           current="$HOME/apps/current"
           mkdir -p "$current" "$HOME/minecraft_server"
-          tar -xzf "$RUNNER_TEMP/dist/release.tar.gz" -C "$current"
+          tar -xzf "$RUNNER_TEMP/dist/release-linux-amd64.tar.gz" -C "$current"
+          "$current/bin/mc-agent" version | grep -qx ci-check
           units=$(mktemp -d)
           cp "$current"/deploy/systemd/{play.service,admin.service,mc-agent.service,mc-agent.timer} "$units/"
           for site in portfolio; do cp "$current/deploy/systemd/site@.service" "$units/site@$site.service"; done
@@ -323,7 +330,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          gh release create "$TAG" dist/release.tar.gz dist/release.tar.gz.sha256 \
+          gh release create "$TAG" dist/*.tar.gz dist/*.tar.gz.sha256 \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
             --notes "Built from ${GITHUB_SHA} by run ${GITHUB_RUN_ID}. The Pi installs it within a few minutes."
