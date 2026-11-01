@@ -67,6 +67,7 @@ func releaseFiles(t *testing.T, healthURL string) []entry {
 		Services: []string{"play.service"},
 		Timers:   []string{"mc-agent.timer"},
 		Health:   []string{healthURL},
+		Policy:   PolicyVersion,
 	})
 	return []entry{
 		{name: "bin/play", body: "#!/bin/sh\n", mode: 0o755},
@@ -88,6 +89,14 @@ type fakeGitHub struct {
 func newFakeGitHub(t *testing.T) *fakeGitHub {
 	g := &fakeGitHub{tarballs: map[string][]byte{}, checksums: map[string]string{}}
 	mux := http.NewServeMux()
+	release := func(tag string) string {
+		return fmt.Sprintf(`{"tag_name": %q, "assets": [
+			{"name": %q, "browser_download_url": "%s/dl/%s/%s"},
+			{"name": %q, "browser_download_url": "%s/dl/%s/%s"}]}`,
+			tag,
+			TarballName, g.URL, tag, TarballName,
+			ChecksumName, g.URL, tag, ChecksumName)
+	}
 	mux.HandleFunc("GET /repos/o/r/releases/latest", func(w http.ResponseWriter, r *http.Request) {
 		g.mu.Lock()
 		defer g.mu.Unlock()
@@ -95,12 +104,17 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 			http.NotFound(w, r)
 			return
 		}
-		fmt.Fprintf(w, `{"tag_name": %q, "assets": [
-			{"name": %q, "browser_download_url": "%s/dl/%s/%s"},
-			{"name": %q, "browser_download_url": "%s/dl/%s/%s"}]}`,
-			g.latest,
-			TarballName, g.URL, g.latest, TarballName,
-			ChecksumName, g.URL, g.latest, ChecksumName)
+		fmt.Fprint(w, release(g.latest))
+	})
+	mux.HandleFunc("GET /repos/o/r/releases/tags/{tag}", func(w http.ResponseWriter, r *http.Request) {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		tag := r.PathValue("tag")
+		if _, ok := g.tarballs[tag]; !ok {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, release(tag))
 	})
 	mux.HandleFunc("GET /dl/{tag}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		g.mu.Lock()
