@@ -34,13 +34,19 @@ var (
 	BobSeen   = time.Date(2026, 10, 26, 21, 0, 0, 0, time.UTC)
 )
 
+// DataDir returns the overworld data folder, holding the clock and weather
+// files, of a server built by Build. It matches the path package world reads.
+func DataDir(server string) string {
+	return filepath.Join(server, "world", "dimensions", "minecraft", "overworld", "data", "minecraft")
+}
+
 // Build writes the synthetic server into a temporary folder and returns its
 // path. The world is at <path>/world.
 func Build(t testing.TB) string {
 	t.Helper()
 	server := t.TempDir()
 	world := filepath.Join(server, "world")
-	data := filepath.Join(world, "dimensions", "minecraft", "overworld", "data", "minecraft")
+	data := DataDir(server)
 	players := filepath.Join(world, "players")
 
 	nbttest.WriteFile(t, filepath.Join(world, "level.dat"), map[string]any{
@@ -110,12 +116,9 @@ func stats(custom, mined map[string]int64) map[string]any {
 	return map[string]any{"stats": s, "DataVersion": 4903}
 }
 
-func writeJSON(t testing.TB, path string, v any) {
+// writeFile writes data at path, creating parent folders.
+func writeFile(t testing.TB, path string, data []byte) {
 	t.Helper()
-	data, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -124,15 +127,19 @@ func writeJSON(t testing.TB, path string, v any) {
 	}
 }
 
+func writeJSON(t testing.TB, path string, v any) {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, data)
+}
+
 // touch creates an empty file with the given modification time.
 func touch(t testing.TB, path string, mtime time.Time) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, path, nil)
 	if err := os.Chtimes(path, mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
