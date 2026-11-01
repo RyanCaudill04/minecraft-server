@@ -35,3 +35,42 @@ first connection wakes Paper. If Paper takes more than 25 seconds to start,
 the player will be asked to reconnect once it is ready. Test a complete
 start-and-idle-stop cycle while watching LazyMC's output before treating this
 as a production deployment.
+
+## Day-to-day control from the Mac
+
+[`scripts/mc`](scripts/mc) wraps `ssh mc-pi` (set `MC_HOST` for another
+host). Commands that only look run right away; anything that changes the
+Pi asks first, or takes `--yes`.
+
+```bash
+scripts/mc status            # services, timers, active release, server state
+scripts/mc logs play -f      # follow a unit's journal (default: minecraft)
+scripts/mc restart           # restart LazyMC and Paper
+scripts/mc deploy            # install the newest release now
+scripts/mc pause && scripts/mc rollback   # roll back and keep it
+scripts/mc preview           # run play locally against a copy of the world
+```
+
+`scripts/mc --help` lists everything.
+
+## Dynamic DNS
+
+`ddns.timer` (shipped in every release) checks the public IP every five
+minutes and updates the Minecraft address's Cloudflare A record when it
+changes. It does nothing until these are set in
+`~/.config/minecraft/secrets.env` (mode `0600`) on the Pi:
+
+```bash
+# API token with Zone > DNS > Edit on this zone only
+CLOUDFLARE_DNS_TOKEN=
+# From the zone's overview page in Cloudflare
+CLOUDFLARE_ZONE_ID=
+# The existing A record, e.g. mc.example.com
+DDNS_RECORD=
+```
+
+systemd doesn't strip comments at the end of a line, so keep them on their
+own lines.
+
+Check it with `scripts/mc logs ddns`, or try it without changing anything:
+`set -a; . ~/.config/minecraft/secrets.env; ~/apps/current/bin/ddns -dry-run`.

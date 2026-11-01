@@ -1,7 +1,7 @@
 {
-  "units": ["play.service", "admin.service", "site@.service", "mc-agent.service", "mc-agent.timer"],
+  "units": ["play.service", "admin.service", "site@.service", "mc-agent.service", "mc-agent.timer", "ddns.service", "ddns.timer"],
   "services": ["play.service", "admin.service", "site@portfolio.service"],
-  "timers": ["mc-agent.timer"],
+  "timers": ["mc-agent.timer", "ddns.timer"],
   "health": [
     "http://127.0.0.1:8082/api/status",
     "http://127.0.0.1:8081/api/status",

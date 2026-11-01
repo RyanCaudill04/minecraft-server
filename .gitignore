@@ -16,6 +16,9 @@ lazymc
 # Go binaries cross-compiled on the Mac for the Pi
 bin/
 
+# World files copied from the Pi by scripts/mc preview
+/.preview/
+
 # Machine-specific secrets and local overrides
 server.properties.local
 server.properties
