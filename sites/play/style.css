@@ -1,6 +1,23 @@
 /* play.ryancaudill.dev. Shared tokens, layout and components are in
    /shared/base.css, which loads first. */
 
+/* Text colors that need 4.5:1 on the cards. Shared --green is tuned for
+   status dots and is too light for small text on white. */
+:root {
+  --green-text: #1e7e34;
+  --gold: #8a6400;
+  --silver: #6b6b70;
+  --bronze: #9a5b26;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --green-text: var(--green);
+    --gold: #d4a017;
+    --silver: #9a9aa0;
+    --bronze: #c07a40;
+  }
+}
+
 /* ---------- Layout ---------- */
 
 .player-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
@@ -73,7 +90,7 @@
 .player-card .name { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .player-card .meta { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.8125rem; }
 .player-card .who { min-width: 0; }
-.online-badge { color: var(--green); font-weight: 600; }
+.online-badge { color: var(--green-text); font-weight: 600; }
 
 /* World facts */
 .fact { display: flex; flex-direction: column; gap: 4px; padding: 16px 18px; }
@@ -103,29 +120,35 @@
   cursor: pointer;
   transition: background 0.2s var(--ease), color 0.2s;
 }
-.segmented button[aria-selected="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.segmented button[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
 
 .board-card { padding: 8px; }
 .board { list-style: none; margin: 0; padding: 0; }
-.board li {
+.board button {
   display: grid;
+  width: 100%;
   grid-template-columns: 28px 32px minmax(0, 1fr) 84px;
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
+  border: 0;
   border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   transition: background 0.2s;
 }
-.board li:hover { background: var(--bg); }
-.board .rank { color: var(--faint); font-weight: 650; font-variant-numeric: tabular-nums; text-align: center; }
-.board li:nth-child(1) .rank { color: #d4a017; }
-.board li:nth-child(2) .rank { color: #9a9aa0; }
-.board li:nth-child(3) .rank { color: #b0703a; }
+.board button:hover { background: var(--bg); }
+.board .rank { color: var(--subtle); font-weight: 650; font-variant-numeric: tabular-nums; text-align: center; }
+.board li:nth-child(1) .rank { color: var(--gold); }
+.board li:nth-child(2) .rank { color: var(--silver); }
+.board li:nth-child(3) .rank { color: var(--bronze); }
 .board img { width: 32px; height: 32px; border-radius: 8px; image-rendering: pixelated; }
 .board .bar-wrap { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .board .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.board .bar { height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; }
+.board .bar { display: block; height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; }
 .board .bar span {
   display: block;
   height: 100%;
@@ -138,28 +161,32 @@
 
 /* ---------- Player sheet ---------- */
 
-.sheet-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.3);
-  z-index: 20;
-  animation: fade 0.25s var(--ease);
-}
+/* A native <dialog> opened with showModal(), so the browser traps focus,
+   makes the page behind inert and closes it on Esc. The padding is on the
+   inner .sheet-body so a click whose target is the dialog itself can only
+   be on the backdrop. */
 .sheet {
   position: fixed;
-  top: 12px;
-  right: 12px;
-  bottom: 12px;
+  inset: 12px 12px 12px auto;
   width: min(400px, calc(100vw - 24px));
-  padding: 24px;
+  max-width: none;
+  height: auto;
+  max-height: none;
+  margin: 0;
+  padding: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--border);
   border-radius: 20px;
   background: var(--card);
+  color: var(--text);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.2);
-  z-index: 30;
-  animation: slide-in 0.35s var(--ease);
 }
+.sheet[open] { animation: slide-in 0.35s var(--ease); }
+.sheet::backdrop { background: rgba(0, 0, 0, 0.3); animation: fade 0.25s ease-out; }
+.sheet-body { position: relative; padding: 24px; }
+/* Stop the page behind from scrolling while the sheet is open. */
+html:has(.sheet[open]) { overflow: hidden; }
 .sheet-close {
   position: absolute;
   top: 16px;
@@ -186,15 +213,12 @@
 
 @media (max-width: 600px) {
   .sheet {
-    top: auto;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    inset: auto 0 0 0;
     width: 100%;
     max-height: 85vh;
     border-radius: 20px 20px 0 0;
-    animation-name: slide-up;
   }
+  .sheet[open] { animation-name: slide-up; }
 }
 
 @keyframes fade { from { opacity: 0; } }

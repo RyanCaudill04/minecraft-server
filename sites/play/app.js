@@ -150,41 +150,62 @@ function renderWorld() {
   );
 }
 
+// Player cards by id. They're updated in place instead of rebuilt on every
+// status poll, so a focused card keeps focus and hover doesn't flicker.
+const playerCards = new Map();
+
 function renderPlayers() {
   const onlineIDs = new Set(visibleOnline().map((p) => p.id));
   // Online players first, then most recently seen (the API's order).
   const players = [...data.players].sort((a, b) => onlineIDs.has(b.id) - onlineIDs.has(a.id));
 
-  const appear = players.length > 0 && once("players");
-  $("player-grid").replaceChildren(
-    ...players.map((p, i) => {
-      const card = el("button", "player-card" + (appear ? " appear" : ""));
-      card.type = "button";
-      card.style.animationDelay = `${i * 30}ms`;
-      card.addEventListener("click", () => openSheet(p.id, card));
+  const ids = new Set(players.map((p) => p.id));
+  for (const id of playerCards.keys()) if (!ids.has(id)) playerCards.delete(id);
 
-      const who = el("span", "who");
-      const meta = el("span", "meta");
-      if (onlineIDs.has(p.id)) {
-        meta.append(el("span", "online-badge", "● Online"));
-      } else {
-        meta.textContent = p.lastSeen ? `Seen ${fmtAgo(p.lastSeen)}` : "Never seen";
-      }
-      meta.append(` · ${fmtPlaytime(p.playTicks)}`);
-      who.append(el("span", "name", p.name), meta);
-      card.append(head(p, 44), who);
-      return card;
-    }),
-  );
+  const appear = players.length > 0 && once("players");
+  const cards = players.map((p, i) => {
+    let card = playerCards.get(p.id);
+    if (!card) {
+      card = el("button", "player-card" + (appear ? " appear" : ""));
+      card.type = "button";
+      card.dataset.id = p.id;
+      card.style.animationDelay = `${i * 30}ms`;
+      card.addEventListener("click", () => openSheet(p.id, "player-grid"));
+      card.append(head(p, 44), el("span", "who"));
+      playerCards.set(p.id, card);
+    }
+
+    const meta = el("span", "meta");
+    if (onlineIDs.has(p.id)) {
+      meta.append(el("span", "online-badge", "● Online"));
+    } else {
+      meta.textContent = p.lastSeen ? `Seen ${fmtAgo(p.lastSeen)}` : "Never seen";
+    }
+    meta.append(` · ${fmtPlaytime(p.playTicks)}`);
+    card.querySelector(".who").replaceChildren(el("span", "name", p.name), meta);
+    return card;
+  });
+
+  // Moving a node drops its focus, so only reorder when the order changed,
+  // and then put focus back on the card that had it.
+  const grid = $("player-grid");
+  if (cards.length !== grid.children.length || cards.some((c, i) => grid.children[i] !== c)) {
+    const focused = document.activeElement;
+    grid.replaceChildren(...cards);
+    if (cards.includes(focused)) focused.focus({ preventScroll: true });
+  }
 }
 
+let boardKey = ""; // what the board last rendered, to skip unchanged refreshes
+
 function renderBoard() {
+  // A segmented control of toggle buttons rather than ARIA tabs: it's
+  // simpler and it's what this is, one button per board.
   const tabs = $("board-tabs");
   if (!tabs.childElementCount) {
     for (const b of BOARDS) {
       const tab = el("button", "", b.label);
       tab.type = "button";
-      tab.setAttribute("role", "tab");
       tab.dataset.key = b.key;
       tab.addEventListener("click", () => {
         data.board = b.key;
@@ -193,36 +214,55 @@ function renderBoard() {
       tabs.append(tab);
     }
   }
-  for (const tab of tabs.children) tab.setAttribute("aria-selected", tab.dataset.key === data.board);
+  for (const tab of tabs.children) tab.setAttribute("aria-pressed", tab.dataset.key === data.board);
 
   const board = BOARDS.find((b) => b.key === data.board);
   const ranked = [...data.players].sort((a, b) => b[board.key] - a[board.key]);
   const top = Math.max(1, ranked[0]?.[board.key] ?? 1);
 
+  // Rebuilding replays the bars and drops focus from a row, so only do it
+  // when the board or its numbers changed.
+  const key = JSON.stringify([board.key, ranked.map((p) => [p.id, p.name, p[board.key]])]);
+  if (key === boardKey) return;
+  boardKey = key;
+
+  const list = $("board");
+  list.setAttribute("aria-label", `${board.label} leaderboard`);
+  const focusedID = list.contains(document.activeElement) ? document.activeElement.dataset.id : null;
+
   const rows = ranked.map((p, i) => {
+    // The row is a real button so it can be reached and opened from the
+    // keyboard, like the player cards.
     const li = el("li");
-    li.addEventListener("click", () => openSheet(p.id, li));
-    const wrap = el("div", "bar-wrap");
-    const bar = el("div", "bar");
+    const row = el("button");
+    row.type = "button";
+    row.dataset.id = p.id;
+    row.addEventListener("click", () => openSheet(p.id, "board"));
+    const wrap = el("span", "bar-wrap");
+    const bar = el("span", "bar");
     const fill = el("span");
     bar.append(fill);
     wrap.append(el("span", "name", p.name), bar);
-    li.append(el("span", "rank", String(i + 1)), head(p, 32), wrap, el("span", "score", board.fmt(p[board.key])));
+    row.append(el("span", "rank", String(i + 1)), head(p, 32), wrap, el("span", "score", board.fmt(p[board.key])));
+    li.append(row);
     // Set the width after insertion so the bar animates from zero.
     requestAnimationFrame(() => requestAnimationFrame(() => (fill.style.width = `${(p[board.key] / top) * 100}%`)));
     return li;
   });
-  $("board").replaceChildren(...rows);
+  list.replaceChildren(...rows);
+  if (focusedID) focusPlayer("board", focusedID, { preventScroll: true });
 }
 
 // ---------- Player sheet ----------
 
+// Where the sheet was opened from: the player's id and the list it was in.
+// Not the element, which may be re-rendered while the sheet is open.
 let sheetOpener = null;
 
-function openSheet(id, opener) {
+function openSheet(id, from) {
   const p = data.players.find((x) => x.id === id);
   if (!p) return;
-  sheetOpener = opener;
+  sheetOpener = { id, from };
 
   $("sheet-head").src = headURL(p.id, 144);
   $("sheet-name").textContent = p.name;
@@ -240,21 +280,24 @@ function openSheet(id, opener) {
     }),
   );
 
-  $("backdrop").hidden = false;
-  $("sheet").hidden = false;
-  $("sheet-close").focus();
+  // showModal traps focus, makes the page inert and closes on Esc.
+  $("sheet").showModal();
 }
 
-function closeSheet() {
-  if ($("sheet").hidden) return;
-  $("backdrop").hidden = true;
-  $("sheet").hidden = true;
-  sheetOpener?.focus();
+// Focuses the player's card or row in the list with the given id.
+function focusPlayer(listID, id, options) {
+  $(listID).querySelector(`[data-id="${CSS.escape(id)}"]`)?.focus(options);
 }
 
-$("sheet-close").addEventListener("click", closeSheet);
-$("backdrop").addEventListener("click", closeSheet);
-document.addEventListener("keydown", (e) => e.key === "Escape" && closeSheet());
+const sheet = $("sheet");
+sheet.addEventListener("close", () => {
+  if (sheetOpener) focusPlayer(sheetOpener.from, sheetOpener.id);
+  sheetOpener = null;
+});
+$("sheet-close").addEventListener("click", () => sheet.close());
+// The content is all inside .sheet-body, so a click on the dialog itself is
+// on the backdrop.
+sheet.addEventListener("click", (e) => e.target === sheet && sheet.close());
 
 // ---------- Day/night ----------
 
