@@ -35,3 +35,36 @@ first connection wakes Paper. If Paper takes more than 25 seconds to start,
 the player will be asked to reconnect once it is ready. Test a complete
 start-and-idle-stop cycle while watching LazyMC's output before treating this
 as a production deployment.
+
+## World map (squaremap)
+
+[squaremap](https://github.com/jpenilla/squaremap) renders a top-down map
+of the world to PNG tiles on disk while Paper is awake, and play serves
+them read-only at `https://play.ryancaudill.dev/map/`. The map keeps
+working while Paper sleeps, because play only reads files. squaremap's own
+web server is off ([`plugins/squaremap/config.yml`](plugins/squaremap/config.yml)),
+so nothing new listens on the Pi.
+
+- **CPU:** one render thread. Changed chunks are re-rendered in batches of
+  at most 256 every 30 seconds. A first full render runs only when you ask
+  for it (`squaremap fullrender world` in the console) and keeps one of the
+  Pi's four cores busy until it finishes: minutes for a few thousand blocks
+  across, longer for a pre-generated world.
+- **Disk:** about one 512×512 PNG per region (512×512 blocks) at full zoom,
+  plus a third more for the zoomed-out levels. Rough estimate: 100–250 KB
+  per region, so a 5,000-block-wide explored area (~100 regions) is about
+  15–35 MB and a 20,000-block-wide one (~1,600 regions) is about 200–550 MB.
+  `du -sh plugins/squaremap/web/tiles` shows the real number.
+- **Privacy:** live player positions are off in squaremap's config, and
+  play also answers `tiles/players.json` with an empty list unless it runs
+  with `-map-players`.
+- To reset the map, stop Paper and delete `plugins/squaremap/web/tiles`.
+
+## Plugins
+
+[`plugins/manifest.json`](plugins/manifest.json) pins each plugin jar by
+file name and SHA-256, with the URL it was downloaded from. Admin's
+Plugins section shows each installed jar as pinned, changed, unpinned,
+missing or invalid. When you update a plugin, update its manifest entry in
+the same PR; `go test ./internal/plugins` checks the checked-in jars
+against it.

@@ -1,0 +1,25 @@
+{
+  "plugins": [
+    {
+      "name": "Chunky",
+      "version": "1.5.3",
+      "file": "Chunky-Bukkit-1.5.3.jar",
+      "sha256": "530d2c7430a96a39957391b7088be144daa3108f7665896d1c23aa8dd4af32f3",
+      "source": "https://cdn.modrinth.com/data/fALzjamp/versions/MdY6JATr/Chunky-Bukkit-1.5.3.jar"
+    },
+    {
+      "name": "squaremap",
+      "version": "1.3.15",
+      "file": "squaremap-paper-mc26.2-1.3.15.jar",
+      "sha256": "eec6dbe9bdab15a10e4fdb1dbf393d1380f6f43479132ee89f09366200c61f40",
+      "source": "https://github.com/jpenilla/squaremap/releases/download/v1.3.15/squaremap-paper-mc26.2-1.3.15.jar"
+    },
+    {
+      "name": "ViaVersion",
+      "version": "5.12.0",
+      "file": "ViaVersion-5.12.0.jar",
+      "sha256": "c4d512fa9760fa41d17abaedde12aa1f4c9bde920d0a992fe0fc016962f126be",
+      "source": "https://cdn.modrinth.com/data/P1OZGk5p/versions/FaishMnD/ViaVersion-5.12.0.jar"
+    }
+  ]
+}

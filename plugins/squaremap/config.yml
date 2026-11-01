@@ -1,0 +1,36 @@
+# squaremap: the world map at https://play.ryancaudill.dev/map/ (#23).
+#
+# Tuned for the Raspberry Pi: one render thread, a small background batch,
+# and no web server of its own (play serves the rendered files read-only).
+# squaremap adds every setting left out here, with its default, the first
+# time it starts.
+settings:
+  web-address: https://play.ryancaudill.dev/map/
+  web-directory:
+    path: web
+    auto-update: true
+  internal-webserver:
+    enabled: false
+  # No calls out from the Pi; updates come through plugins/manifest.json.
+  update-checker: false
+world-settings:
+  default:
+    map:
+      # A full render (/squaremap fullrender <world>) uses one core of four.
+      max-render-threads: 1
+      iterate-up: false
+      biomes:
+        enabled: true
+        # Default 4. Blending fewer neighbours is cheaper and looks nearly
+        # the same at map scale.
+        blend-biomes: 2
+      background-render:
+        # Re-renders chunks as they change, in small batches.
+        enabled: true
+        max-chunks-per-interval: 256
+        interval-seconds: 30
+        max-render-threads: 1
+    # Live positions are visible to anyone with the URL, so they're off.
+    # play also hides tiles/players.json unless it runs with -map-players.
+    player-tracker:
+      enabled: false

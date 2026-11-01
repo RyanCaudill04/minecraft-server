@@ -28,6 +28,9 @@ id_*
 plugins/Chunky/tasks/
 plugins/spark/tmp/*.tmp
 plugins/spark/activity.json
+# squaremap writes its page, tiles and data next to the tracked config
+plugins/squaremap/*
+!plugins/squaremap/config.yml
 
 # Personal planning notes stay local; they are not for the public repo
 docs/
