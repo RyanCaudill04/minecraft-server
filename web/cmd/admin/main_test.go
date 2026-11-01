@@ -208,3 +208,39 @@ func TestAPIDeployWithoutDetails(t *testing.T) {
 		})
 	}
 }
+
+func TestAPIDeployTracks(t *testing.T) {
+	ts, apps := newTestServer(t)
+	for _, tr := range []struct{ track, tag string }{{"play", "play-r3"}, {"admin", "admin-r2"}} {
+		activate(t, filepath.Join(apps, tr.track), tr.tag, "",
+			`{"tag":"`+tr.tag+`","applied_at":"2026-11-01T10:00:00Z"}`)
+	}
+	st := `{"version": 1, "layout": "tracks", "tracks": ["play", "admin"]}`
+	if err := os.WriteFile(filepath.Join(apps, "state.json"), []byte(st), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var got map[string]any
+	if code := getJSON(t, ts.URL+"/api/deploy", &got); code != http.StatusOK {
+		t.Fatalf("status code %d", code)
+	}
+	want := map[string]any{
+		"layout":     "tracks",
+		"track":      "admin",
+		"active":     "admin-r2",
+		"applied_at": "2026-11-01T10:00:00Z",
+		"tracks": []any{
+			map[string]any{"track": "play", "active": "play-r3", "applied_at": "2026-11-01T10:00:00Z"},
+			map[string]any{"track": "admin", "active": "admin-r2", "applied_at": "2026-11-01T10:00:00Z"},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("/api/deploy = %v, want %v", got, want)
+	}
+
+	// A newer agent's state: unavailable, not a guess.
+	os.WriteFile(filepath.Join(apps, "state.json"), []byte(`{"version": 9}`), 0o644)
+	if code := getJSON(t, ts.URL+"/api/deploy", &got); code != http.StatusServiceUnavailable {
+		t.Errorf("newer state: status code %d, want 503", code)
+	}
+}

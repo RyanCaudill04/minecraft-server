@@ -1,0 +1,34 @@
+{
+  "play": {
+    "bins": ["play"],
+    "sites": ["play", "shared"],
+    "units": ["play.service"],
+    "services": ["play.service"],
+    "timers": [],
+    "health": ["http://127.0.0.1:8082/api/status"]
+  },
+  "admin": {
+    "bins": ["admin"],
+    "sites": ["admin", "shared"],
+    "units": ["admin.service"],
+    "services": ["admin.service"],
+    "timers": [],
+    "health": ["http://127.0.0.1:8081/api/status"]
+  },
+  "sites": {
+    "bins": ["serve"],
+    "sites": ["portfolio"],
+    "units": ["site@.service"],
+    "services": ["site@portfolio.service"],
+    "timers": [],
+    "health": ["http://127.0.0.1:8080/"]
+  },
+  "agent": {
+    "bins": ["mc-agent"],
+    "sites": [],
+    "units": ["mc-agent.service", "mc-agent.timer"],
+    "services": [],
+    "timers": ["mc-agent.timer"],
+    "health": []
+  }
+}

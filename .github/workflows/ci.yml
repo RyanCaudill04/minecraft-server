@@ -3,8 +3,10 @@
 # Pull requests: work out which parts changed, run the checks for those
 # parts, and report one required check, ci-ok.
 # Pushes to main: the same checks for everything since the last release,
-# then publish a release if any of it is deployable. The Pi's mc-agent
-# timer installs the newest release.
+# then publish a release of each track (play, admin, sites, agent) whose
+# files changed since that track's last release, plus the single release
+# (rN, everything in one archive) for agents from before tracks. The Pi's
+# mc-agent timer installs each track's newest release.
 name: CI/CD
 
 on:
@@ -30,6 +32,8 @@ jobs:
     outputs:
       play: ${{ steps.scopes.outputs.play }}
       admin: ${{ steps.scopes.outputs.admin }}
+      sites: ${{ steps.scopes.outputs.sites }}
+      agent: ${{ steps.scopes.outputs.agent }}
       mc_server: ${{ steps.scopes.outputs.mc_server }}
       infra: ${{ steps.scopes.outputs.infra }}
       deploy: ${{ steps.scopes.outputs.deploy }}
@@ -136,7 +140,7 @@ jobs:
   admin:
     name: admin.ryancaudill.dev and static sites
     needs: changes
-    if: needs.changes.outputs.admin == 'true'
+    if: needs.changes.outputs.admin == 'true' || needs.changes.outputs.sites == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -232,31 +236,48 @@ jobs:
         run: scripts/ci-changes_test.sh
       - name: Release notes tests
         run: scripts/release-notes_test.sh
-      - name: Build a release and verify its units
+      - name: Release tracks tests
+        run: scripts/release-tracks_test.sh
+      - name: Build each track's release and the single release, and verify their units
         run: |
-          scripts/build-release.sh ci-check "$RUNNER_TEMP/dist"
-          (cd "$RUNNER_TEMP/dist" && sha256sum -c release.tar.gz.sha256)
-          # Unpack where the units expect it (%h/apps/current) and let
-          # systemd check them, including that every program exists.
-          current="$HOME/apps/current"
-          mkdir -p "$current" "$HOME/minecraft_server"
-          tar -xzf "$RUNNER_TEMP/dist/release.tar.gz" -C "$current"
-          units=$(mktemp -d)
-          cp "$current"/deploy/systemd/{play.service,admin.service,mc-agent.service,mc-agent.timer} "$units/"
-          for site in portfolio; do cp "$current/deploy/systemd/site@.service" "$units/site@$site.service"; done
-          systemd-analyze --user --man=no verify "$units"/*
-          # Every unit and service the manifest names must be in the release.
-          python3 - "$current" <<'EOF'
-          import json, os, sys
-          root = sys.argv[1]
+          mkdir -p "$HOME/minecraft_server"
+          for track in $(jq -r 'keys_unsorted[]' deploy/tracks.json) single; do
+            if [ "$track" = single ]; then
+              archive=release.tar.gz root="$HOME/apps/current"
+            else
+              archive=$track-linux-arm64.tar.gz root="$HOME/apps/$track/current"
+            fi
+            echo "::group::$track"
+            scripts/build-release.sh "$track" ci-check "$RUNNER_TEMP/dist/$track"
+            (cd "$RUNNER_TEMP/dist/$track" && sha256sum -c "$archive.sha256")
+            # Unpack where the units expect it and let systemd check them,
+            # including that every program exists.
+            mkdir -p "$root"
+            tar -xzf "$RUNNER_TEMP/dist/$track/$archive" -C "$root"
+            units=$(mktemp -d)
+            # Every unit and service the manifest names must be in the
+            # release; copy each, with template instances under their own name.
+            python3 - "$root" "$units" "$track" <<'EOF'
+          import json, os, shutil, sys
+          root, units, track = sys.argv[1:]
           m = json.load(open(os.path.join(root, "deploy/release.json")))
+          assert m.get("track", "single") == track, f"release.json is for {m.get('track')}"
+          def template(name):
+              base, at, rest = name.partition("@")
+              return base + "@." + rest.rsplit(".", 1)[1] if at else name
           for unit in m["units"]:
               assert os.path.exists(os.path.join(root, "deploy/systemd", unit)), unit
-          for svc in m["services"]:
-              template = svc.split("@")[0] + "@.service" if "@" in svc else svc
-              assert template in m["units"], f"{svc} is not linked by units"
-          print("release.json OK")
+              if "@." not in unit:
+                  shutil.copy(os.path.join(root, "deploy/systemd", unit), units)
+          for name in m["services"] + m["timers"]:
+              assert template(name) in m["units"], f"{name} is not linked by units"
+              if name != template(name):
+                  shutil.copy(os.path.join(root, "deploy/systemd", template(name)), os.path.join(units, name))
+          print(f"{track}: release.json OK")
           EOF
+            systemd-analyze --user --man=no verify "$units"/*
+            echo "::endgroup::"
+          done
 
   # The one check branch protection requires. Scoped jobs that were skipped
   # because nothing in their scope changed count as passing.
@@ -299,15 +320,41 @@ jobs:
         with:
           go-version-file: web/go.mod
           cache: false
-      - name: Next release tag
-        id: tag
+      # Before the single release, so an agent that moves the Pi to tracks
+      # finds every track's release when it first runs.
+      - name: Publish each changed track
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          last=$(gh release list --limit 200 --json tagName \
-            --jq '[.[].tagName | select(test("^r[0-9]+$")) | ltrimstr("r") | tonumber] | max // 0')
-          echo "tag=r$((last + 1))" | tee -a "$GITHUB_OUTPUT"
-      - name: Release notes
+          # Without pipefail, a failing release-changes.sh is hidden.
+          set -o pipefail
+          scripts/release-tracks.sh | tee "$RUNNER_TEMP/tracks.txt"
+          # Read from fd 3, so nothing in the loop eats the list.
+          while read -r track tag base <&3; do
+            [ "$base" = - ] && base=
+            echo "::group::$tag"
+            scripts/release-changes.sh "$base" | scripts/release-notes.sh "$tag" > "$RUNNER_TEMP/$track-notes.json"
+            cat "$RUNNER_TEMP/$track-notes.json"
+            scripts/build-release.sh "$track" "$tag" "dist/$track" "$RUNNER_TEMP/$track-notes.json"
+            archive="dist/$track/$track-linux-arm64.tar.gz"
+            # Not "Latest": that stays the single release, which is all
+            # agents from before tracks look at. Newer agents find each
+            # track's newest release by its tag.
+            gh release create "$tag" "$archive" "$archive.sha256" \
+              --target "$GITHUB_SHA" \
+              --title "$tag" \
+              --latest=false \
+              --notes "The $track track, built from ${GITHUB_SHA} by run ${GITHUB_RUN_ID}. The Pi installs it within a few minutes."
+            echo "::endgroup::"
+          done 3< "$RUNNER_TEMP/tracks.txt"
+      - name: Next single release tag
+        id: tag
+        run: |
+          # From the tags, so the count doesn't depend on how many track
+          # releases came in between.
+          last=$(git tag -l 'r[0-9]*' | sed -n 's/^r\([0-9][0-9]*\)$/\1/p' | sort -n | tail -n1)
+          echo "tag=r$((${last:-0} + 1))" | tee -a "$GITHUB_OUTPUT"
+      - name: Single release notes
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
@@ -316,14 +363,15 @@ jobs:
           set -o pipefail
           scripts/release-changes.sh | scripts/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.json"
           cat "$RUNNER_TEMP/notes.json"
-      - name: Build
-        run: scripts/build-release.sh "${{ steps.tag.outputs.tag }}" dist "$RUNNER_TEMP/notes.json"
-      - name: Publish
+      - name: Build the single release
+        run: scripts/build-release.sh single "${{ steps.tag.outputs.tag }}" dist/single "$RUNNER_TEMP/notes.json"
+      - name: Publish the single release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          gh release create "$TAG" dist/release.tar.gz dist/release.tar.gz.sha256 \
+          gh release create "$TAG" dist/single/release.tar.gz dist/single/release.tar.gz.sha256 \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --notes "Built from ${GITHUB_SHA} by run ${GITHUB_RUN_ID}. The Pi installs it within a few minutes."
+            --latest \
+            --notes "Everything in one release, for agents from before tracks. Built from ${GITHUB_SHA} by run ${GITHUB_RUN_ID}."
