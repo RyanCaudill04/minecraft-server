@@ -1,6 +1,7 @@
 // Package site holds the HTTP pieces the web apps share: a small cache for
-// expensive API values, a JSON handler for them, and the static file server
-// that also serves the stylesheet shared between sites.
+// expensive API values, a JSON handler for them, the static file server
+// that also serves the stylesheet shared between sites, and the
+// http.Server settings they all listen with.
 package site
 
 import (
@@ -10,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"path"
+	"strings"
 	"sync"
 	"time"
 )
@@ -65,16 +67,33 @@ func WriteJSON(w http.ResponseWriter, name string, v any) {
 	}
 }
 
+// Server returns an http.Server for h on addr with the timeouts every app
+// uses. Today only cloudflared connects, but without them a client that
+// trickles headers or idles on keep-alive holds a goroutine and a file
+// descriptor on the Pi for as long as it likes.
+func Server(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+}
+
 // Static serves the site's files from dir, and the files every site
-// shares from sharedDir under /shared/. Folders without an index.html are
-// 404s rather than file listings.
+// shares from sharedDir under /shared/ (skipped if sharedDir is ""). Folders
+// without an index.html and dotfiles are 404s rather than file listings.
 //
 // Every response is no-cache: a release replaces these files in place, so
 // Cloudflare and browsers must check with us before reusing a copy, or a
 // cached app.js from the last release runs against the new index.html.
 func Static(dir, sharedDir string) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /shared/", http.StripPrefix("/shared/", http.FileServer(noListings{http.Dir(sharedDir)})))
+	// Check for "" rather than serving http.Dir(""), which is the folder
+	// the program happens to start in.
+	if sharedDir != "" {
+		mux.Handle("GET /shared/", http.StripPrefix("/shared/", http.FileServer(noListings{http.Dir(sharedDir)})))
+	}
 	mux.Handle("GET /", http.FileServer(noListings{http.Dir(dir)}))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
@@ -83,10 +102,17 @@ func Static(dir, sharedDir string) http.Handler {
 }
 
 // noListings hides folders that have no index.html, so http.FileServer
-// answers 404 instead of listing what's inside.
+// answers 404 instead of listing what's inside. It also hides any path
+// with a part starting with ".", such as .git or .env, which no site means
+// to publish.
 type noListings struct{ fs http.FileSystem }
 
 func (n noListings) Open(name string) (http.File, error) {
+	for _, part := range strings.Split(name, "/") {
+		if strings.HasPrefix(part, ".") {
+			return nil, fs.ErrNotExist
+		}
+	}
 	f, err := n.fs.Open(name)
 	if err != nil {
 		return nil, err
