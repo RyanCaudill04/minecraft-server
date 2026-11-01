@@ -4,6 +4,8 @@
 //	GET /api/status   active, sleeping, starting or offline, and who is online
 //	GET /api/world    world facts from the saved world files
 //	GET /api/players  every known player's saved stats
+//	GET /api/time     the in-game clock and weather, run forward while active
+//	GET /api/activity recent joins, leaves, deaths and advancements (see live.go)
 //
 // The status comes from status pings (see package mcstatus), so checking
 // never wakes the server. World and player data come from files on disk, so
@@ -45,6 +47,7 @@ func newHandler(dir, sharedDir, serverDir string, c *mcstatus.Checker) http.Hand
 	mux.HandleFunc("GET /api/status", site.JSON("play: status", status))
 	mux.HandleFunc("GET /api/world", site.JSON("play: world", worldInfo))
 	mux.HandleFunc("GET /api/players", site.JSON("play: players", players))
+	addLive(mux, serverDir, status)
 	mux.Handle("GET /", site.Static(dir, sharedDir))
 	return mux
 }

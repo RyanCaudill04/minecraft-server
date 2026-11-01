@@ -119,7 +119,8 @@ function renderStatus() {
 }
 
 function renderWorld() {
-  const w = data.world;
+  // live.js runs the clock and weather on from the last save while active.
+  const w = typeof liveWorld === "function" ? liveWorld(data.world) : data.world;
   if (!w) return;
 
   document.documentElement.style.setProperty("--accent-h", accentHue(w.timeOfDay));
@@ -130,7 +131,7 @@ function renderWorld() {
 
   const facts = [
     ["Day", fmtNum(w.day), phase(w.timeOfDay)],
-    ["Time", mcClock(w.timeOfDay), "As of the last save"],
+    ["Time", mcClock(w.timeOfDay), w.live ? "Live" : "As of the last save"],
     ["Weather", weather(w), w.raining ? "Bring a roof" : "Clear skies"],
     ["World age", fmtHours(w.ageTicks), "Real time the world has run"],
     ["Difficulty", capitalize(w.difficulty) + (w.hardcore ? " · Hardcore" : ""), w.hardcore ? "One life" : "Respawns on"],

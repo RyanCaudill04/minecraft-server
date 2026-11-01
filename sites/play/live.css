@@ -1,0 +1,54 @@
+/* play.ryancaudill.dev: the activity feed (live.js). Loads after style.css. */
+
+.feed-card { padding: 8px; }
+.feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 440px;
+  overflow-y: auto;
+}
+
+.feed-item {
+  display: grid;
+  grid-template-columns: 8px 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+.feed-item + .feed-item { border-top: 1px solid var(--border); }
+
+.feed-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--gray); }
+.feed-join .feed-mark { background: var(--green); }
+.feed-leave .feed-mark { background: var(--faint); }
+.feed-death .feed-mark { background: var(--red); }
+.feed-advancement .feed-mark { background: var(--amber); }
+
+.feed-item img, .feed-item .head-fallback {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--bg);
+  image-rendering: pixelated;
+}
+
+.feed-text { margin: 0; overflow-wrap: anywhere; }
+.feed-text .name { font-weight: 600; }
+.feed-title {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.feed-when { color: var(--muted); font-size: 0.8125rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.feed-empty { padding: 18px 12px; color: var(--muted); }
+
+@media (max-width: 420px) {
+  .feed-item { grid-template-columns: 8px 28px minmax(0, 1fr); }
+  .feed-when { grid-column: 3; margin-top: -8px; }
+}
