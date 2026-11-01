@@ -1,5 +1,7 @@
 // play.ryancaudill.dev: polls the play API and renders the dashboard.
 
+import { accentHue, capitalize, fmtAgo, fmtDistance, fmtHours, fmtNum, fmtPlaytime, fmtWhen, mcClock, phase, weather } from "./format.js";
+
 const STATUS_MS = 10_000; // server state and who's online
 const DATA_MS = 60_000; // world facts and player stats (change only on save)
 
@@ -258,32 +260,6 @@ document.addEventListener("keydown", (e) => e.key === "Escape" && closeSheet());
 
 // ---------- Day/night ----------
 
-// Accent hue at points through the Minecraft day (0 = sunrise). Hues are
-// interpolated between them, the short way round the color wheel.
-const SKY_HUES = [
-  [0, 30], // sunrise orange
-  [1500, 205], // morning blue
-  [10500, 212], // afternoon blue
-  [12000, 18], // sunset
-  [13000, 280], // dusk purple
-  [14500, 238], // night indigo
-  [22000, 238],
-  [23300, 280], // pre-dawn
-  [24000, 30],
-];
-
-function accentHue(tod) {
-  for (let i = 1; i < SKY_HUES.length; i++) {
-    const [t1, h1] = SKY_HUES[i];
-    if (tod > t1) continue;
-    const [t0, h0] = SKY_HUES[i - 1];
-    const f = (tod - t0) / (t1 - t0);
-    const delta = ((h1 - h0 + 540) % 360) - 180;
-    return Math.round((h0 + delta * f + 360) % 360);
-  }
-  return 212;
-}
-
 // Moves the sun (day) or moon (night) along the arc in the time card.
 function placeSky(tod) {
   const f = (tod % 12000) / 12000;
@@ -291,21 +267,6 @@ function placeSky(tod) {
   body.setAttribute("cx", (50 - 42 * Math.cos(Math.PI * f)).toFixed(1));
   body.setAttribute("cy", (30 - 26 * Math.sin(Math.PI * f)).toFixed(1));
   body.setAttribute("r", tod < 12000 ? 4 : 3);
-}
-
-function phase(tod) {
-  if (tod < 1000) return "Sunrise";
-  if (tod < 5000) return "Morning";
-  if (tod < 7000) return "Noon";
-  if (tod < 11000) return "Afternoon";
-  if (tod < 13000) return "Sunset";
-  if (tod < 23000) return "Night";
-  return "Dawn";
-}
-
-function weather(w) {
-  if (w.thundering) return "Thunderstorm";
-  return w.raining ? "Rain" : "Clear";
 }
 
 // ---------- Scroll spy ----------
@@ -383,52 +344,6 @@ function countTo(node, to) {
     if (f < 1) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
-}
-
-const numberFormat = new Intl.NumberFormat();
-const compactFormat = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
-
-function fmtNum(n) {
-  return n >= 100_000 ? compactFormat.format(n) : numberFormat.format(n ?? 0);
-}
-
-function fmtPlaytime(ticks) {
-  const mins = Math.floor(ticks / 20 / 60);
-  return mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
-}
-
-function fmtHours(ticks) {
-  return `${fmtNum(Math.floor(ticks / 20 / 3600))} hours`;
-}
-
-function fmtDistance(cm) {
-  return cm >= 100_000 ? `${(cm / 100_000).toFixed(1)} km` : `${Math.round(cm / 100)} m`;
-}
-
-function fmtAgo(iso) {
-  if (!iso) return "never";
-  const secs = Math.max(0, (Date.now() - new Date(iso)) / 1000);
-  if (secs < 60) return "just now";
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
-}
-
-function fmtWhen(iso) {
-  const d = new Date(iso);
-  const sameDay = d.toDateString() === new Date().toDateString();
-  return d.toLocaleString(undefined, sameDay ? { timeStyle: "short" } : { dateStyle: "medium", timeStyle: "short" });
-}
-
-// Minecraft time to a clock: tick 0 is 6:00 AM.
-function mcClock(tod) {
-  const h = (Math.floor(tod / 1000) + 6) % 24;
-  const m = Math.floor(((tod % 1000) * 60) / 1000);
-  return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
-}
-
-function capitalize(s = "") {
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 // ---------- Startup ----------
