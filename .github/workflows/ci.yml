@@ -226,12 +226,18 @@ jobs:
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$(go env GOPATH)/bin/actionlint"
+          # The portfolio repo's workflow, which runs only once it's split out.
+          "$(go env GOPATH)/bin/actionlint" scripts/portfolio-repo/.github/workflows/*.yml
       - name: shellcheck scripts
-        run: shellcheck scripts/*.sh
+        run: shellcheck scripts/*.sh scripts/portfolio-repo/scripts/*.sh
       - name: Change detection tests
         run: scripts/ci-changes_test.sh
       - name: Release notes tests
         run: scripts/release-notes_test.sh
+      - name: Portfolio split tests
+        run: |
+          pipx install git-filter-repo==2.47.0
+          scripts/split-portfolio_test.sh
       - name: Build a release and verify its units
         run: |
           scripts/build-release.sh ci-check "$RUNNER_TEMP/dist"
