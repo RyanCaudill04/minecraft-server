@@ -16,6 +16,13 @@
 # from forks never see the secret (and are skipped outright). The job that
 # runs the model has a read-only token and read-only tools; only the
 # separate comment job can write, and only PR comments.
+#
+# Trust: the action restores .claude/ and CLAUDE.md from the base branch,
+# but not AGENTS.md (which CLAUDE.md imports) or .github/review.md. So the
+# prompt reads the instructions from the base branch with git show, and a
+# PR that edits AGENTS.md still has its own version loaded alongside. Only
+# people who can push here can open same-repo PRs, so this makes a review
+# less trustworthy rather than opening an attack on the repo.
 name: Advisory review
 
 on:
@@ -24,15 +31,17 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   review:
     if: >-
       github.event.label.name == 'review' &&
       github.event.pull_request.head.repo.full_name == github.repository
+    # Job-level, not workflow-level: every label fires `labeled`, and a
+    # workflow-level group would let adding any other label cancel a running
+    # review. A skipped job never joins the group.
+    concurrency:
+      group: review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 20
@@ -72,7 +81,9 @@ jobs:
           prompt: |
             Review pull request #${{ github.event.pull_request.number }}.
             The base branch is ${{ github.base_ref }}.
-            Follow the instructions in .github/review.md.
+            Follow the instructions in .github/review.md as it is on the base
+            branch: read it with `git show origin/${{ github.base_ref }}:.github/review.md`,
+            not from the working tree, because this PR may change it.
             Return the whole review, in Markdown, as the `review` field.
           claude_args: |
             --max-turns 40
@@ -103,7 +114,11 @@ jobs:
           RESULT: ${{ needs.review.outputs.result }}
         run: |
           marker='<!-- advisory-review -->'
-          review=$(jq -r '.review' <<<"$RESULT")
+          # A comment body is capped at 65,536 characters; the job summary
+          # keeps the full text.
+          review=$(jq -r '.review | if length > 60000
+            then .[:60000] + "\n\n_Truncated. The full review is in the job summary._"
+            else . end' <<<"$RESULT")
           note="For $SHA. Not a required check; re-add the \`review\` label to run it again."
           body=$(printf '%s\n## Advisory review\n\n%s\n\n%s\n' "$marker" "$note" "$review")
           id=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
