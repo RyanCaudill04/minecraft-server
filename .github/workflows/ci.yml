@@ -227,11 +227,13 @@ jobs:
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$(go env GOPATH)/bin/actionlint"
       - name: shellcheck scripts
-        run: shellcheck scripts/*.sh
+        run: shellcheck scripts/*.sh deploy/backup/*.sh
       - name: Change detection tests
         run: scripts/ci-changes_test.sh
       - name: Release notes tests
         run: scripts/release-notes_test.sh
+      - name: World backup tests
+        run: scripts/mc-backup_test.sh
       - name: Build a release and verify its units
         run: |
           scripts/build-release.sh ci-check "$RUNNER_TEMP/dist"
@@ -242,7 +244,7 @@ jobs:
           mkdir -p "$current" "$HOME/minecraft_server"
           tar -xzf "$RUNNER_TEMP/dist/release.tar.gz" -C "$current"
           units=$(mktemp -d)
-          cp "$current"/deploy/systemd/{play.service,admin.service,mc-agent.service,mc-agent.timer} "$units/"
+          cp "$current"/deploy/systemd/{play.service,admin.service,mc-agent.service,mc-agent.timer,mc-backup.service,mc-backup.timer} "$units/"
           for site in portfolio; do cp "$current/deploy/systemd/site@.service" "$units/site@$site.service"; done
           systemd-analyze --user --man=no verify "$units"/*
           # Every unit and service the manifest names must be in the release.

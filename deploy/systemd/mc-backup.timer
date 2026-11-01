@@ -1,0 +1,14 @@
+# Runs mc-backup.service nightly, when the server is most likely asleep
+# (LazyMC stops Paper after 5 idle minutes), so usually no RCON is needed.
+# Persistent catches up on a night the Pi was off.
+
+[Unit]
+Description=Nightly Minecraft world backup
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -16,7 +16,7 @@ trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/bin" "$out"
 (
   cd "$root/web"
-  for cmd in play admin serve mc-agent; do
+  for cmd in play admin serve mc-agent mc-rcon; do
     CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
       -ldflags "-s -w -X main.version=$tag" -o "$stage/bin/$cmd" "./cmd/$cmd"
   done
@@ -24,7 +24,7 @@ mkdir -p "$stage/bin" "$out"
 
 cp -R "$root/sites" "$stage/sites"
 mkdir -p "$stage/deploy"
-cp -R "$root/deploy/systemd" "$root/deploy/sites" "$root/deploy/release.json" "$stage/deploy/"
+cp -R "$root/deploy/systemd" "$root/deploy/sites" "$root/deploy/backup" "$root/deploy/release.json" "$stage/deploy/"
 if [ -n "$notes" ]; then
   # Fail here, not on the Pi, if the notes aren't valid JSON.
   jq -e . "$notes" >/dev/null || { echo "build-release: $notes is not valid JSON" >&2; exit 1; }
