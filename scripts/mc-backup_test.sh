@@ -65,7 +65,7 @@ if run "$out" 20261031-043000; then
     diff -r "$server/$f" "$tmp/restore/$f" >/dev/null || fail "asleep: restored $f differs"
   done
   [[ ! -e $tmp/restore/logs ]] || fail "asleep: logs/ shouldn't be backed up"
-  [[ $(stat -f %Lp "$a" 2>/dev/null || stat -c %a "$a") == 600 ]] || fail "asleep: archive should be mode 600"
+  [[ $(stat -c %a "$a" 2>/dev/null || stat -f %Lp "$a") == 600 ]] || fail "asleep: archive should be mode 600"
   [[ -z $(find "$out" -name '*.partial' -o -name .staging) ]] || fail "asleep: left temporary files"
   # The same timestamp again must not overwrite it.
   if run "$out" 20261031-043000; then fail "asleep: overwrote an existing archive"; fi
