@@ -43,5 +43,5 @@ if touched '^\.github/'; then
   play=true admin=true mc_server=true infra=true
 fi
 
-printf 'go=true\nplay=%s\nadmin=%s\nmc_server=%s\ninfra=%s\ndeploy=%s\n' \
+printf 'play=%s\nadmin=%s\nmc_server=%s\ninfra=%s\ndeploy=%s\n' \
   "$play" "$admin" "$mc_server" "$infra" "$deploy"

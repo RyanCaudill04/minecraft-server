@@ -6,6 +6,9 @@
 .player-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .facts-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
 
+/* "Updated …" once status has failed for a while. */
+.stale { color: var(--amber); }
+
 /* ---------- Cards ---------- */
 
 .address {
