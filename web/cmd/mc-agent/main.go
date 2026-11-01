@@ -3,7 +3,12 @@
 // newest GitHub Release of this repo, health-checks it, and rolls back if
 // it fails. Later the admin page will trigger the same actions.
 //
-// Usage: mc-agent [flags] deploy|rollback|status|version
+// "rollback" goes back to the release deployed before the current one and
+// pins it, so the timer doesn't deploy the newer release again until
+// "unpin". The agent deploying a release runs that release's own agent with
+// "selfcheck", to make sure it can run the next deploy.
+//
+// Usage: mc-agent [flags] deploy|rollback|unpin|status|selfcheck|version
 package main
 
 import (
@@ -34,7 +39,7 @@ func main() {
 	units := flag.String("units", filepath.Join(home, ".config", "systemd", "user"), "systemd user unit folder")
 	api := flag.String("api", "https://api.github.com", "GitHub API base URL")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: mc-agent [flags] deploy|rollback|status|version")
+		fmt.Fprintln(os.Stderr, "usage: mc-agent [flags] deploy|rollback|unpin|status|selfcheck|version")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -50,12 +55,23 @@ func main() {
 		UnitDir:       *units,
 		HTTP:          &http.Client{Timeout: 2 * time.Minute},
 		Systemctl:     systemctl,
+		AgentTimer:    "mc-agent.timer",
 		HealthTimeout: 20 * time.Second,
 		Keep:          5,
 		Log:           log.New(os.Stderr, "", 0), // journald adds timestamps
 	}
-	if err := os.MkdirAll(*apps, 0o755); err != nil {
-		log.Fatalf("mc-agent: %v", err)
+	// The timer runs the agent through current, so run the new release's
+	// agent the same way, with the same flags.
+	d.CheckAgent = func(ctx context.Context) error {
+		agent := filepath.Join(*apps, "current", "bin", "mc-agent")
+		ctx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, agent,
+			"-repo", *repo, "-apps", *apps, "-units", *units, "-api", *api, "selfcheck").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s selfcheck: %w: %s", agent, err, strings.TrimSpace(string(out)))
+		}
+		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -66,6 +82,10 @@ func main() {
 		err = d.Run(ctx)
 	case "rollback":
 		err = d.Rollback(ctx)
+	case "unpin":
+		err = d.Unpin()
+	case "selfcheck":
+		err = d.SelfCheck(ctx, version)
 	case "status":
 		var current string
 		current, err = d.Current()

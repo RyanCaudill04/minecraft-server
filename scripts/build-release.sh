@@ -33,9 +33,15 @@ fi
 echo "$tag" > "$stage/VERSION"
 
 # Sorted names and fixed owners and times make the tarball reproducible.
-tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='2000-01-01 00:00Z' \
-  -C "$stage" -czf "$out/release.tar.gz" . 2>/dev/null \
-  || tar -C "$stage" -czf "$out/release.tar.gz" .   # BSD tar on macOS lacks those flags
+# Pick the tar by its version, not by whether the GNU flags fail, so a real
+# error (disk full, unreadable file) fails the build instead of falling back.
+case "$(tar --version 2>/dev/null)" in
+  *"GNU tar"*)
+    tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='2000-01-01 00:00Z' \
+      -C "$stage" -czf "$out/release.tar.gz" . ;;
+  *) # BSD tar on macOS lacks those flags
+    tar -C "$stage" -czf "$out/release.tar.gz" . ;;
+esac
 if command -v sha256sum >/dev/null; then
   (cd "$out" && sha256sum release.tar.gz > release.tar.gz.sha256)
 else # macOS
