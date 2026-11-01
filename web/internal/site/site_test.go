@@ -29,6 +29,12 @@ func TestCache(t *testing.T) {
 	if v, _ := c.Get(context.Background()); v != 2 {
 		t.Errorf("Get after expiry = %d, want a fresh 2", v)
 	}
+
+	c.MaxAge = time.Hour
+	c.Reset()
+	if v, _ := c.Get(context.Background()); v != 3 {
+		t.Errorf("Get after Reset = %d, want a fresh 3", v)
+	}
 }
 
 func TestCacheSharesConcurrentLoads(t *testing.T) {

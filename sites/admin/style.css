@@ -20,26 +20,136 @@ code {
   letter-spacing: -0.02em;
 }
 
-.metric-sub a,
-.planned a {
+.metric-sub a {
   color: var(--accent);
   font-weight: 500;
   text-decoration: none;
 }
-.metric-sub a:hover,
-.planned a:hover { text-decoration: underline; }
+.metric-sub a:hover { text-decoration: underline; }
 
-/* Cards for features that aren't built yet. */
-.planned {
+.small { font-size: 0.75rem; }
+
+/* ---------- Buttons ---------- */
+
+.btn-secondary {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.btn-secondary:hover:not(:disabled) { background: var(--card-hover); }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-danger:hover:not(:disabled) { filter: brightness(1.08); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ---------- Server ---------- */
+
+.server-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+
+/* The unit's systemd state; data-unit, not data-state, so the ping state
+   the page sets on every [data-state] doesn't overwrite it. */
+.unit-card {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
-  border-style: dashed;
-  box-shadow: none;
+  gap: 6px;
+  overflow: hidden;
 }
-.planned ul { margin: 0; padding-left: 18px; color: var(--muted); }
-.planned li + li { margin-top: 2px; }
+.unit-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--state, var(--gray)) 12%, transparent), transparent 60%);
+  pointer-events: none;
+  transition: background 0.6s var(--ease);
+}
+.unit-card > * { position: relative; }
+.unit-card h3 { margin-top: 6px; font-size: 1.5rem; font-weight: 700; }
+.unit-card .actions { margin-top: 12px; }
+[data-unit="active"]       { --state: var(--green); }
+[data-unit="activating"],
+[data-unit="deactivating"] { --state: var(--amber); }
+[data-unit="inactive"],
+[data-unit="failed"]       { --state: var(--red); }
+[data-unit="active"] .dot { box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 20%, transparent); }
+[data-unit="activating"] .dot,
+[data-unit="deactivating"] .dot,
+[data-unit="loading"] .dot { animation: pulse 1.4s ease-in-out infinite; }
+
+.note { min-height: 1.5em; color: var(--muted); font-size: 0.8125rem; }
+.note.error,
+.out.error { color: var(--red); }
+
+.access-value {
+  margin-top: 4px;
+  font-size: 1.125rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Confirmation for stop and restart. */
+.confirm {
+  width: min(420px, calc(100vw - 32px));
+  color: var(--text);
+}
+.confirm::backdrop { background: rgba(0, 0, 0, 0.35); backdrop-filter: blur(2px); }
+.confirm form { display: flex; flex-direction: column; gap: 10px; }
+.confirm .actions { justify-content: flex-end; margin-top: 8px; }
+
+/* ---------- Console ---------- */
+
+.console-grid { grid-template-columns: minmax(0, 1fr); }
+.console-card,
+.log-card { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+.prompt input,
+.transcript,
+.log { font: 0.8125rem/1.55 ui-monospace, "SF Mono", Menlo, monospace; }
+
+.command { display: flex; gap: 8px; }
+.prompt {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--faint);
+  font: 600 0.875rem ui-monospace, "SF Mono", Menlo, monospace;
+}
+.prompt:focus-within { box-shadow: inset 0 0 0 2px var(--accent); }
+.prompt input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--text);
+}
+.prompt input:disabled { cursor: not-allowed; }
+
+.transcript { margin: 0; padding: 0; list-style: none; max-height: 260px; overflow: auto; }
+.transcript li { padding: 10px 0; border-top: 1px solid var(--border); }
+.transcript li:first-child { border-top: 0; padding-top: 0; }
+.transcript .cmd { color: var(--accent); font-weight: 600; }
+.transcript .out { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+
+.log-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.log {
+  height: 420px;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 /* The active release over its list of changes. */
 .deploy-grid { grid-template-columns: minmax(0, 1fr); }
@@ -117,8 +227,11 @@ code {
 /* One width for every badge, so the titles line up. */
 .change-list .kind { align-self: center; min-width: 64px; text-align: center; }
 
-/* Narrow screens: the strip becomes two columns. */
+/* Narrow screens: the strip becomes two columns, and the server and
+   console cards stack. */
 @media (max-width: 760px) {
+  .server-grid { grid-template-columns: minmax(0, 1fr); }
+  .log { height: 320px; }
   .release-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 16px; }
   .release-strip .cell:first-child { grid-column: 1 / -1; }
   .release-strip .cell:nth-child(2) { padding-left: 0; border-left: 0; }

@@ -14,6 +14,10 @@ Commit server configuration, launcher scripts, and plugin configuration. Do not 
 
 Before enabling services such as RCON or the Paper management server, keep their passwords and secrets out of Git. Use a local, ignored override or an environment-specific secret store instead.
 
+## RCON
+
+RCON replaces the console now that Paper runs under systemd. It listens on `127.0.0.1:25575` only, because RCON binds to `server-ip` (`127.0.0.1`); never forward that port. Set `enable-rcon=true` and a long random `rcon.password` in the ignored `server.properties` on the Pi, and the same password as `RCON_PASSWORD` in `~/.config/minecraft/secrets.env` (mode `0600`), which `admin.service` loads. Then run commands over SSH with `~/apps/current/bin/mc-rcon list`, or from the admin page's Console. RCON only answers while Paper is awake; LazyMC keeps it asleep until someone joins.
+
 ## LazyMC
 
 [`lazymc.toml`](lazymc.toml) puts the Paper server to sleep when it has no
