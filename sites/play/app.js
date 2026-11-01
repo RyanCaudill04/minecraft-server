@@ -107,11 +107,17 @@ function renderStatus() {
   $("online-avatars").replaceChildren(...online.slice(0, 8).map((p) => head(p, 28)));
 
   let sub;
+  // Hidden players count in s.online but aren't named anywhere.
+  const others = Math.max(0, s.online - online.length);
   if (s.state === "active") {
-    sub = online.length ? online.map((p) => p.name).join(", ") : "Nobody's on yet. Be the first!";
+    const names = online.map((p) => p.name);
+    if (others) names.push(`${others} ${online.length ? "more" : others === 1 ? "player" : "players"}`);
+    sub = names.length ? names.join(", ") : "Nobody's on yet. Be the first!";
   } else if (data.players[0]?.lastSeen) {
+    // Only public players are listed, so this is the latest public one,
+    // not necessarily whoever played last.
     const last = data.players[0];
-    sub = `Last played ${fmtAgo(last.lastSeen)} by ${last.name}`;
+    sub = `${last.name} was on ${fmtAgo(last.lastSeen)}`;
   } else {
     sub = " ";
   }
@@ -137,7 +143,7 @@ function renderWorld() {
     ["Spawn", w.spawn ? w.spawn.join(", ") : "Unknown", "X, Y, Z"],
     ["Version", w.version || "Unknown", "Java Edition"],
     ["Last saved", fmtAgo(w.lastSaved), fmtWhen(w.lastSaved)],
-    ["Players", fmtNum(data.players.length), "Have joined so far"],
+    ["Players", fmtNum(w.players ?? data.players.length), "Have joined so far"],
   ];
   const appear = once("world");
   $("facts").replaceChildren(
