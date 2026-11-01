@@ -5,11 +5,14 @@
 //	GET /api/status  active, sleeping, starting or offline, and who is online
 //	GET /api/deploy  the release mc-agent has active, what changed in it,
 //	                 and when it was released and applied
+//	GET /api/plugins the jars in the server's plugins folder, checked
+//	                 against plugins/manifest.json
 //
-// Usage: admin -dir folder -shared folder [-apps folder] [-addr host:port] [-paper host:port] [-lazymc host:port]
+// Usage: admin -dir folder -shared folder [-apps folder] [-server folder] [-addr host:port] [-paper host:port] [-lazymc host:port]
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -21,6 +24,7 @@ import (
 	"github.com/ryancaudill04/minecraft-server/web/internal/deploy"
 	"github.com/ryancaudill04/minecraft-server/web/internal/mcstatus"
 	"github.com/ryancaudill04/minecraft-server/web/internal/ping"
+	"github.com/ryancaudill04/minecraft-server/web/internal/plugins"
 	"github.com/ryancaudill04/minecraft-server/web/internal/site"
 )
 
@@ -34,12 +38,29 @@ type Deploy struct {
 	AppliedAt  time.Time       `json:"applied_at,omitzero"`  // when mc-agent last switched to it
 }
 
+// Plugins is the JSON body of GET /api/plugins.
+type Plugins struct {
+	Manifest bool             `json:"manifest"` // false if plugins/manifest.json is missing
+	Plugins  []plugins.Plugin `json:"plugins"`
+}
+
 // newHandler routes the API and serves the static page from dir and the
 // shared files from sharedDir. Deploy state is read from appsDir, the
-// folder mc-agent installs releases into.
-func newHandler(dir, sharedDir, appsDir string, c *mcstatus.Checker) http.Handler {
+// folder mc-agent installs releases into, and plugins from serverDir.
+func newHandler(dir, sharedDir, appsDir, serverDir string, c *mcstatus.Checker) http.Handler {
 	status := &site.Cache[mcstatus.Status]{MaxAge: 5 * time.Second, Load: c.Check}
 	agent := &deploy.Deployer{Apps: appsDir}
+	// Hashing every jar takes a moment on the Pi, and plugins change only
+	// on a restart, so the list is cached for a minute.
+	pluginDir := filepath.Join(serverDir, "plugins")
+	installed := &site.Cache[Plugins]{MaxAge: time.Minute, Load: func(context.Context) (Plugins, error) {
+		m, err := plugins.LoadManifest(filepath.Join(pluginDir, "manifest.json"))
+		if err != nil {
+			return Plugins{}, err
+		}
+		list, err := plugins.List(pluginDir, m)
+		return Plugins{Manifest: m != nil, Plugins: list}, err
+	}}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", site.JSON("admin: status", status))
@@ -66,6 +87,7 @@ func newHandler(dir, sharedDir, appsDir string, c *mcstatus.Checker) http.Handle
 		}
 		site.WriteJSON(w, "admin: deploy", res)
 	})
+	mux.HandleFunc("GET /api/plugins", site.JSON("admin: plugins", installed))
 	mux.Handle("GET /", site.Static(dir, sharedDir))
 	return mux
 }
@@ -78,6 +100,7 @@ func main() {
 	dir := flag.String("dir", "", "folder with the page's static files (required)")
 	sharedDir := flag.String("shared", "", "folder with the files all sites share, served at /shared/ (required)")
 	appsDir := flag.String("apps", filepath.Join(home, "apps"), "folder mc-agent installs releases into")
+	serverDir := flag.String("server", filepath.Join(home, "minecraft_server"), "Minecraft server folder, holding plugins/")
 	addr := flag.String("addr", "127.0.0.1:8081", "host:port to listen on")
 	paper := flag.String("paper", "127.0.0.1:25566", "Paper's address (answers only while awake)")
 	lazymc := flag.String("lazymc", "127.0.0.1:25565", "LazyMC's address (answers while Paper sleeps)")
@@ -100,7 +123,7 @@ func main() {
 	c := &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status}
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandler(*dir, *sharedDir, *appsDir, c),
+		Handler:           newHandler(*dir, *sharedDir, *appsDir, *serverDir, c),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("serving %s and the API on http://%s", *dir, *addr)

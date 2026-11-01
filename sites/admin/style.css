@@ -125,3 +125,14 @@ code {
   .release-strip .cell:nth-child(3) { padding-left: 20px; border-left: 1px solid var(--border); }
   .release-strip .cell:nth-child(4) { padding-left: 0; border-left: 0; }
 }
+
+/* Plugins: name and version, file and hash, and how it compares with the
+   manifest. */
+.plugin-list .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.plugin-list .file { color: var(--muted); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.plugin-list .kind { align-self: center; min-width: 72px; text-align: center; }
+.kind[data-kind="pinned"]   { --kind: var(--green); }
+.kind[data-kind="changed"],
+.kind[data-kind="invalid"]  { --kind: var(--red); }
+.kind[data-kind="unpinned"],
+.kind[data-kind="missing"]  { --kind: var(--amber); }
