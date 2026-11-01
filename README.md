@@ -35,3 +35,44 @@ first connection wakes Paper. If Paper takes more than 25 seconds to start,
 the player will be asked to reconnect once it is ready. Test a complete
 start-and-idle-stop cycle while watching LazyMC's output before treating this
 as a production deployment.
+
+## Pinned server versions
+
+[`deploy/server.json`](deploy/server.json) pins the Minecraft version, the
+Paper build (Paperclip `server.jar`), LazyMC and each plugin, each with its
+download URL and SHA-256. To fill a server folder from it:
+
+```bash
+scripts/fetch-server.sh [--patch] <server folder>
+```
+
+It downloads what's missing, checks every SHA-256, and stops on a file that
+doesn't match the manifest. `--patch` also runs Paperclip to make
+`versions/` and `libraries/` (needs Java 25). To upgrade, change the
+manifest in a PR, then run the script with `--replace` on the server. CI
+checks that the tracked jars match the manifest.
+
+## Server folder
+
+`scripts/migrate-server-dir.sh` moves the world and other runtime files out
+of the checkout into their own server folder (#73). It's a dry run unless
+given `--apply`, and refuses to run while the server is up. On the Pi, the
+plan is to keep the server folder at `~/minecraft_server` and move the
+checkout:
+
+```bash
+scripts/migrate-server-dir.sh --move-checkout-to ~/src/minecraft-server
+```
+
+## mc-players
+
+`web/cmd/mc-players` is a small dev tool, not part of a release. It prints
+the online count and player names with a status ping, which doesn't wake
+LazyMC:
+
+```bash
+cd web && go run ./cmd/mc-players -addr <host>:25565
+```
+
+The Paper boot test in CI (#104) uses it. Changing it doesn't publish a
+release.
