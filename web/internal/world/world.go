@@ -35,15 +35,15 @@ type Info struct {
 	TimeOfDay  int64     `json:"timeOfDay"` // 0-23999, 0 is sunrise
 	Raining    bool      `json:"raining"`
 	Thundering bool      `json:"thundering"`
-	LastSaved  time.Time `json:"lastSaved"`
-	Spawn      []int64   `json:"spawn,omitempty"` // x, y, z
+	LastSaved  time.Time `json:"lastSaved,omitzero"` // left out when unknown
+	Spawn      []int64   `json:"spawn,omitempty"`    // x, y, z
 }
 
 // Player is one player's saved statistics.
 type Player struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
-	LastSeen     time.Time `json:"lastSeen"`
+	LastSeen     time.Time `json:"lastSeen,omitzero"` // left out when unknown
 	PlayTicks    int64     `json:"playTicks"`
 	Deaths       int64     `json:"deaths"`
 	MobKills     int64     `json:"mobKills"`
