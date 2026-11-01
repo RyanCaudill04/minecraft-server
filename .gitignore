@@ -6,6 +6,10 @@ session.lock
 libraries/
 .paper/
 
+# Paper jar that Paperclip (server.jar) patches and writes on first run,
+# along with libraries/. start.sh needs both; see the README.
+/versions/
+
 # Generated dimensions and worlds. Preserve configuration separately.
 /world*/
 
@@ -26,7 +30,7 @@ id_*
 
 # Plugins
 plugins/Chunky/tasks/
-plugins/spark/tmp/*.tmp
+plugins/spark/tmp/
 plugins/spark/activity.json
 
 # Personal planning notes stay local; they are not for the public repo
