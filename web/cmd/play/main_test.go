@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ryancaudill04/minecraft-server/web/internal/listing"
 	"github.com/ryancaudill04/minecraft-server/web/internal/mcstatus"
 	"github.com/ryancaudill04/minecraft-server/web/internal/ping"
 	"github.com/ryancaudill04/minecraft-server/web/internal/world"
@@ -46,6 +49,16 @@ func fakeChecker(responses map[string]*ping.Response, pings *atomic.Int32) *mcst
 // static folder holding index.html, and a shared folder holding base.css.
 func newTestServer(t *testing.T, responses map[string]*ping.Response, pings *atomic.Int32) (*httptest.Server, string) {
 	t.Helper()
+	reg, err := listing.Open("", listing.DefaultGrace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newTestServerWith(t, responses, pings, reg)
+}
+
+// newTestServerWith is newTestServer with a given listing registry.
+func newTestServerWith(t *testing.T, responses map[string]*ping.Response, pings *atomic.Int32, reg *listing.Registry) (*httptest.Server, string) {
+	t.Helper()
 	dir, shared := t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<h1>play</h1>"), 0o644); err != nil {
 		t.Fatal(err)
@@ -54,7 +67,7 @@ func newTestServer(t *testing.T, responses map[string]*ping.Response, pings *ato
 		t.Fatal(err)
 	}
 	server := worldtest.Build(t)
-	ts := httptest.NewServer(newHandler(dir, shared, server, fakeChecker(responses, pings)))
+	ts := httptest.NewServer(newHandler(dir, shared, server, fakeChecker(responses, pings), reg))
 	t.Cleanup(ts.Close)
 	return ts, server
 }
@@ -117,8 +130,123 @@ func TestAPIWorldAndPlayers(t *testing.T) {
 	if resp := getJSON(t, ts.URL+"/api/players", &players); resp.StatusCode != http.StatusOK {
 		t.Fatalf("/api/players: status code %d", resp.StatusCode)
 	}
-	if len(players) != 3 || players[0].Name != "Bob" {
-		t.Errorf("/api/players = %+v", players)
+	// Nobody has been listed yet, so nobody is shown; the count still is.
+	if players == nil || len(players) != 0 {
+		t.Errorf("/api/players = %+v, want []", players)
+	}
+	if info.Players != 3 {
+		t.Errorf("/api/world players = %d, want 3", info.Players)
+	}
+}
+
+// activePaper is Paper answering with the given sample and online count.
+func activePaper(online int, sample ...ping.Player) map[string]*ping.Response {
+	return map[string]*ping.Response{
+		paperAddr:  {Version: ping.Version{Name: "Paper 26.2"}, Players: ping.Players{Online: online, Max: 20, Sample: sample}},
+		lazymcAddr: {Players: ping.Players{Online: online, Max: 20}},
+	}
+}
+
+var (
+	listedAlice = ping.Player{Name: "Alice", ID: worldtest.AliceID}
+	anonymous   = ping.Player{Name: "Anonymous Player", ID: mcstatus.AnonymousID}
+)
+
+func get(t *testing.T, url string) string {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: status code %d", url, resp.StatusCode)
+	}
+	return string(body)
+}
+
+// Alice is listed; Bob is online but hidden (anonymous in the sample);
+// Carol was never listed. Only Alice may appear, in every endpoint.
+func TestHiddenPlayersNeverAppear(t *testing.T) {
+	ts, _ := newTestServer(t, activePaper(2, listedAlice, anonymous), nil)
+
+	var s mcstatus.Status
+	getJSON(t, ts.URL+"/api/status", &s)
+	if s.Online != 2 || len(s.Players) != 1 || s.Players[0].ID != worldtest.AliceID {
+		t.Errorf("/api/status = %+v, want 2 online with only Alice named", s)
+	}
+
+	var players []world.Player
+	getJSON(t, ts.URL+"/api/players", &players)
+	if len(players) != 1 || players[0].ID != worldtest.AliceID || players[0].Name != "Alice" {
+		t.Errorf("/api/players = %+v, want only Alice", players)
+	}
+
+	hidden := []string{"Bob", worldtest.BobID, "Carol", worldtest.CarolID, worldtest.CarolID[:8], mcstatus.AnonymousID, "Anonymous"}
+	for _, path := range []string{"/api/status", "/api/world", "/api/players", "/"} {
+		body := get(t, ts.URL+path)
+		for _, h := range hidden {
+			if strings.Contains(body, h) {
+				t.Errorf("GET %s contains %q:\n%s", path, h, body)
+			}
+		}
+	}
+}
+
+// A player listed once who later plays hidden drops out: their newer data
+// on disk is newer than the last listing.
+func TestPlayerWhoHidesLaterDropsOut(t *testing.T) {
+	reg, err := listing.Open("", listing.DefaultGrace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Bob was listed a day before his last session, which he played hidden.
+	bob := mcstatus.Player{Name: "Bob", ID: worldtest.BobID}
+	if err := reg.Observe([]mcstatus.Player{bob}, worldtest.BobSeen.Add(-24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	ts, _ := newTestServerWith(t, nil, nil, reg)
+	if body := get(t, ts.URL+"/api/players"); strings.Contains(body, worldtest.BobID) || strings.Contains(body, "Bob") {
+		t.Errorf("/api/players shows Bob after he played hidden: %s", body)
+	}
+
+	// Listed during that session (just before his logout save): shown.
+	if err := reg.Observe([]mcstatus.Player{bob}, worldtest.BobSeen.Add(-10*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var players []world.Player
+	getJSON(t, ts.URL+"/api/players", &players)
+	if len(players) != 1 || players[0].ID != worldtest.BobID {
+		t.Errorf("/api/players = %+v, want only Bob", players)
+	}
+}
+
+// Only Paper's sample counts: LazyMC answering (asleep) teaches nothing,
+// even if it sent names.
+func TestOnlyPaperListsPlayers(t *testing.T) {
+	sleeping := map[string]*ping.Response{lazymcAddr: {Players: ping.Players{Max: 20, Sample: []ping.Player{listedAlice}}}}
+	ts, _ := newTestServer(t, sleeping, nil)
+	get(t, ts.URL+"/api/status")
+	if body := get(t, ts.URL+"/api/players"); body != "[]\n" {
+		t.Errorf("/api/players = %s, want []", body)
+	}
+}
+
+// watch learns who is listed with nobody visiting the page.
+func TestWatch(t *testing.T) {
+	reg, err := listing.Open("", listing.DefaultGrace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // one check, then return
+	watch(ctx, fakeChecker(activePaper(1, listedAlice), nil), reg, time.Hour)
+	if !reg.Public(worldtest.AliceID, worldtest.AliceSeen) {
+		t.Error("watch didn't record Alice as listed")
 	}
 }
 

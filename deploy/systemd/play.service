@@ -7,6 +7,9 @@ Description=play.ryancaudill.dev dashboard
 
 [Service]
 ExecStart=%h/apps/current/bin/play -dir %h/apps/current/sites/play -shared %h/apps/current/sites/shared -server %h/minecraft_server -addr 127.0.0.1:8082
+# Keeps listed.json, the players the server list has shown by name, so
+# public players stay public across restarts. See the README's Privacy.
+StateDirectory=play
 Restart=on-failure
 RestartSec=10
 

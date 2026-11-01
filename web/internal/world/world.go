@@ -37,6 +37,7 @@ type Info struct {
 	Thundering bool      `json:"thundering"`
 	LastSaved  time.Time `json:"lastSaved"`
 	Spawn      []int64   `json:"spawn,omitempty"` // x, y, z
+	Players    int       `json:"players"`         // how many have joined, hidden ones included
 }
 
 // Player is one player's saved statistics.
@@ -77,6 +78,12 @@ func ReadInfo(worldDir string) (*Info, error) {
 	if pos, ok := nbt.Get(level, "Data", "spawn", "pos").([]int32); ok && len(pos) == 3 {
 		info.Spawn = []int64{int64(pos[0]), int64(pos[1]), int64(pos[2])}
 	}
+	// A count only: who they are is up to package listing.
+	statFiles, err := filepath.Glob(filepath.Join(worldDir, "players", "stats", "*.json"))
+	if err != nil {
+		return nil, fmt.Errorf("world: %w", err)
+	}
+	info.Players = len(statFiles)
 
 	// The day/night clock and weather are per-dimension files. They are
 	// optional: a fresh world may not have written them yet.

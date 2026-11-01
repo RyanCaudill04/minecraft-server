@@ -28,6 +28,7 @@ func TestReadInfo(t *testing.T) {
 		Raining:    true,
 		LastSaved:  time.UnixMilli(worldtest.LastSaved).UTC(),
 		Spawn:      []int64{192, 76, -192},
+		Players:    3,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ReadInfo:\n got %+v\nwant %+v", got, want)

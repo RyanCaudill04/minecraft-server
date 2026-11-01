@@ -22,7 +22,9 @@ const (
 	StateOffline  = "offline"
 )
 
-// Status is the server's state and who is online.
+// Status is the server's state and who is online. Players lists only the
+// players the server list shows by name; hidden players count in Online
+// but never appear in Players.
 type Status struct {
 	State   string    `json:"state"`
 	Online  int       `json:"online"`
@@ -31,6 +33,10 @@ type Status struct {
 	Version string    `json:"version,omitempty"`
 	Checked time.Time `json:"checked"`
 }
+
+// AnonymousID is the UUID Paper sends in place of players who turned off
+// "Allow Server Listings".
+const AnonymousID = "00000000-0000-0000-0000-000000000000"
 
 // Player is one name from the server's player sample.
 type Player struct {
@@ -59,6 +65,9 @@ func (c *Checker) Check(ctx context.Context) (Status, error) {
 		s.Max = resp.Players.Max
 		s.Version = resp.Version.Name
 		for _, p := range resp.Players.Sample {
+			if p.ID == AnonymousID || p.ID == "" {
+				continue // hidden: counted in Online only
+			}
 			s.Players = append(s.Players, Player{Name: p.Name, ID: p.ID})
 		}
 		return s, nil
