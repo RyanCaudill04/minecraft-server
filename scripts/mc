@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# Day-to-day control of the Pi from the Mac, over SSH. Commands that only
+# look run right away; commands that change something ask first, or take
+# --yes.
+#
+# Every action's remote command is in remote_command below, so the admin
+# page can later run the same operations.
+#
+# Usage: scripts/mc [--yes] <command> [args]   (scripts/mc --help for the list)
+set -euo pipefail
+
+host=${MC_HOST:-mc-pi}
+root=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck disable=SC2016 # $HOME is expanded on the Pi
+agent='"$HOME"/apps/current/bin/mc-agent'
+
+usage() {
+  cat <<EOF
+usage: scripts/mc [--yes] <command> [args]
+
+Look (run right away):
+  status               services, timers, active release, and the server's state
+  logs [unit] [-f] [-n lines]
+                       recent journal lines for a unit (default: minecraft);
+                       -f follows
+  version              mc-agent's version and the active release
+  preview [--no-sync]  run play locally against a copy of the Pi's world
+                       files, with live status through an SSH tunnel
+  cleanup-legacy       list leftovers from the old manual deploy (#17)
+
+Change (ask first, or pass --yes):
+  start | stop | restart
+                       the Minecraft server (LazyMC and Paper)
+  deploy               install the newest release now instead of waiting
+                       for the mc-agent timer
+  rollback             switch back to the previous installed release
+  pause | resume       stop or start the mc-agent timer, so a rollback
+                       sticks (a deploy starts the timer again)
+  cleanup-legacy --apply
+                       remove those leftovers
+
+Options:
+  -y, --yes            don't ask before changing something
+  -h, --help           show this help
+
+Environment:
+  MC_HOST              SSH host for the Pi (default: mc-pi)
+  MC_PREVIEW_DIR       where preview keeps its copy (default: .preview in the repo)
+  MC_PREVIEW_ADDR      where preview serves play (default: 127.0.0.1:8090)
+EOF
+}
+
+die() { echo "mc: $*" >&2; exit 2; }
+
+# remote_command prints the shell command an action runs on the Pi.
+remote_command() {
+  case $1 in
+    status)
+      cat <<EOF
+systemctl --user --no-pager list-units --all --type=service,timer minecraft.service play.service admin.service 'site@*' 'mc-agent.*' 'ddns.*'
+echo
+systemctl --user --no-pager list-timers --all mc-agent.timer ddns.timer
+echo
+$agent status
+echo
+printf 'server: '
+curl -fsS --max-time 5 http://127.0.0.1:8082/api/status || echo 'play is not answering'
+echo
+EOF
+      ;;
+    version) echo "$agent version && $agent status" ;;
+    start | stop | restart) echo "systemctl --user $1 minecraft.service && systemctl --user --no-pager status minecraft.service" ;;
+    deploy)
+      # Through the unit, so it can't run alongside a timer-started deploy,
+      # then show what it logged.
+      cat <<'EOF'
+since=$(date '+%Y-%m-%d %H:%M:%S')
+rc=0
+systemctl --user start mc-agent.service || rc=$?
+journalctl --user -u mc-agent.service --since "$since" --no-pager -o cat
+exit $rc
+EOF
+      ;;
+    rollback) echo "$agent rollback && $agent status" ;;
+    pause) echo "systemctl --user stop mc-agent.timer && echo 'mc-agent timer stopped'" ;;
+    resume) echo "systemctl --user start mc-agent.timer && echo 'mc-agent timer started'" ;;
+    *) return 1 ;;
+  esac
+}
+
+# confirm asks before a change, unless --yes was given.
+confirm() {
+  "$yes" && return 0
+  [ -t 0 ] || die "$1: refusing to change the Pi without a terminal to ask on; pass --yes"
+  local answer
+  read -r -p "$1 on $host? [y/N] " answer
+  case $answer in
+    y | Y | yes) ;;
+    *) echo "mc: cancelled" >&2; exit 1 ;;
+  esac
+}
+
+# shellcheck disable=SC2029 # the command is built here to run there
+on_pi() { ssh "$host" "$@"; }
+
+logs() {
+  local unit=minecraft lines=100 follow=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -f | --follow) follow=-f ;;
+      -n) [ $# -ge 2 ] || die "logs: -n needs a number"; lines=$2; shift ;;
+      -*) die "logs: unknown option $1" ;;
+      *) unit=$1 ;;
+    esac
+    shift
+  done
+  [[ $unit =~ ^[A-Za-z0-9@._-]+$ ]] || die "logs: not a unit name: $unit"
+  [[ $lines =~ ^[0-9]+$ ]] || die "logs: -n needs a number, got $lines"
+  if [ -n "$follow" ]; then
+    # A terminal, so Ctrl-C stops journalctl on the Pi too.
+    ssh -t "$host" "journalctl --user -u $unit -n $lines --no-pager -f"
+  else
+    on_pi "journalctl --user -u $unit -n $lines --no-pager"
+  fi
+}
+
+preview() {
+  local sync=true
+  case ${1:-} in
+    --no-sync) sync=false ;;
+    '') ;;
+    *) die "preview: unknown option $1" ;;
+  esac
+  local copy=${MC_PREVIEW_DIR:-$root/.preview}
+  local addr=${MC_PREVIEW_ADDR:-127.0.0.1:8090}
+  mkdir -p "$copy"
+  if "$sync"; then
+    echo "mc: copying world files from $host to $copy"
+    # Only what play reads: player names, level.dat, the overworld's
+    # clock and weather, and per-player stats. Region files stay on the Pi.
+    rsync -a --delete --prune-empty-dirs \
+      --include=/usercache.json \
+      --include=/world/ --include=/world/level.dat \
+      --include=/world/players/ --include='/world/players/**' \
+      --include=/world/dimensions/ --include=/world/dimensions/minecraft/ \
+      --include=/world/dimensions/minecraft/overworld/ \
+      --include=/world/dimensions/minecraft/overworld/data/ \
+      --include=/world/dimensions/minecraft/overworld/data/minecraft/ \
+      --include='/world/dimensions/minecraft/overworld/data/minecraft/*.dat' \
+      --exclude='*' \
+      "$host:minecraft_server/" "$copy/"
+  fi
+
+  # Status pings go through the tunnel to LazyMC and Paper on the Pi.
+  # Pings don't wake a sleeping server.
+  ssh -N -o ExitOnForwardFailure=yes \
+    -L 127.0.0.1:35565:127.0.0.1:25565 -L 127.0.0.1:35566:127.0.0.1:25566 "$host" &
+  tunnel=$! # global: the EXIT trap runs after this function returns
+  trap 'kill "$tunnel" 2>/dev/null || true' EXIT
+  echo "mc: serving play on http://$addr (Ctrl-C to stop)"
+  (cd "$root/web" && go run ./cmd/play -dir "$root/sites/play" -shared "$root/sites/shared" \
+    -server "$copy" -addr "$addr" -lazymc 127.0.0.1:35565 -paper 127.0.0.1:35566)
+}
+
+cleanup_legacy() {
+  local script=$root/scripts/pi-cleanup-legacy.sh
+  if [[ " $* " == *" --apply "* ]]; then
+    confirm "Remove the old deploy's leftovers"
+  fi
+  on_pi bash -s -- "$@" <"$script"
+}
+
+yes=false
+while [ $# -gt 0 ]; do
+  case $1 in
+    -y | --yes) yes=true; shift ;;
+    -h | --help | help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) die "unknown option $1 (see --help)" ;;
+    *) break ;;
+  esac
+done
+[ $# -gt 0 ] || { usage >&2; exit 2; }
+cmd=$1
+shift
+
+case $cmd in
+  status | version)
+    [ $# -eq 0 ] || die "$cmd takes no arguments"
+    on_pi "$(remote_command "$cmd")"
+    ;;
+  logs) logs "$@" ;;
+  preview) preview "$@" ;;
+  cleanup-legacy) cleanup_legacy "$@" ;;
+  start | stop | restart | deploy | rollback | pause | resume)
+    [ $# -eq 0 ] || die "$cmd takes no arguments"
+    case $cmd in
+      start) confirm "Start the Minecraft server" ;;
+      stop) confirm "Stop the Minecraft server (players are disconnected)" ;;
+      restart) confirm "Restart the Minecraft server (players are disconnected)" ;;
+      deploy) confirm "Deploy the newest release" ;;
+      rollback)
+        echo "mc: the mc-agent timer redeploys the newest release within minutes;" \
+          "run 'scripts/mc pause' first to keep the rollback" >&2
+        confirm "Roll back to the previous release"
+        ;;
+      pause) confirm "Stop the mc-agent timer (no deploys until resume)" ;;
+      resume) confirm "Start the mc-agent timer" ;;
+    esac
+    on_pi "$(remote_command "$cmd")"
+    ;;
+  *) die "unknown command $cmd (see --help)" ;;
+esac
