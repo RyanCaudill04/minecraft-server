@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -79,33 +80,54 @@ func ReadInfo(worldDir string) (*Info, error) {
 	}
 
 	// The day/night clock and weather are per-dimension files. They are
-	// optional: a fresh world may not have written them yet.
-	data := filepath.Join(worldDir, "dimensions", "minecraft", "overworld", "data", "minecraft")
-	if clocks, err := nbt.ReadFile(filepath.Join(data, "world_clocks.dat")); err == nil {
+	// optional: a fresh world may not have written them yet. One that can't
+	// be read (say, caught mid-save) is treated as missing, so a cosmetic
+	// field doesn't take the whole summary down.
+	data := filepath.Join(worldDir, filepath.FromSlash(dataDir))
+	if clocks := readOptionalNBT(filepath.Join(data, "world_clocks.dat")); clocks != nil {
 		ticks, _ := nbt.Int(clocks, "data", "minecraft:overworld", "total_ticks")
 		info.Day = ticks/TicksPerDay + 1
 		info.TimeOfDay = ticks % TicksPerDay
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("world: %w", err)
 	}
-	if weather, err := nbt.ReadFile(filepath.Join(data, "weather.dat")); err == nil {
+	if weather := readOptionalNBT(filepath.Join(data, "weather.dat")); weather != nil {
 		raining, _ := nbt.Int(weather, "data", "raining")
 		thundering, _ := nbt.Int(weather, "data", "thundering")
 		info.Raining = raining != 0
 		info.Thundering = thundering != 0
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("world: %w", err)
 	}
 	return info, nil
+}
+
+// dataDir is the overworld's data folder, relative to the world folder, in
+// slash form. It holds the clock and weather files.
+const dataDir = "dimensions/minecraft/overworld/data/minecraft"
+
+// readOptionalNBT reads an NBT file, returning nil if it is missing or
+// unreadable. Unreadable files are logged.
+func readOptionalNBT(path string) map[string]any {
+	m, err := nbt.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			log.Printf("world: skipping %v", err)
+		}
+		return nil
+	}
+	return m
 }
 
 // ReadPlayers reads every player with a stats file in worldDir, newest
 // LastSeen first. Names come from usercache.json in serverDir; players
 // missing from it are named by the start of their UUID.
+//
+// The server rewrites these files in place, so a read can land on one that
+// is empty or half-written. A bad file only affects what it holds, and is
+// logged: a bad usercache.json means UUID names, a bad stats file skips that
+// player, and a bad advancements file counts as 0.
 func ReadPlayers(serverDir, worldDir string) ([]Player, error) {
 	names, err := readUserCache(filepath.Join(serverDir, "usercache.json"))
 	if err != nil {
-		return nil, fmt.Errorf("world: %w", err)
+		log.Printf("world: skipping %v", err)
+		names = map[string]string{}
 	}
 
 	playersDir := filepath.Join(worldDir, "players")
@@ -122,7 +144,8 @@ func ReadPlayers(serverDir, worldDir string) ([]Player, error) {
 			p.Name = id[:min(8, len(id))]
 		}
 		if err := readStats(path, &p); err != nil {
-			return nil, fmt.Errorf("world: %s: %w", id, err)
+			log.Printf("world: skipping player: stats/%s.json: %v", id, err)
+			continue
 		}
 		// The player data file is rewritten on every save while they're
 		// online and on logout, so its time is when they were last seen.
@@ -131,7 +154,7 @@ func ReadPlayers(serverDir, worldDir string) ([]Player, error) {
 		}
 		p.Advancements, err = countAdvancements(filepath.Join(playersDir, "advancements", id+".json"))
 		if err != nil {
-			return nil, fmt.Errorf("world: %s: %w", id, err)
+			log.Printf("world: advancements/%s.json: %v", id, err)
 		}
 		players = append(players, p)
 	}
