@@ -83,6 +83,8 @@ type app struct {
 	checker                            *mcstatus.Checker
 	// control starts and stops the server; nil turns the controls off.
 	control control.Controller
+	// wake asks a sleeping LazyMC to start Paper; nil turns it off.
+	wake func(ctx context.Context) error
 	// rcon runs a console command; nil when there's no RCON password.
 	rcon func(ctx context.Context, cmd string) (string, error)
 	// logPath is Paper's latest.log.
@@ -148,6 +150,7 @@ func newHandler(a *app) http.Handler {
 	})
 	mux.HandleFunc("GET /api/logs", a.signedIn(a.logs))
 	mux.Handle("POST /api/console", a.writes(a.console))
+	mux.Handle("POST /api/server/wake", a.writes(a.wakeServer))
 	mux.Handle("POST /api/server/{action}", a.writes(a.serverAction))
 	mux.Handle("GET /", site.Static(a.dir, a.sharedDir))
 	return mux
@@ -313,6 +316,9 @@ func main() {
 		dir: *dir, sharedDir: *sharedDir, appsDir: *appsDir, serverDir: *serverDir,
 		checker: &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status},
 		logPath: *logPath,
+		wake: func(ctx context.Context) error {
+			return ping.Wake(ctx, *lazymc, wakeName)
+		},
 	}
 	if ctl, err := control.NewSystemd(control.Unit, nil); err != nil {
 		log.Fatalf("admin: %v", err)

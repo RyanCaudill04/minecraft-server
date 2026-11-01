@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -54,8 +55,57 @@ func (f *fakeControl) done() []control.Action {
 	return append([]control.Action(nil), f.actions...)
 }
 
+// fakeServer is the Minecraft side: what the status pings find, and the
+// wakes LazyMC gets.
+type fakeServer struct {
+	mu    sync.Mutex
+	state string // a mcstatus state; offline unless set
+	wakes int
+	err   error // what wake returns
+}
+
+func (f *fakeServer) ping(_ context.Context, addr string) (*ping.Response, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case addr == "paper" && f.state == mcstatus.StateActive:
+		return &ping.Response{}, nil
+	case addr == "lazymc" && f.state == mcstatus.StateSleeping:
+		return &ping.Response{}, nil
+	case addr == "lazymc" && f.state == mcstatus.StateStarting:
+		r := &ping.Response{}
+		r.Description.Text = "Server is starting..."
+		return r, nil
+	}
+	return nil, fmt.Errorf("refused")
+}
+
+func (f *fakeServer) wake(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	f.wakes++
+	f.state = mcstatus.StateStarting
+	return nil
+}
+
+func (f *fakeServer) set(state string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state, f.err = state, err
+}
+
+func (f *fakeServer) woken() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.wakes
+}
+
 type controlServer struct {
 	*httptest.Server
+	mc   *fakeServer
 	ctl  *fakeControl
 	rcon *rcontest.Server
 	logs string
@@ -89,6 +139,7 @@ func newControlServer(t *testing.T, user string) *controlServer {
 	logs := filepath.Join(t.TempDir(), "latest.log")
 	ctl := &fakeControl{state: control.State{Active: "active", Sub: "running"}}
 	rs := rcontest.New(t, "pw")
+	mc := &fakeServer{}
 
 	out := &syncBuffer{}
 	log.SetOutput(out)
@@ -96,10 +147,9 @@ func newControlServer(t *testing.T, user string) *controlServer {
 
 	a := &app{
 		dir: dir, sharedDir: shared, appsDir: apps,
-		checker: &mcstatus.Checker{Timeout: time.Second, Ping: func(context.Context, string) (*ping.Response, error) {
-			return nil, fmt.Errorf("refused")
-		}},
+		checker: &mcstatus.Checker{PaperAddr: "paper", LazymcAddr: "lazymc", Timeout: time.Second, Ping: mc.ping},
 		control: ctl,
+		wake:    mc.wake,
 		rcon: func(ctx context.Context, cmd string) (string, error) {
 			return rcon.Run(ctx, rs.Addr, "pw", cmd)
 		},
@@ -108,7 +158,7 @@ func newControlServer(t *testing.T, user string) *controlServer {
 	}
 	ts := httptest.NewServer(newHandler(a))
 	t.Cleanup(ts.Close)
-	return &controlServer{Server: ts, ctl: ctl, rcon: rs, logs: logs, out: out}
+	return &controlServer{Server: ts, mc: mc, ctl: ctl, rcon: rs, logs: logs, out: out}
 }
 
 // post sends a same-origin POST the way the page does, with extra headers
@@ -148,7 +198,8 @@ func TestLockedWithoutUser(t *testing.T) {
 		t.Errorf("/api/me without a user = %+v, want everything locked", me)
 	}
 
-	for _, path := range []string{"/api/server/start", "/api/server/stop", "/api/server/restart", "/api/console"} {
+	s.mc.set(mcstatus.StateSleeping, nil)
+	for _, path := range []string{"/api/server/start", "/api/server/stop", "/api/server/restart", "/api/server/wake", "/api/console"} {
 		code, body := s.post(t, path, `{"command":"stop"}`, nil)
 		if code != http.StatusForbidden || body["error"] != lockedNoUser {
 			t.Errorf("POST %s without a user = %d %v, want 403", path, code, body)
@@ -167,6 +218,9 @@ func TestLockedWithoutUser(t *testing.T) {
 	}
 	if got := s.rcon.Commands(); len(got) != 0 {
 		t.Errorf("RCON ran %q without a user", got)
+	}
+	if n := s.mc.woken(); n != 0 {
+		t.Errorf("woke the server %d times without a user", n)
 	}
 }
 
@@ -215,6 +269,59 @@ func TestServerActionBusy(t *testing.T) {
 	s.ctl.err = control.ErrBusy
 	if code, _ := s.post(t, "/api/server/start", "", nil); code != http.StatusConflict {
 		t.Errorf("POST while busy = %d, want 409", code)
+	}
+}
+
+func TestWake(t *testing.T) {
+	s := newControlServer(t, "ryan@example.com")
+	s.mc.set(mcstatus.StateSleeping, nil)
+
+	code, body := s.post(t, "/api/server/wake", "", nil)
+	if code != http.StatusAccepted || body["action"] != "wake" {
+		t.Fatalf("POST /api/server/wake = %d %v, want 202", code, body)
+	}
+	if n := s.mc.woken(); n != 1 {
+		t.Errorf("woke %d times, want 1", n)
+	}
+	if !strings.Contains(s.out.String(), "audit: ryan@example.com: wake") {
+		t.Errorf("no audit line for the wake:\n%s", s.out)
+	}
+	// Waking isn't a systemd action.
+	if got := s.ctl.done(); len(got) != 0 {
+		t.Errorf("systemd actions = %v, want none", got)
+	}
+	// The status cache was reset, so the page sees Paper starting at once.
+	var st Status
+	getJSON(t, s.URL+"/api/status", &st)
+	if st.State != mcstatus.StateStarting {
+		t.Errorf("status after waking = %s, want starting", st.State)
+	}
+}
+
+// Only a sleeping LazyMC gets a login: a second click while Paper starts,
+// or a wake while it's awake or off, is refused and sends nothing.
+func TestWakeOnlyWhenSleeping(t *testing.T) {
+	s := newControlServer(t, "ryan@example.com")
+	for _, state := range []string{mcstatus.StateActive, mcstatus.StateStarting, mcstatus.StateOffline} {
+		s.mc.set(state, nil)
+		code, body := s.post(t, "/api/server/wake", "", nil)
+		if code != http.StatusConflict || body["error"] == "" {
+			t.Errorf("wake while %s = %d %v, want 409 with a reason", state, code, body)
+		}
+	}
+	if n := s.mc.woken(); n != 0 {
+		t.Errorf("woke %d times, want 0", n)
+	}
+}
+
+func TestWakeFails(t *testing.T) {
+	s := newControlServer(t, "ryan@example.com")
+	s.mc.set(mcstatus.StateSleeping, errors.New("connection reset"))
+	if code, _ := s.post(t, "/api/server/wake", "", nil); code != http.StatusBadGateway {
+		t.Errorf("failed wake = %d, want 502", code)
+	}
+	if !strings.Contains(s.out.String(), "connection reset") {
+		t.Errorf("admin's log doesn't say why:\n%s", s.out)
 	}
 }
 

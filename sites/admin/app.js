@@ -245,6 +245,7 @@ const ACTIONS = {
   start: { doing: "Starting the server…", done: "Asked systemd to start the server." },
   stop: { doing: "Stopping the server…", done: "Asked systemd to stop the server. Paper saves first." },
   restart: { doing: "Restarting the server…", done: "Asked systemd to restart the server. Paper saves first." },
+  wake: { doing: "Waking Paper…", done: "LazyMC is starting Paper. The console works once it's up." },
 };
 
 const PENDING_MS = 2_000; // status poll while an action settles
@@ -301,19 +302,62 @@ function renderUnit() {
   $("unit-title").textContent = info.title;
   $("unit-message").textContent = info.message(s ?? {});
 
+  renderChain(s, st);
+
   const can = data.me?.control && !pending;
+  // Waking only makes sense while LazyMC holds the port for a sleeping
+  // Paper; the button is there only then.
+  const asleep = st === "active" && s?.state === "sleeping";
   const enabled = {
     start: can && (st === "inactive" || st === "failed"),
     stop: can && st === "active",
     restart: can && st === "active",
+    wake: can && asleep,
   };
-  for (const b of card.querySelectorAll("[data-action]")) {
+  for (const b of document.querySelectorAll("[data-action]")) {
     const off = !enabled[b.dataset.action];
     // Disabling the focused button would drop focus to the top of the
-    // page, so keep it on the card instead.
-    if (off && b === document.activeElement) card.focus();
+    // page, so keep it on its card instead.
+    if (off && b === document.activeElement) b.closest(".card").focus();
     b.disabled = off;
   }
+  card.querySelector('[data-action="wake"]').hidden = !asleep;
+  $("console-asleep").hidden = !(asleep && data.me?.console);
+}
+
+// One step of the chain: on, busy, idle (Paper asleep), off or failed.
+function setLink(id, link, text) {
+  const li = $(id);
+  li.dataset.link = link;
+  li.querySelector(".link-state").textContent = text;
+}
+
+// systemd's unit, then LazyMC and Paper as the status ping sees them.
+function renderChain(s, st) {
+  const unit = {
+    active: ["on", "Active"],
+    activating: ["busy", "Activating"],
+    deactivating: ["busy", "Deactivating"],
+    inactive: ["off", "Inactive"],
+    failed: ["failed", "Failed"],
+  }[st] ?? ["unknown", s ? "Unknown" : "–"];
+  setLink("chain-unit", ...unit);
+
+  const ping = s?.state;
+  const known = ping && ping !== "unknown";
+  setLink(
+    "chain-lazymc",
+    ...(!known ? ["unknown", "–"] : ping === "offline" ? ["off", "Not answering"] : ["on", "Holding the port"]),
+  );
+
+  const players = s?.online === 1 ? "1 player" : `${s?.online ?? 0} players`;
+  const paper = {
+    active: ["on", `${s?.version || "Running"}, ${players}`],
+    starting: ["busy", "Starting"],
+    sleeping: ["idle", "Asleep until someone joins"],
+    offline: ["off", "Off"],
+  }[ping] ?? ["unknown", "–"];
+  setLink("chain-paper", ...paper);
 }
 
 function setNote(text, isError = false) {
@@ -324,7 +368,7 @@ function setNote(text, isError = false) {
 
 // Asks before stopping or restarting, and says who would be kicked off.
 function confirmAction(action) {
-  if (action === "start") return Promise.resolve(true);
+  if (action === "start" || action === "wake") return Promise.resolve(true);
   const s = data.status;
   const names = (s?.players ?? []).filter((p) => p.id !== ANONYMOUS_ID).map((p) => p.name);
   let who = "Nobody is online.";
@@ -377,7 +421,7 @@ function pollFast() {
   }, PENDING_MS);
 }
 
-for (const b of document.querySelectorAll(".unit-card [data-action]")) {
+for (const b of document.querySelectorAll("[data-action]")) {
   b.addEventListener("click", () => runAction(b.dataset.action));
 }
 
