@@ -18,7 +18,9 @@
 // on the deploy after one that was interrupted.
 //
 // Each switch of current is recorded in <apps>/active.json with its time,
-// so the admin page can show when the active release was applied.
+// so the admin page can show when the active release was applied, and each
+// deploy's outcome (success, failure or rollback) in <apps>/result.json.
+// Status reads all of this back without changing anything.
 package deploy
 
 import (
@@ -238,6 +240,7 @@ func (d *Deployer) Run(ctx context.Context) error {
 	}
 
 	if err := d.Install(ctx, rel); err != nil {
+		d.recordResult(rel.Tag, "", err)
 		return err
 	}
 	return d.Activate(ctx, rel.Tag)
@@ -342,7 +345,11 @@ func (d *Deployer) download(ctx context.Context, url string, w io.Writer, limit 
 
 // Activate makes an installed release current. If activation fails, it
 // switches back to the previously active release and marks tag as failed.
-func (d *Deployer) Activate(ctx context.Context, tag string) error {
+// The outcome is recorded in result.json.
+func (d *Deployer) Activate(ctx context.Context, tag string) (err error) {
+	var rolledBackTo string
+	defer func() { d.recordResult(tag, rolledBackTo, err) }()
+
 	previous, err := d.Current()
 	if err != nil {
 		return err
@@ -372,6 +379,7 @@ func (d *Deployer) Activate(ctx context.Context, tag string) error {
 		if rbErr != nil {
 			return errors.Join(err, fmt.Errorf("rollback: %w", rbErr))
 		}
+		rolledBackTo = previous
 		return fmt.Errorf("deploy: %s failed and was rolled back to %s: %w", tag, previous, err)
 	}
 
