@@ -101,37 +101,23 @@ jobs:
         working-directory: web
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./...
 
-  play:
-    name: play.ryancaudill.dev
-    needs: changes
-    if: needs.changes.outputs.play == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: web/go.mod
-          cache: false
+      # The site checks share this job's checkout and Go toolchain rather
+      # than paying for their own runners, and run only when their scope
+      # changed.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: needs.changes.outputs.play == 'true' || needs.changes.outputs.admin == 'true'
         with:
           node-version: 24
-      - name: JavaScript syntax
+      - name: play.ryancaudill.dev JavaScript syntax
+        if: needs.changes.outputs.play == 'true'
         run: node --check sites/play/app.js && node --check sites/play/format.js
-      - name: Unit tests for the page's helpers
+      - name: play.ryancaudill.dev unit tests for the page's helpers
+        if: needs.changes.outputs.play == 'true'
         # Number and date formats follow the locale and zone; the tests expect these.
         env:
           LC_ALL: en_US.UTF-8
           TZ: UTC
         run: node --test tests/play/format.test.js
-      - name: Smoke test the built server
-      # The site smoke tests share this job's checkout and Go toolchain
-      # rather than paying for their own runners, and run only when their
-      # scope changed.
-      - name: play.ryancaudill.dev JavaScript syntax
-        if: needs.changes.outputs.play == 'true'
-        run: node --check sites/play/app.js
       - name: play.ryancaudill.dev smoke test
         if: needs.changes.outputs.play == 'true'
         run: |
@@ -149,65 +135,6 @@ jobs:
           curl -fsS http://127.0.0.1:8082/api/status | grep -q '"state":"offline"'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/api/world)" = 503
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8082/api/status)" = 405
-
-  play-e2e:
-    name: play.ryancaudill.dev end-to-end
-    needs: changes
-    if: needs.changes.outputs.play == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: tests/play/e2e
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: web/go.mod
-          cache: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-      - name: Install Playwright and Chromium
-        run: |
-          npm ci --no-audit --no-fund
-          npx playwright install --with-deps chromium
-      - name: Playwright tests
-        # Starts the fixture server (TestFixtureServer in web/cmd/play) itself.
-        run: npx playwright test
-      - name: Upload screenshots
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: play-screenshots
-          path: tests/play/e2e/screenshots/
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Upload the report on failure
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: play-e2e-report
-          path: |
-            tests/play/e2e/playwright-report/
-            tests/play/e2e/test-results/
-          retention-days: 14
-
-  admin:
-    name: admin.ryancaudill.dev and static sites
-    needs: changes
-    if: needs.changes.outputs.admin == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: web/go.mod
-          cache: false
-      - name: JavaScript syntax
       - name: admin.ryancaudill.dev JavaScript syntax
         if: needs.changes.outputs.admin == 'true'
         run: node --check sites/admin/app.js
@@ -256,6 +183,50 @@ jobs:
             curl -fsS "http://127.0.0.1:$port/" | grep -q '<title>'
             echo "$site OK on $port"
           done
+
+  play-e2e:
+    name: play.ryancaudill.dev end-to-end
+    needs: changes
+    if: needs.changes.outputs.play == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/play/e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: web/go.mod
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install Playwright and Chromium
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Playwright tests
+        # Starts the fixture server (TestFixtureServer in web/cmd/play) itself.
+        run: npx playwright test
+      - name: Upload screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: play-screenshots
+          path: tests/play/e2e/screenshots/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload the report on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: play-e2e-report
+          path: |
+            tests/play/e2e/playwright-report/
+            tests/play/e2e/test-results/
+          retention-days: 14
 
   mc-server:
     name: Minecraft server config
@@ -365,8 +336,7 @@ jobs:
   # because nothing in their scope changed count as passing.
   ci-ok:
     name: ci-ok
-    needs: [changes, go, play, play-e2e, admin, mc-server, infra]
-    needs: [changes, go, mc-server, infra]
+    needs: [changes, go, play-e2e, mc-server, infra]
     if: always()
     runs-on: ubuntu-latest
     steps:
