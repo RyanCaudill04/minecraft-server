@@ -13,12 +13,18 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 
+# mc-agent deploys from the repo that built it unless host.env sets REPO,
+# so a fork's releases install the fork's binaries. CI sets
+# GITHUB_REPOSITORY; local builds use origin's GitHub owner/name, if any.
+repo=${GITHUB_REPOSITORY:-$(git -C "$root" remote get-url origin 2>/dev/null \
+  | sed -nE 's#^(https://|ssh://git@|git@)github\.com[:/]([^/]+/[^/]+)$#\2#p' | sed 's/\.git$//' || true)}
+
 mkdir -p "$stage/bin" "$out"
 (
   cd "$root/web"
   for cmd in play admin serve mc-agent; do
     CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
-      -ldflags "-s -w -X main.version=$tag" -o "$stage/bin/$cmd" "./cmd/$cmd"
+      -ldflags "-s -w -X main.version=$tag -X main.builtRepo=$repo" -o "$stage/bin/$cmd" "./cmd/$cmd"
   done
 )
 

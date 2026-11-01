@@ -6,7 +6,12 @@
 Description=admin.ryancaudill.dev dashboard
 
 [Service]
-ExecStart=%h/apps/current/bin/admin -dir %h/apps/current/sites/admin -shared %h/apps/current/sites/shared -apps %h/apps -addr 127.0.0.1:8081
+# Defaults, overridden by host.env (see deploy/host.example.env). Secrets
+# come from secrets.env (see deploy/secrets.example.env); only admin loads it.
+Environment=ADMIN_ADDR=127.0.0.1:8081
+EnvironmentFile=-%h/.config/minecraft/host.env
+EnvironmentFile=-%h/.config/minecraft/secrets.env
+ExecStart=%h/apps/current/bin/admin -dir %h/apps/current/sites/admin -shared %h/apps/current/sites/shared -apps %h/apps -addr ${ADMIN_ADDR}
 Restart=on-failure
 RestartSec=10
 

@@ -20,6 +20,10 @@ bin/
 server.properties.local
 server.properties
 connection.private.md
+# Host config and secrets live in ~/.config/minecraft; never commit a copy
+# (the tracked examples are deploy/host.example.env and secrets.example.env).
+host.env
+secrets.env
 *.pem
 *.key
 id_*

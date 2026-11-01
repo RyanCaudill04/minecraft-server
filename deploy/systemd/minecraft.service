@@ -1,17 +1,24 @@
 # User unit for the Minecraft server. LazyMC owns the public port and starts
 # Paper (via start.sh) on demand, so systemd only manages LazyMC.
 #
-# Install on the Pi:
+# scripts/install.sh links and enables it. By hand:
 #   ln -s ~/minecraft_server/deploy/systemd/minecraft.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now minecraft
+#
+# SERVER_DIR and HEAP come from host.env (see deploy/host.example.env);
+# start.sh reads HEAP from the environment LazyMC passes on.
 
 [Unit]
 Description=Minecraft server (LazyMC + Paper)
 
 [Service]
-WorkingDirectory=%h/minecraft_server
-ExecStart=%h/minecraft_server/lazymc start
+# Default, overridden by host.env.
+Environment=SERVER_DIR=%h/minecraft_server
+EnvironmentFile=-%h/.config/minecraft/host.env
+# WorkingDirectory= can't use a variable, so env changes into the folder:
+# LazyMC reads lazymc.toml from it and runs ./start.sh there.
+ExecStart=/usr/bin/env --chdir=${SERVER_DIR} ${SERVER_DIR}/lazymc start
 Restart=on-failure
 RestartSec=10
 

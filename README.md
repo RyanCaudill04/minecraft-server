@@ -12,7 +12,17 @@ Minecraft Java Edition uses the standard TCP port `25565`. If remote players nee
 
 Commit server configuration, launcher scripts, and plugin configuration. Do not commit generated worlds, logs, caches, downloaded runtime libraries, credentials, private keys, or newly downloaded JAR files. The existing checked-in JARs are retained for the current deployment; newly downloaded JARs are ignored.
 
-Before enabling services such as RCON or the Paper management server, keep their passwords and secrets out of Git. Use a local, ignored override or an environment-specific secret store instead.
+Before enabling services such as RCON or the Paper management server, keep their passwords and secrets out of Git. Secrets go in `~/.config/minecraft/secrets.env` (mode `0600`); [`deploy/secrets.example.env`](deploy/secrets.example.env) lists every key.
+
+## Setting up a machine
+
+On a Linux machine with systemd, from a clone of this repo (which is also the server folder for now):
+
+```bash
+scripts/install.sh --repo <owner/name> --domain <domain> [--heap 4G] [--dry-run]
+```
+
+It checks the prerequisites, writes the host config to `~/.config/minecraft/host.env` (every key is described in [`deploy/host.example.env`](deploy/host.example.env); without the file, today's Pi values are used), creates `secrets.env`, installs the newest web-app release and starts the Minecraft service. It never runs `sudo`; it prints the command instead. Running it again only fixes what's missing and asks before changing anything. At the end it lists what's left: LazyMC, the EULA, the Cloudflare and router setup.
 
 ## LazyMC
 
