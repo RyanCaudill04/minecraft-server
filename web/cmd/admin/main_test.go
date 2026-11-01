@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ryancaudill04/minecraft-server/web/internal/deploy"
 	"github.com/ryancaudill04/minecraft-server/web/internal/mcstatus"
 	"github.com/ryancaudill04/minecraft-server/web/internal/ping"
 )
@@ -20,6 +23,13 @@ import (
 // holding index.html, a shared folder holding base.css, and an empty apps
 // folder, which it returns.
 func newTestServer(t *testing.T) (*httptest.Server, string) {
+	t.Helper()
+	ts, a := newTestApp(t, nil)
+	return ts, a.agent.Apps
+}
+
+// newTestApp is newTestServer with the app, after setup changes it.
+func newTestApp(t *testing.T, setup func(a *app)) (*httptest.Server, *app) {
 	t.Helper()
 	dir, shared, apps := t.TempDir(), t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<h1>admin</h1>"), 0o644); err != nil {
@@ -39,9 +49,18 @@ func newTestServer(t *testing.T) (*httptest.Server, string) {
 			return nil, errors.New("connection refused")
 		},
 	}
-	ts := httptest.NewServer(newHandler(dir, shared, apps, c))
+	a := &app{
+		dir: dir, sharedDir: shared, checker: c, repo: "o/r",
+		// No GitHub: only installed releases are listed.
+		agent:      &deploy.Deployer{Repo: "o/r", API: "http://127.0.0.1:1", Apps: apps, HTTP: http.DefaultClient, Log: log.New(io.Discard, "", 0)},
+		startAgent: func(context.Context) error { return nil },
+	}
+	if setup != nil {
+		setup(a)
+	}
+	ts := httptest.NewServer(newHandler(a))
 	t.Cleanup(ts.Close)
-	return ts, apps
+	return ts, a
 }
 
 func getJSON(t *testing.T, url string, v any) int {

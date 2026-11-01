@@ -34,6 +34,10 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 13V3M6 7l4-4 4 4M4 13v2.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V13"/></svg>
           Deploys
         </a>
+        <a href="#settings">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h8M15 6h2M3 14h2M9 14h8"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/></svg>
+          Settings
+        </a>
       </nav>
 
       <div class="sidebar-foot">
@@ -42,6 +46,11 @@
     </aside>
 
     <main class="content">
+      <div class="banner" id="policy-banner" role="status" hidden>
+        <span id="policy-banner-text"></span>
+        <button type="button" class="btn btn-small" id="banner-action" hidden></button>
+      </div>
+
       <section id="overview" class="section">
         <header class="section-head">
           <h1>Overview</h1>
@@ -137,9 +146,85 @@
             <ul class="change-list" id="deploy-changes"></ul>
             <p class="muted" id="deploy-changes-empty">&nbsp;</p>
           </article>
+          <article class="card releases" id="releases">
+            <div class="card-head">
+              <span class="eyebrow">Releases</span>
+              <span class="muted small">Apply any release. It stays active until you follow the latest again.</span>
+            </div>
+            <ul class="release-list" id="release-list"></ul>
+            <p class="muted small" id="release-note" hidden></p>
+          </article>
+        </div>
+      </section>
+
+      <section id="settings" class="section">
+        <header class="section-head">
+          <h2>Settings</h2>
+          <p class="muted">What mc-agent does with new releases. admin starts it right after each change, so changes apply within a minute.</p>
+        </header>
+        <p class="lock-note" id="settings-locked" hidden></p>
+        <div class="grid settings-grid">
+          <article class="card policy-card">
+            <div class="policy-row">
+              <div class="cell track">
+                <span class="eyebrow">Track</span>
+                <strong id="track-name">All apps</strong>
+                <span class="at">play, admin, the sites and mc-agent ship as one release for now</span>
+              </div>
+              <div class="cell">
+                <span class="eyebrow">Active</span>
+                <code class="tag" id="track-active">–</code>
+              </div>
+              <div class="cell">
+                <span class="eyebrow">Newest seen</span>
+                <code class="tag" id="track-available">–</code>
+                <span class="at" id="track-checked"></span>
+              </div>
+              <div class="cell">
+                <span class="eyebrow" id="mode-label">Update policy</span>
+                <div class="segmented" role="radiogroup" aria-labelledby="mode-label">
+                  <button type="button" role="radio" aria-checked="false" data-mode="auto">Auto</button>
+                  <button type="button" role="radio" aria-checked="false" data-mode="notify">Notify</button>
+                  <button type="button" role="radio" aria-checked="false" data-mode="pinned">Pinned</button>
+                </div>
+              </div>
+            </div>
+            <p class="mode-help muted small" id="mode-help">&nbsp;</p>
+            <div class="notify-row" id="notify-row" hidden>
+              <span class="kind" data-kind="feature" id="notify-text"></span>
+              <button type="button" class="btn btn-small btn-primary" id="notify-apply">Apply</button>
+              <a id="notify-notes" href="#">View notes</a>
+            </div>
+            <p class="warn small">Pinning holds mc-agent too, so fixes to the updater won't arrive until you follow the latest again. A broken admin release locks you out of this page; recover over SSH with <code>mc-agent unpin</code> or <code>mc-agent rollback</code>.</p>
+          </article>
+          <article class="card pause-card">
+            <label class="switch">
+              <input type="checkbox" role="switch" id="pause-toggle">
+              <span class="track-ui" aria-hidden="true"></span>
+              <span>Pause all updates</span>
+            </label>
+            <p class="muted small">Holds every release, pinned ones included, until resumed. A deploy that was cut short is still finished.</p>
+          </article>
+          <article class="card change-card">
+            <span class="eyebrow">Last change</span>
+            <p id="change-status" aria-live="polite">None yet.</p>
+            <span class="at" id="change-at"></span>
+          </article>
         </div>
       </section>
     </main>
   </div>
+
+  <dialog id="confirm" aria-labelledby="confirm-title">
+    <form method="dialog">
+      <h3 id="confirm-title"></h3>
+      <p id="confirm-text"></p>
+      <p class="warn small" id="confirm-warn" hidden></p>
+      <div class="actions">
+        <button type="submit" value="cancel" class="btn btn-ghost">Cancel</button>
+        <button type="submit" value="ok" class="btn btn-primary" id="confirm-ok">Apply</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>
