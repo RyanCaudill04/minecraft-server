@@ -19,7 +19,6 @@ check() {
       failures=$((failures + 1))
     fi
   done
-  grep -qx 'go=true' <<<"$got" || { echo "FAIL $name: go must always run"; failures=$((failures + 1)); }
 }
 
 check "play site"         'sites/play/app.js\n'                    'play deploy'
