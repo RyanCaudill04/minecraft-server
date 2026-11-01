@@ -4,6 +4,7 @@
 
 const STATUS_MS = 10_000; // server state and who's online
 const DEPLOY_MS = 60_000; // the active release (changes a few times a day)
+const PLUGINS_MS = 120_000; // installed plugins (change only on a restart)
 
 // Paper sends this UUID for players who hide themselves from the list.
 const ANONYMOUS_ID = "00000000-0000-0000-0000-000000000000";
@@ -19,7 +20,15 @@ const STATES = {
 const KINDS = { feature: "Feature", fix: "Bug fix", other: "Other" };
 const REPO = "https://github.com/RyanCaudill04/minecraft-server";
 
-const data = { status: null, deploy: null };
+const data = { status: null, deploy: null, plugins: null };
+
+const PLUGIN_STATUS = {
+  pinned: { label: "Pinned", note: "Matches the manifest." },
+  changed: { label: "Changed", note: "Not the jar the manifest pins." },
+  unpinned: { label: "Unpinned", note: "Not in the manifest." },
+  invalid: { label: "Invalid", note: "" },
+  missing: { label: "Missing", note: "In the manifest, not installed." },
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -50,6 +59,16 @@ async function refreshDeploy() {
     data.deploy = null;
   }
   renderDeploy();
+}
+
+async function refreshPlugins() {
+  try {
+    data.plugins = await getJSON("/api/plugins");
+  } catch (err) {
+    console.warn(err);
+    data.plugins = null;
+  }
+  renderPlugins();
 }
 
 // ---------- Rendering ----------
@@ -158,6 +177,45 @@ function renderChanges(d) {
   );
 }
 
+let shownPlugins;
+function renderPlugins() {
+  const d = data.plugins;
+  let empty = "";
+  if (!d) empty = "Couldn't read the plugins folder.";
+  else if (!d.plugins?.length) empty = "No plugins installed.";
+  else if (!d.manifest) empty = "plugins/manifest.json is missing, so nothing is pinned.";
+  $("plugin-empty").textContent = empty;
+  $("plugin-empty").hidden = !empty;
+
+  const key = JSON.stringify(d);
+  if (key === shownPlugins) return;
+  shownPlugins = key;
+
+  $("plugin-list").replaceChildren(
+    ...(d?.plugins ?? []).map((p) => {
+      const li = document.createElement("li");
+      const who = document.createElement("span");
+      who.className = "who";
+      const name = document.createElement("span");
+      name.className = "title";
+      name.textContent = p.meta ? `${p.meta.name} ${p.meta.version}` : p.file;
+      const file = document.createElement("span");
+      file.className = "file";
+      const info = PLUGIN_STATUS[p.status] ?? { label: p.status, note: "" };
+      const hash = p.sha256 ? ` · sha256 ${p.sha256.slice(0, 12)}…` : "";
+      file.textContent = `${p.file}${hash} · ${p.problem || info.note}`;
+      file.title = p.sha256 ?? "";
+      who.append(name, file);
+      const kind = document.createElement("span");
+      kind.className = "kind";
+      kind.dataset.kind = p.status;
+      kind.textContent = info.label;
+      li.append(who, kind);
+      return li;
+    }),
+  );
+}
+
 // ---------- Scroll spy ----------
 
 // Highlights the last section whose top has scrolled above a line 30% down
@@ -198,7 +256,13 @@ function start() {
   if (timers.length) return;
   refreshStatus();
   refreshDeploy();
-  timers = [setInterval(refreshStatus, STATUS_MS), setInterval(refreshDeploy, DEPLOY_MS), setInterval(tick, 1000)];
+  refreshPlugins();
+  timers = [
+    setInterval(refreshStatus, STATUS_MS),
+    setInterval(refreshDeploy, DEPLOY_MS),
+    setInterval(refreshPlugins, PLUGINS_MS),
+    setInterval(tick, 1000),
+  ];
 }
 function stop() {
   timers.forEach(clearInterval);

@@ -34,6 +34,10 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 13V3M6 7l4-4 4 4M4 13v2.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V13"/></svg>
           Deploys
         </a>
+        <a href="#plugins">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 3v3M12 3v3M5.5 6h9v3.5a4.5 4.5 0 0 1-9 0V6zM10 14v3"/></svg>
+          Plugins
+        </a>
       </nav>
 
       <div class="sidebar-foot">
@@ -136,6 +140,28 @@
             <span class="eyebrow">What changed</span>
             <ul class="change-list" id="deploy-changes"></ul>
             <p class="muted" id="deploy-changes-empty">&nbsp;</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="plugins" class="section">
+        <header class="section-head">
+          <h2>Plugins</h2>
+          <p class="muted">Jars in the server's plugins folder, checked against <code>plugins/manifest.json</code>.</p>
+        </header>
+        <div class="grid deploy-grid">
+          <article class="card changes">
+            <span class="eyebrow">Installed</span>
+            <ul class="change-list plugin-list" id="plugin-list"></ul>
+            <p class="muted" id="plugin-empty">&nbsp;</p>
+          </article>
+          <article class="card planned">
+            <span class="eyebrow">Coming next</span>
+            <ul>
+              <li>Pick a plugin from the manifest and apply it on the next restart</li>
+              <li>Undo the last plugin change</li>
+            </ul>
+            <a href="https://github.com/RyanCaudill04/minecraft-server/issues/76">#76 Install plugins from admin</a>
           </article>
         </div>
       </section>

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -68,7 +69,9 @@ func TestFixtureServer(t *testing.T) {
 			t.Fatal(err)
 		}
 		fmt.Printf("fixture: %s on http://%s\n", s.name, a)
-		go func() { errs <- http.Serve(ln, newHandler(dir, shared, server, fakeChecker(s.responses, nil))) }()
+		go func() {
+			errs <- http.Serve(ln, newHandler(dir, shared, server, filepath.Join(server, "plugins", "squaremap", "web"), fakeChecker(s.responses, nil)))
+		}()
 	}
 	if err := <-errs; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		t.Fatal(err)
