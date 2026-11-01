@@ -932,3 +932,417 @@ func TestUnwritableAppliedTimeDoesntFailTheDeploy(t *testing.T) {
 		t.Errorf("current = %q, want r1", got)
 	}
 }
+
+// deployAll publishes and deploys each tag in order, all healthy.
+func (h *harness) deployAll(t *testing.T, tags ...string) {
+	t.Helper()
+	for _, tag := range tags {
+		h.publish(t, tag, "/ok")
+		if err := h.d.Run(context.Background()); err != nil {
+			t.Fatalf("%s: %v", tag, err)
+		}
+	}
+	h.takeCalls()
+}
+
+func (h *harness) exists(name string) bool {
+	_, err := os.Lstat(filepath.Join(h.d.Apps, name))
+	return err == nil
+}
+
+// interrupt installs the latest release and switches current to it, as if
+// the agent was killed right after.
+func (h *harness) interrupt(t *testing.T) {
+	t.Helper()
+	rel, err := h.d.Latest(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.Install(context.Background(), rel); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.writeFile(h.d.pendingFile(), []byte(rel.Tag+"\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.switchTo(rel.Tag); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInterruptedDeployOfABrokenReleaseRollsBack(t *testing.T) {
+	h := newHarness(t)
+	h.d.HealthTimeout = 300 * time.Millisecond
+	h.deployAll(t, "r1")
+	h.publish(t, "r2", "/bad")
+	h.interrupt(t)
+
+	err := h.d.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "rolled back to r1") {
+		t.Fatalf("err = %v, want r2 checked and rolled back to r1", err)
+	}
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q, want r1", got)
+	}
+	if got, want := h.takeCalls(), slices.Concat(applyCalls, applyCalls); !reflect.DeepEqual(got, want) {
+		t.Errorf("systemctl calls = %q, want r2 then r1 applied: %q", got, want)
+	}
+	if h.exists("activating") {
+		t.Error("the activating marker was left behind")
+	}
+	// And it isn't retried.
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls := h.takeCalls(); len(calls) != 0 {
+		t.Errorf("r2 was retried: %q", calls)
+	}
+}
+
+func TestInterruptedDeployOfAGoodReleaseIsFinished(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1")
+	h.publish(t, "r2", "/ok")
+	h.interrupt(t)
+
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.takeCalls(); !reflect.DeepEqual(got, applyCalls) {
+		t.Errorf("systemctl calls = %q, want r2 applied once: %q", got, applyCalls)
+	}
+	if h.exists("activating") {
+		t.Error("the activating marker was left behind")
+	}
+	if !h.d.deployed("r2") {
+		t.Error("r2 wasn't recorded as deployed")
+	}
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls := h.takeCalls(); len(calls) != 0 {
+		t.Errorf("a finished deploy was applied again: %q", calls)
+	}
+}
+
+func TestFailedReleaseLeftActiveIsRolledBack(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1")
+	h.publish(t, "r2", "/bad")
+	// The agent recorded r2 as failed and died before switching back.
+	h.interrupt(t)
+	h.d.markFailed("r2")
+
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q, want r1", got)
+	}
+}
+
+func TestFailedFirstDeployKeepsFailing(t *testing.T) {
+	h := newHarness(t)
+	h.d.HealthTimeout = 300 * time.Millisecond
+	h.publish(t, "r1", "/bad")
+	if err := h.d.Run(context.Background()); err == nil {
+		t.Fatal("want r1 to fail")
+	}
+	h.takeCalls()
+
+	// Every later run fails too, so the unit shows it, without retrying.
+	err := h.d.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "r1 failed") {
+		t.Errorf("err = %v, want the active release reported as failed", err)
+	}
+	if calls := h.takeCalls(); len(calls) != 0 {
+		t.Errorf("a known-bad release was retried: %q", calls)
+	}
+
+	// A new release still replaces it.
+	h.publish(t, "r2", "/ok")
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.current(t); got != "r2" {
+		t.Errorf("current = %q, want r2", got)
+	}
+}
+
+func TestRollbackIsNotUndoneByTheTimer(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1", "r2")
+
+	if err := h.d.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.takeCalls()
+	for range 2 {
+		if err := h.d.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q after timer runs, want the rollback to r1 kept", got)
+	}
+	if calls := h.takeCalls(); len(calls) != 0 {
+		t.Errorf("a pinned run called systemctl: %q", calls)
+	}
+
+	if err := h.d.Unpin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.current(t); got != "r2" {
+		t.Errorf("current = %q after unpinning, want r2", got)
+	}
+}
+
+func TestRollbackSkipsTheFailedRelease(t *testing.T) {
+	h := newHarness(t)
+	h.d.HealthTimeout = 300 * time.Millisecond
+	h.deployAll(t, "r1", "r2")
+	h.publish(t, "r3", "/bad")
+	if err := h.d.Run(context.Background()); err == nil {
+		t.Fatal("want r3 to fail")
+	}
+	h.takeCalls()
+	// Even with r3 the newest folder.
+	h.age(t, "r1", 20*time.Minute)
+	h.age(t, "r2", 10*time.Minute)
+
+	if err := h.d.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q, want r1, not the failed r3", got)
+	}
+	if got := h.takeCalls(); !reflect.DeepEqual(got, applyCalls) {
+		t.Errorf("systemctl calls = %q, want only r1 applied", got)
+	}
+}
+
+func TestRollbackStepsBack(t *testing.T) {
+	h := newHarness(t)
+	h.d.Keep = 5
+	h.deployAll(t, "r1", "r2", "r3")
+	for _, want := range []string{"r2", "r1"} {
+		if err := h.d.Rollback(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.current(t); got != want {
+			t.Errorf("current = %q, want %s", got, want)
+		}
+	}
+	if err := h.d.Rollback(context.Background()); err == nil {
+		t.Error("want an error with nothing older than r1")
+	}
+}
+
+func TestFailedRollbackIsUnpinned(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1", "r2")
+	h.failWhen = func(current string, args []string) bool { return current == "r1" && args[0] == "restart" }
+
+	if err := h.d.Rollback(context.Background()); err == nil {
+		t.Fatal("want the rollback to r1 to fail")
+	}
+	if got := h.current(t); got != "r2" {
+		t.Errorf("current = %q, want back on r2", got)
+	}
+	if h.exists("pinned") {
+		t.Error("a release that failed is still pinned")
+	}
+	h.takeCalls()
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls := h.takeCalls(); len(calls) != 0 {
+		t.Errorf("the next run changed something: %q", calls)
+	}
+}
+
+func TestBrokenAgentRollsBack(t *testing.T) {
+	h := newHarness(t)
+	checked := map[string]int{}
+	h.d.CheckAgent = func(ctx context.Context) error {
+		current, _ := h.d.Current()
+		checked[current]++
+		if current == "r2" {
+			return errors.New("selfcheck: panic")
+		}
+		return nil
+	}
+	h.deployAll(t, "r1")
+	h.publish(t, "r2", "/ok") // healthy web apps, broken agent
+
+	err := h.d.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "rolled back to r1") {
+		t.Fatalf("err = %v, want a rollback to r1", err)
+	}
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q, want r1", got)
+	}
+	// Going back to r1 doesn't check its agent: an older one may not have
+	// selfcheck at all.
+	if want := map[string]int{"r1": 1, "r2": 1}; !reflect.DeepEqual(checked, want) {
+		t.Errorf("agents checked = %v, want %v", checked, want)
+	}
+}
+
+func TestRollbackDoesntCheckTheAgent(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1", "r2")
+	// As if r1's agent were from before selfcheck.
+	h.d.CheckAgent = func(ctx context.Context) error { return errors.New("unknown command selfcheck") }
+	if err := h.d.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q, want r1", got)
+	}
+}
+
+func TestReleaseThatStopsTheAgentIsRefused(t *testing.T) {
+	h := newHarness(t)
+	h.d.AgentTimer = "mc-agent.timer"
+	h.deployAll(t, "r1")
+
+	h.publishWith(t, "r2", "/ok", Manifest{Units: []string{"play.service"}, Services: []string{"play.service"}})
+	err := h.d.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "mc-agent.timer") {
+		t.Fatalf("err = %v, want r2 refused for dropping mc-agent.timer", err)
+	}
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q, want r1", got)
+	}
+	if calls := h.takeCalls(); len(calls) != 0 {
+		t.Errorf("a refused release changed units: %q", calls)
+	}
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Errorf("a refused release was retried: %v", err)
+	}
+}
+
+func TestSelfCheck(t *testing.T) {
+	h := newHarness(t)
+	h.d.AgentTimer = "mc-agent.timer"
+	if err := h.d.SelfCheck(context.Background(), "r1"); err == nil {
+		t.Error("want an error with no release active")
+	}
+	h.deployAll(t, "r1")
+
+	if err := h.d.SelfCheck(context.Background(), "r1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := h.takeCalls(), []string{"is-enabled --quiet mc-agent.timer", "is-active --quiet mc-agent.timer"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("systemctl calls = %q, want %q", got, want)
+	}
+	if err := h.d.SelfCheck(context.Background(), "r0"); err == nil {
+		t.Error("want an error when the agent isn't the active release's")
+	}
+	h.failWhen = func(current string, args []string) bool { return args[0] == "is-active" }
+	if err := h.d.SelfCheck(context.Background(), "r1"); err == nil {
+		t.Error("want an error when the timer isn't running")
+	}
+}
+
+func TestDamagedReleaseIsInstalledAgain(t *testing.T) {
+	h := newHarness(t)
+	h.publish(t, "r1", "/ok")
+	rel, err := h.d.Latest(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.Install(context.Background(), rel); err != nil {
+		t.Fatal(err)
+	}
+	// A power cut before the files reached the SD card.
+	manifest := filepath.Join(h.d.Apps, "releases", "r1", ManifestPath)
+	if err := os.WriteFile(manifest, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q, want r1", got)
+	}
+}
+
+func TestInstallRemovesLeftovers(t *testing.T) {
+	h := newHarness(t)
+	download := filepath.Join(h.d.Apps, ".download-123")
+	staging := filepath.Join(h.d.Apps, "releases", ".tmp-r9")
+	if err := os.MkdirAll(filepath.Join(staging, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{download, filepath.Join(staging, "bin", "play")} {
+		if err := os.WriteFile(path, []byte("partial"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.publish(t, "r1", "/ok")
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{download, staging} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s is still there", path)
+		}
+	}
+}
+
+func TestKeepIsAtLeastTwo(t *testing.T) {
+	h := newHarness(t)
+	h.d.Keep = 0
+	h.deployAll(t, "r1", "r2", "r3")
+	tags, err := h.d.installed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tags) != 2 {
+		t.Errorf("installed = %q, want the current release and one to roll back to", tags)
+	}
+}
+
+func TestRejectsBadManifests(t *testing.T) {
+	tests := map[string]string{
+		"timer that isn't a unit": `{"units": ["play.service"], "timers": ["mc-agent.timer"]}`,
+		"health that isn't a URL": `{"units": ["play.service"], "health": ["127.0.0.1:8080/"]}`,
+	}
+	for name, manifest := range tests {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.github.publish("r1", tarball(t, []entry{
+				{name: ManifestPath, body: manifest},
+				{name: "deploy/systemd/play.service", body: "[Service]\n"},
+			}))
+			if err := h.d.Run(context.Background()); err == nil {
+				t.Fatal("want an error")
+			}
+			if entries, _ := os.ReadDir(filepath.Join(h.d.Apps, "releases")); len(entries) != 0 {
+				t.Errorf("releases/ holds %d entries after a rejected release", len(entries))
+			}
+		})
+	}
+}
+
+func TestOneAgentAtATime(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1", "r2")
+	unlock, err := h.d.lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	for name, run := range map[string]func(context.Context) error{"deploy": h.d.Run, "rollback": h.d.Rollback} {
+		if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), "another mc-agent") {
+			t.Errorf("%s: err = %v, want it refused while another agent runs", name, err)
+		}
+	}
+	if got := h.current(t); got != "r2" {
+		t.Errorf("current = %q, want r2", got)
+	}
+}

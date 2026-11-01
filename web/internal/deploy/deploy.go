@@ -8,8 +8,19 @@
 //
 // A deploy switches current, links and reloads the units, restarts the
 // services listed in the release's deploy/release.json, and waits for its
-// health URLs. If any step fails, it switches back to the previous release
-// and records the tag as failed, so a broken release isn't retried.
+// health URLs, then runs the new release's own mc-agent selfcheck. If any
+// step fails, it switches back to the previous release and records the tag
+// as failed, so a broken release isn't retried.
+//
+// current is switched before the release is verified, so <apps>/activating
+// holds the tag until it is. If the agent is killed or the Pi loses power in
+// between, the next run finds it and applies that release again, rolling
+// back if it fails, instead of taking it as already deployed.
+//
+// <apps>/history records which releases passed or failed a deploy. Rollback
+// steps back to the release deployed before the current one, skipping
+// failed ones, and pins it in <apps>/pinned so the timer doesn't deploy the
+// newer release again. Unpin follows the latest release again.
 //
 // Units a release no longer lists are stopped, disabled and unlinked before
 // current switches. The agent records what it manages in
@@ -34,12 +45,14 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -61,6 +74,7 @@ const (
 	maxReleaseBytes = 200 << 20
 	maxChecksumSize = 1 << 10
 	maxNotesSize    = 1 << 20
+	maxHistory      = 20 // releases remembered in <apps>/history
 )
 
 var validTag = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -125,6 +139,14 @@ type Deployer struct {
 	// Systemctl runs "systemctl --user" with args; replaced in tests.
 	Systemctl func(ctx context.Context, args ...string) error
 
+	// CheckAgent runs the current release's "mc-agent selfcheck" after its
+	// health URLs answer. The timer runs that agent from then on, so a
+	// release whose agent is broken must roll back. Nil skips the check.
+	CheckAgent func(ctx context.Context) error
+	// AgentTimer is the timer that runs the agent, e.g. mc-agent.timer. A
+	// release that doesn't start it is refused. Empty skips the check.
+	AgentTimer string
+
 	HealthTimeout time.Duration // how long each health URL may take to answer 200
 	Keep          int           // installed releases to keep, at least 2
 	Log           *log.Logger
@@ -135,6 +157,10 @@ func (d *Deployer) currentLink() string { return filepath.Join(d.Apps, "current"
 func (d *Deployer) failedFile() string  { return filepath.Join(d.Apps, "failed") }
 func (d *Deployer) managedFile() string { return filepath.Join(d.Apps, "managed.json") }
 func (d *Deployer) appliedFile() string { return filepath.Join(d.Apps, "active.json") }
+func (d *Deployer) pendingFile() string { return filepath.Join(d.Apps, "activating") }
+func (d *Deployer) historyFile() string { return filepath.Join(d.Apps, "history") }
+func (d *Deployer) pinnedFile() string  { return filepath.Join(d.Apps, "pinned") }
+func (d *Deployer) lockFile() string    { return filepath.Join(d.Apps, ".lock") }
 
 // Current returns the tag of the active release, or "" if none is active.
 func (d *Deployer) Current() (string, error) {
@@ -218,21 +244,48 @@ func (d *Deployer) Latest(ctx context.Context) (*Release, error) {
 }
 
 // Run deploys the latest release unless it is already active or has
-// failed before. It is what the systemd timer calls.
+// failed before, or the pinned release while one is pinned. It first
+// finishes an activation that was interrupted. It is what the systemd timer
+// calls.
 func (d *Deployer) Run(ctx context.Context) error {
-	rel, err := d.Latest(ctx)
+	unlock, err := d.lock()
 	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	if err := d.resume(ctx); err != nil {
 		return err
 	}
 	current, err := d.Current()
 	if err != nil {
 		return err
 	}
+
+	if pinned := readTag(d.pinnedFile()); pinned != "" {
+		d.Log.Printf("pinned to %s by a rollback, so newer releases aren't deployed; run \"mc-agent unpin\" to follow the latest release", pinned)
+		if pinned == current {
+			return nil
+		}
+		if err := d.activate(ctx, pinned, false); err != nil {
+			return fmt.Errorf("deploy: pinned release %s: %w", pinned, err)
+		}
+		return nil
+	}
+
+	rel, err := d.Latest(ctx)
+	if err != nil {
+		return err
+	}
 	if rel.Tag == current {
+		if current == readTag(d.failedFile()) {
+			// Exit non-zero, so the unit shows the Pi runs a broken release.
+			return fmt.Errorf("deploy: the active release %s failed and there is nothing to roll back to; publish a new release to replace it", current)
+		}
 		d.Log.Printf("%s is already active", current)
 		return nil
 	}
-	if failed, _ := os.ReadFile(d.failedFile()); strings.TrimSpace(string(failed)) == rel.Tag {
+	if d.hasFailed(rel.Tag) {
 		d.Log.Printf("skipping %s: it failed before; publish a new release to retry", rel.Tag)
 		return nil
 	}
@@ -243,16 +296,78 @@ func (d *Deployer) Run(ctx context.Context) error {
 	return d.Activate(ctx, rel.Tag)
 }
 
+// resume finishes an activation the agent didn't get to finish, because it
+// was killed or the Pi lost power between switching current and verifying
+// the release. Without it, the next run would take that release as deployed
+// and never check it or roll it back. It also retries a rollback that
+// didn't happen while a failed release is still active.
+func (d *Deployer) resume(ctx context.Context) error {
+	current, err := d.Current()
+	if err != nil || current == "" {
+		return err
+	}
+	pending := readTag(d.pendingFile())
+
+	if current == readTag(d.failedFile()) {
+		defer d.clearPending()
+		back := d.fallback(current)
+		if back == "" {
+			return nil // Run reports it
+		}
+		d.Log.Printf("%s failed but is still active; rolling back to %s", current, back)
+		if err := d.rollBackTo(ctx, back); err != nil {
+			return fmt.Errorf("deploy: rolling back from %s to %s: %w", current, back, err)
+		}
+		return nil
+	}
+	if pending == "" {
+		return nil
+	}
+
+	// A release activated by a rollback ran here before, and may be older
+	// than "mc-agent selfcheck", so only a new release's agent is checked.
+	forward := current == pending && !d.deployed(current) && current != readTag(d.pinnedFile())
+	d.Log.Printf("activating %s was interrupted; applying %s again", pending, current)
+	if err := d.apply(ctx, forward); err != nil {
+		if current != pending {
+			// It was rolling back to current when it stopped.
+			d.clearPending()
+			return fmt.Errorf("deploy: rolling back to %s: %w", current, err)
+		}
+		return d.fail(ctx, current, d.fallback(current), err)
+	}
+	if forward {
+		d.record(current, true)
+		os.Remove(d.failedFile())
+	}
+	d.clearPending()
+	d.Log.Printf("%s is active", current)
+	return nil
+}
+
 // Install downloads, verifies and unpacks a release into releases/<tag>.
 // It does nothing if that release is already installed.
 func (d *Deployer) Install(ctx context.Context, rel *Release) error {
 	dest := filepath.Join(d.releasesDir(), rel.Tag)
 	if _, err := os.Stat(dest); err == nil {
-		return nil
+		_, err := readManifest(dest)
+		if err == nil {
+			return nil
+		}
+		// Damaged by something outside the agent, or cut short by a power
+		// cut before Install synced what it unpacked.
+		if current, _ := d.Current(); current == rel.Tag {
+			return fmt.Errorf("deploy: the active release %s is damaged: %w", rel.Tag, err)
+		}
+		d.Log.Printf("installing %s again: %v", rel.Tag, err)
+		if err := os.RemoveAll(dest); err != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(d.releasesDir(), 0o755); err != nil {
 		return err
 	}
+	d.sweep()
 	d.Log.Printf("installing %s", rel.Tag)
 
 	sumURL, err := rel.assetURL(ChecksumName)
@@ -294,11 +409,42 @@ func (d *Deployer) Install(ctx context.Context, rel *Release) error {
 		os.RemoveAll(staging)
 		return fmt.Errorf("deploy: unpacking %s: %w", rel.Tag, err)
 	}
-	if _, err := readManifest(staging); err != nil {
+	m, err := readManifest(staging)
+	if err == nil {
+		err = checkRelease(m)
+	}
+	if err != nil {
 		os.RemoveAll(staging)
 		return fmt.Errorf("deploy: %s: %w", rel.Tag, err)
 	}
-	return os.Rename(staging, dest)
+	// Install takes an existing folder as installed, so a power cut mustn't
+	// leave one with truncated files: sync every file (extract did) and
+	// folder before the rename, and the rename after.
+	if err := syncTree(staging); err != nil {
+		os.RemoveAll(staging)
+		return err
+	}
+	if err := os.Rename(staging, dest); err != nil {
+		return err
+	}
+	return syncDir(d.releasesDir())
+}
+
+// sweep removes downloads and unpacked folders left by an Install that was
+// interrupted. Each can be up to 200 MB, and prune doesn't see them.
+func (d *Deployer) sweep() {
+	for _, pattern := range []string{
+		filepath.Join(d.Apps, ".download-*"),
+		filepath.Join(d.releasesDir(), ".tmp-*"),
+	} {
+		matches, _ := filepath.Glob(pattern)
+		for _, path := range matches {
+			d.Log.Printf("removing %s, left by an interrupted install", path)
+			if err := os.RemoveAll(path); err != nil {
+				d.Log.Printf("removing %s: %v", path, err)
+			}
+		}
+	}
 }
 
 func (d *Deployer) fetchChecksum(ctx context.Context, url string) (string, error) {
@@ -343,6 +489,14 @@ func (d *Deployer) download(ctx context.Context, url string, w io.Writer, limit 
 // Activate makes an installed release current. If activation fails, it
 // switches back to the previously active release and marks tag as failed.
 func (d *Deployer) Activate(ctx context.Context, tag string) error {
+	return d.activate(ctx, tag, true)
+}
+
+// activate makes an installed release current. forward is false for a
+// rollback: that release ran here before and may be older than "mc-agent
+// selfcheck", so its agent isn't checked, and a successful rollback doesn't
+// clear the failed marker or count as a deploy in the history.
+func (d *Deployer) activate(ctx context.Context, tag string, forward bool) error {
 	previous, err := d.Current()
 	if err != nil {
 		return err
@@ -351,33 +505,60 @@ func (d *Deployer) Activate(ctx context.Context, tag string) error {
 	if err != nil {
 		return fmt.Errorf("deploy: %s: %w", tag, err)
 	}
+	if err := d.keepsAgent(next); err != nil {
+		// Nothing has changed yet, so there's nothing to roll back.
+		if forward {
+			d.markFailed(tag)
+		}
+		return fmt.Errorf("deploy: %s: %w", tag, err)
+	}
 	// While current still points at the release that has the unit files,
 	// so they can be disabled.
 	if err := d.retire(ctx, next); err != nil {
 		return err
 	}
+	// Until it's cleared, the next run knows current isn't verified yet.
+	if err := d.writeFile(d.pendingFile(), []byte(tag+"\n")); err != nil {
+		return err
+	}
 	if err := d.switchTo(tag); err != nil {
+		d.clearPending()
 		return err
 	}
 	d.Log.Printf("activating %s (was %q)", tag, previous)
 
-	if err := d.apply(ctx); err != nil {
-		d.Log.Printf("%s failed: %v", tag, err)
-		os.WriteFile(d.failedFile(), []byte(tag+"\n"), 0o644)
-		if previous == "" {
-			return fmt.Errorf("deploy: %s failed with nothing to roll back to: %w", tag, err)
+	if err := d.apply(ctx, forward); err != nil {
+		back := previous
+		if back == "" || back == tag || d.hasFailed(back) {
+			back = d.fallback(tag)
 		}
-		d.Log.Printf("rolling back to %s", previous)
-		rbErr := d.rollBackTo(ctx, previous)
-		if rbErr != nil {
-			return errors.Join(err, fmt.Errorf("rollback: %w", rbErr))
-		}
-		return fmt.Errorf("deploy: %s failed and was rolled back to %s: %w", tag, previous, err)
+		return d.fail(ctx, tag, back, err)
 	}
 
-	os.Remove(d.failedFile())
+	if forward {
+		d.record(tag, true)
+		os.Remove(d.failedFile())
+	}
+	d.clearPending()
 	d.Log.Printf("%s is active", tag)
 	return d.prune()
+}
+
+// fail marks tag, which failed to activate with err, as failed, and
+// switches back to back unless that is "".
+func (d *Deployer) fail(ctx context.Context, tag, back string, err error) error {
+	d.Log.Printf("%s failed: %v", tag, err)
+	d.markFailed(tag)
+	// Whatever happens below, the next run mustn't apply tag again.
+	defer d.clearPending()
+	if back == "" {
+		return fmt.Errorf("deploy: %s failed with nothing to roll back to: %w", tag, err)
+	}
+	d.Log.Printf("rolling back to %s", back)
+	if rbErr := d.rollBackTo(ctx, back); rbErr != nil {
+		return errors.Join(err, fmt.Errorf("rollback: %w", rbErr))
+	}
+	return fmt.Errorf("deploy: %s failed and was rolled back to %s: %w", tag, back, err)
 }
 
 // rollBackTo reactivates tag after the current release failed, first
@@ -393,26 +574,265 @@ func (d *Deployer) rollBackTo(ctx context.Context, tag string) error {
 	if err := d.switchTo(tag); err != nil {
 		return err
 	}
-	return d.apply(ctx)
+	return d.apply(ctx, false)
 }
 
-// Rollback activates the newest installed release other than the current
-// one.
+// Rollback activates the release deployed before the current one, skipping
+// releases that failed, and pins it so the timer doesn't deploy the newer
+// release again. Unpin follows the latest release again.
 func (d *Deployer) Rollback(ctx context.Context) error {
+	unlock, err := d.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	current, err := d.Current()
 	if err != nil {
 		return err
 	}
-	tags, err := d.installed()
+	to := d.fallback(current)
+	if to == "" {
+		return errors.New("deploy: no other release is installed")
+	}
+	// Before switching, so a rollback that is interrupted is finished by
+	// the next run instead of undone.
+	if err := d.writeFile(d.pinnedFile(), []byte(to+"\n")); err != nil {
+		return err
+	}
+	d.Log.Printf("pinning %s: the timer won't deploy newer releases until \"mc-agent unpin\"", to)
+	if err := d.activate(ctx, to, false); err != nil {
+		if readTag(d.pinnedFile()) == to {
+			d.unpin()
+		}
+		return err
+	}
+	return nil
+}
+
+// Unpin lets the timer deploy the latest release again after a Rollback.
+func (d *Deployer) Unpin() error {
+	unlock, err := d.lock()
 	if err != nil {
 		return err
 	}
-	for _, tag := range tags {
-		if tag != current {
-			return d.Activate(ctx, tag)
+	defer unlock()
+	if readTag(d.pinnedFile()) == "" {
+		d.Log.Printf("nothing is pinned")
+	}
+	return d.unpin()
+}
+
+func (d *Deployer) unpin() error {
+	err := os.Remove(d.pinnedFile())
+	if err == nil {
+		d.Log.Printf("unpinned; the next run deploys the latest release")
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// SelfCheck is "mc-agent selfcheck". The release being deployed runs it
+// with its own agent before the release counts as good, because from then
+// on that agent is the only way to deploy a fix or roll back. version is
+// the agent's own version.
+func (d *Deployer) SelfCheck(ctx context.Context, version string) error {
+	current, err := d.Current()
+	if err != nil {
+		return err
+	}
+	if current == "" {
+		return errors.New("deploy: no release is active")
+	}
+	if version != current {
+		return fmt.Errorf("deploy: this agent is %s, but %s is active", version, current)
+	}
+	m, err := readManifest(d.currentLink())
+	if err != nil {
+		return fmt.Errorf("deploy: %s: %w", current, err)
+	}
+	if err := d.keepsAgent(m); err != nil {
+		return fmt.Errorf("deploy: %s: %w", current, err)
+	}
+	if d.AgentTimer == "" {
+		return nil
+	}
+	for _, args := range [][]string{
+		{"is-enabled", "--quiet", d.AgentTimer},
+		{"is-active", "--quiet", d.AgentTimer},
+	} {
+		if err := d.Systemctl(ctx, args...); err != nil {
+			return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
 		}
 	}
-	return errors.New("deploy: no other release is installed")
+	return nil
+}
+
+// keepsAgent fails if m doesn't start the timer that runs the agent: after
+// that release, nothing would deploy a fix or roll it back.
+func (d *Deployer) keepsAgent(m *Manifest) error {
+	if d.AgentTimer == "" || slices.Contains(m.Timers, d.AgentTimer) {
+		return nil
+	}
+	return fmt.Errorf("it doesn't start %s, so nothing would deploy the next release", d.AgentTimer)
+}
+
+// lock makes sure only one agent changes Apps at a time, so a rollback run
+// by hand can't interleave with a timer run. It creates Apps if needed.
+func (d *Deployer) lock() (unlock func(), err error) {
+	if err := os.MkdirAll(d.Apps, 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(d.lockFile(), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errors.New("deploy: another mc-agent is deploying; try again when it's done")
+		}
+		return nil, err
+	}
+	return func() { f.Close() }, nil
+}
+
+func (d *Deployer) clearPending() {
+	if err := os.Remove(d.pendingFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		d.Log.Printf("clearing %s: %v", d.pendingFile(), err)
+	}
+}
+
+// markFailed records that tag failed, so it isn't retried, and unpins it.
+func (d *Deployer) markFailed(tag string) {
+	if err := d.writeFile(d.failedFile(), []byte(tag+"\n")); err != nil {
+		d.Log.Printf("recording %s as failed: %v", tag, err)
+	}
+	d.record(tag, false)
+	if readTag(d.pinnedFile()) == tag {
+		d.Log.Printf("unpinning %s: it failed", tag)
+		if err := d.unpin(); err != nil {
+			d.Log.Printf("unpinning %s: %v", tag, err)
+		}
+	}
+}
+
+// outcome is one line of <apps>/history: whether a release passed or
+// failed a deploy.
+type outcome struct {
+	tag string
+	ok  bool
+}
+
+// history returns what <apps>/history records, newest first.
+func (d *Deployer) history() []outcome {
+	data, err := os.ReadFile(d.historyFile())
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			d.Log.Printf("ignoring %s: %v", d.historyFile(), err)
+		}
+		return nil
+	}
+	var h []outcome
+	for line := range strings.Lines(string(data)) {
+		f := strings.Fields(line)
+		if len(f) != 2 || !validTag.MatchString(f[0]) {
+			continue
+		}
+		h = append(h, outcome{f[0], f[1] == "ok"})
+	}
+	return h
+}
+
+// record puts tag's outcome first in <apps>/history. A failure to write it
+// is only logged: the history only guides which release to roll back to.
+func (d *Deployer) record(tag string, ok bool) {
+	h := slices.DeleteFunc(d.history(), func(o outcome) bool { return o.tag == tag })
+	h = append([]outcome{{tag, ok}}, h...)
+	if len(h) > maxHistory {
+		h = h[:maxHistory]
+	}
+	var b strings.Builder
+	for _, o := range h {
+		result := "failed"
+		if o.ok {
+			result = "ok"
+		}
+		fmt.Fprintf(&b, "%s %s\n", o.tag, result)
+	}
+	if err := d.writeFile(d.historyFile(), []byte(b.String())); err != nil {
+		d.Log.Printf("recording %s in %s: %v", tag, d.historyFile(), err)
+	}
+}
+
+// lastOutcome returns tag's newest entry in the history, if it has one.
+func (d *Deployer) lastOutcome(tag string) (ok, found bool) {
+	for _, o := range d.history() {
+		if o.tag == tag {
+			return o.ok, true
+		}
+	}
+	return false, false
+}
+
+// deployed reports whether tag last passed a deploy.
+func (d *Deployer) deployed(tag string) bool {
+	ok, found := d.lastOutcome(tag)
+	return found && ok
+}
+
+// hasFailed reports whether tag is marked failed or last failed a deploy.
+func (d *Deployer) hasFailed(tag string) bool {
+	ok, found := d.lastOutcome(tag)
+	return tag == readTag(d.failedFile()) || found && !ok
+}
+
+// fallback returns the installed release to go back to from tag, or "" if
+// there is none: the newest one deployed before tag (or the newest deployed
+// one, if tag never was), else the newest installed release the history
+// doesn't know, from an agent before the history was kept. Releases that
+// failed are skipped.
+func (d *Deployer) fallback(tag string) string {
+	installed, err := d.installed()
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			d.Log.Printf("listing releases: %v", err)
+		}
+		return ""
+	}
+	h := d.history()
+	older := h
+	if i := slices.IndexFunc(h, func(o outcome) bool { return o.tag == tag }); i >= 0 {
+		older = h[i+1:]
+	}
+	var candidates []string
+	for _, o := range older {
+		if o.ok {
+			candidates = append(candidates, o.tag)
+		}
+	}
+	for _, t := range installed {
+		if !slices.ContainsFunc(h, func(o outcome) bool { return o.tag == t }) {
+			candidates = append(candidates, t)
+		}
+	}
+	for _, t := range candidates {
+		if t != tag && slices.Contains(installed, t) && !d.hasFailed(t) {
+			return t
+		}
+	}
+	return ""
+}
+
+// readTag returns the tag stored in path, or "" if there is none.
+func readTag(path string) string {
+	data, _ := os.ReadFile(path)
+	if tag := strings.TrimSpace(string(data)); validTag.MatchString(tag) {
+		return tag
+	}
+	return ""
 }
 
 // switchTo points current at releases/<tag>, replacing the link atomically.
@@ -468,8 +888,9 @@ func (d *Deployer) retire(ctx context.Context, next *Manifest) error {
 }
 
 // apply links the current release's units, then reloads, enables and
-// restarts them and waits until every health URL answers.
-func (d *Deployer) apply(ctx context.Context) error {
+// restarts them and waits until every health URL answers. With checkAgent,
+// it then runs the release's own agent's selfcheck.
+func (d *Deployer) apply(ctx context.Context, checkAgent bool) error {
 	m, err := readManifest(d.currentLink())
 	if err != nil {
 		return err
@@ -516,6 +937,11 @@ func (d *Deployer) apply(ctx context.Context) error {
 	for _, url := range m.Health {
 		if err := d.waitHealthy(ctx, url); err != nil {
 			return err
+		}
+	}
+	if checkAgent && d.CheckAgent != nil {
+		if err := d.CheckAgent(ctx); err != nil {
+			return fmt.Errorf("the release's mc-agent: %w", err)
 		}
 	}
 	return d.writeManaged(m)
@@ -676,11 +1102,32 @@ func (d *Deployer) writeFile(path string, data []byte) error {
 		os.Remove(tmp)
 		return err
 	}
-	if dir, err := os.Open(d.Apps); err == nil {
-		dir.Sync()
-		dir.Close()
-	}
+	syncDir(d.Apps)
 	return nil
+}
+
+// syncDir flushes dir's entries to disk, so a rename into it survives a
+// power cut.
+func syncDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// syncTree flushes every folder under root, root included.
+func syncTree(root string) error {
+	return filepath.WalkDir(root, func(path string, e fs.DirEntry, err error) error {
+		if err != nil || !e.IsDir() {
+			return err
+		}
+		return syncDir(path)
+	})
 }
 
 // union returns the units, services and timers in any of ms, without
@@ -780,8 +1227,8 @@ func (d *Deployer) installed() ([]string, error) {
 	return tags, nil
 }
 
-// prune removes the oldest installed releases beyond Keep, never the
-// current one.
+// prune removes the oldest installed releases beyond Keep (at least 2),
+// never the current one or the one a rollback would go back to.
 func (d *Deployer) prune() error {
 	current, err := d.Current()
 	if err != nil {
@@ -791,12 +1238,17 @@ func (d *Deployer) prune() error {
 	if err != nil {
 		return err
 	}
+	back := d.fallback(current)
+	keep := max(d.Keep, 2)
 	kept := 1 // the current release
+	if back != "" {
+		kept++
+	}
 	for _, tag := range tags {
-		if tag == current {
+		if tag == current || tag == back {
 			continue
 		}
-		if kept < d.Keep {
+		if kept < keep {
 			kept++
 			continue
 		}
@@ -826,6 +1278,25 @@ func readManifest(dir string) (*Manifest, error) {
 		}
 	}
 	return &m, nil
+}
+
+// checkRelease checks what readManifest doesn't, for a release about to be
+// installed: each timer is one of the release's units, and each health URL
+// is an http URL. Releases already installed aren't held to it, so a
+// rollback to one from before these checks still works.
+func checkRelease(m *Manifest) error {
+	for _, timer := range m.Timers {
+		if !slices.Contains(m.Units, unitFile(timer)) {
+			return fmt.Errorf("manifest: timer %s is not one of the release's units", timer)
+		}
+	}
+	for _, raw := range m.Health {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
+			return fmt.Errorf("manifest: health check %q is not an http URL", raw)
+		}
+	}
+	return nil
 }
 
 // checkNames rejects unit names that could be read as a path or a flag.
@@ -887,6 +1358,9 @@ func extract(r io.Reader, dest string) error {
 				return err
 			}
 			_, err = io.Copy(f, io.LimitReader(tr, hdr.Size))
+			if err == nil {
+				err = f.Sync()
+			}
 			if cerr := f.Close(); err == nil {
 				err = cerr
 			}
