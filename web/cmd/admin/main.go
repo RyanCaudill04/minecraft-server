@@ -98,11 +98,6 @@ func main() {
 		}
 	}
 	c := &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status}
-	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           newHandler(*dir, *sharedDir, *appsDir, c),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
 	log.Printf("serving %s and the API on http://%s", *dir, *addr)
-	log.Fatal(srv.ListenAndServe())
+	log.Fatal(site.Server(*addr, newHandler(*dir, *sharedDir, *appsDir, c)).ListenAndServe())
 }

@@ -110,6 +110,12 @@ func TestStatic(t *testing.T) {
 	}
 	write(filepath.Join(dir, "drafts", "notes.txt"), "secret")
 	write(filepath.Join(dir, "docs", "index.html"), "docs page")
+	write(filepath.Join(dir, ".env"), "secret")
+	write(filepath.Join(shared, ".hidden.css"), "secret")
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(filepath.Join(dir, ".git", "config"), "secret")
 	ts := httptest.NewServer(Static(dir, shared))
 	t.Cleanup(ts.Close)
 
@@ -127,6 +133,10 @@ func TestStatic(t *testing.T) {
 		{"GET", "/drafts/", http.StatusNotFound, ""},
 		{"GET", "/drafts/notes.txt", http.StatusOK, "secret"},
 		{"GET", "/docs/", http.StatusOK, "docs page"},
+		// Dotfiles and dot folders aren't published.
+		{"GET", "/.env", http.StatusNotFound, ""},
+		{"GET", "/.git/config", http.StatusNotFound, ""},
+		{"GET", "/shared/.hidden.css", http.StatusNotFound, ""},
 		{"POST", "/", http.StatusMethodNotAllowed, ""},
 	}
 	for _, tt := range tests {
@@ -149,5 +159,30 @@ func TestStatic(t *testing.T) {
 		if got := resp.Header.Get("Cache-Control"); resp.StatusCode == http.StatusOK && got != "no-cache" {
 			t.Errorf("%s %s Cache-Control = %q, want %q", tt.method, tt.path, got, "no-cache")
 		}
+	}
+}
+
+// serve has no shared folder. /shared/ must then be an ordinary path in
+// dir, not the folder the program started in (here, this package).
+func TestStaticWithoutShared(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("page"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := Static(dir, "")
+
+	for path, want := range map[string]int{"/": http.StatusOK, "/shared/site.go": http.StatusNotFound} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if rec.Code != want {
+			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+}
+
+func TestServer(t *testing.T) {
+	srv := Server("127.0.0.1:0", http.NotFoundHandler())
+	if srv.ReadHeaderTimeout == 0 || srv.IdleTimeout == 0 {
+		t.Errorf("ReadHeaderTimeout = %v, IdleTimeout = %v; want both set", srv.ReadHeaderTimeout, srv.IdleTimeout)
 	}
 }
