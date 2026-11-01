@@ -77,7 +77,7 @@ jobs:
           echo "$files" | scripts/ci-changes.sh | tee -a "$GITHUB_OUTPUT"
 
   go:
-    name: go (vet, test, build)
+    name: go (vet, test, build, smoke tests)
     needs: changes
     runs-on: ubuntu-latest
     steps:
@@ -114,9 +114,26 @@ jobs:
         with:
           go-version-file: web/go.mod
           cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
       - name: JavaScript syntax
-        run: node --check sites/play/app.js
+        run: node --check sites/play/app.js && node --check sites/play/format.js
+      - name: Unit tests for the page's helpers
+        # Number and date formats follow the locale and zone; the tests expect these.
+        env:
+          LC_ALL: en_US.UTF-8
+          TZ: UTC
+        run: node --test tests/play/format.test.js
       - name: Smoke test the built server
+      # The site smoke tests share this job's checkout and Go toolchain
+      # rather than paying for their own runners, and run only when their
+      # scope changed.
+      - name: play.ryancaudill.dev JavaScript syntax
+        if: needs.changes.outputs.play == 'true'
+        run: node --check sites/play/app.js
+      - name: play.ryancaudill.dev smoke test
+        if: needs.changes.outputs.play == 'true'
         run: |
           (cd web && go build -o "$RUNNER_TEMP/play" ./cmd/play)
           mkdir -p "$RUNNER_TEMP/server"
@@ -125,13 +142,57 @@ jobs:
             -addr 127.0.0.1:8082 -paper 127.0.0.1:1 -lazymc 127.0.0.1:2 &
           for _ in $(seq 50); do curl -fs http://127.0.0.1:8082/ >/dev/null && break; sleep 0.1; done
           curl -fsS http://127.0.0.1:8082/ | grep -q '<title>play.ryancaudill.dev</title>'
-          for asset in /shared/base.css style.css app.js; do
-            grep -q "$asset" sites/play/index.html
+          for asset in /shared/base.css style.css app.js format.js; do
+            grep -q "$asset" sites/play/index.html sites/play/app.js
             curl -fsS -o /dev/null "http://127.0.0.1:8082/${asset#/}"
           done
           curl -fsS http://127.0.0.1:8082/api/status | grep -q '"state":"offline"'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/api/world)" = 503
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8082/api/status)" = 405
+
+  play-e2e:
+    name: play.ryancaudill.dev end-to-end
+    needs: changes
+    if: needs.changes.outputs.play == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/play/e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: web/go.mod
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install Playwright and Chromium
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Playwright tests
+        # Starts the fixture server (TestFixtureServer in web/cmd/play) itself.
+        run: npx playwright test
+      - name: Upload screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: play-screenshots
+          path: tests/play/e2e/screenshots/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload the report on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: play-e2e-report
+          path: |
+            tests/play/e2e/playwright-report/
+            tests/play/e2e/test-results/
+          retention-days: 14
 
   admin:
     name: admin.ryancaudill.dev and static sites
@@ -147,8 +208,11 @@ jobs:
           go-version-file: web/go.mod
           cache: false
       - name: JavaScript syntax
+      - name: admin.ryancaudill.dev JavaScript syntax
+        if: needs.changes.outputs.admin == 'true'
         run: node --check sites/admin/app.js
-      - name: Smoke test the admin server
+      - name: admin.ryancaudill.dev smoke test
+        if: needs.changes.outputs.admin == 'true'
         run: |
           (cd web && go build -o "$RUNNER_TEMP/admin" ./cmd/admin)
           apps=$(mktemp -d)
@@ -180,7 +244,8 @@ jobs:
           curl -fsS http://127.0.0.1:8081/api/status | grep -q '"state":"offline"'
           curl -fsS http://127.0.0.1:8081/api/deploy | grep -q '"active":""'
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8081/api/status)" = 405
-      - name: Smoke test each static site
+      - name: static sites smoke test
+        if: needs.changes.outputs.admin == 'true'
         run: |
           (cd web && go build -o "$RUNNER_TEMP/serve" ./cmd/serve)
           for site in portfolio; do
@@ -246,6 +311,8 @@ jobs:
         run: shellcheck scripts/*.sh
       - name: Change detection tests
         run: scripts/ci-changes_test.sh
+      - name: Release notes tests
+        run: scripts/release-notes_test.sh
       - name: Build a release and verify its units
         run: |
           scripts/build-release.sh ci-check "$RUNNER_TEMP/dist"
@@ -259,9 +326,11 @@ jobs:
           cp "$current"/deploy/systemd/{play.service,admin.service,mc-agent.service,mc-agent.timer} "$units/"
           for site in portfolio; do cp "$current/deploy/systemd/site@.service" "$units/site@$site.service"; done
           systemd-analyze --user --man=no verify "$units"/*
-          # Every unit and service the manifest names must be in the release.
+          # Every unit, service and timer the manifest names must be in the
+          # release, and the health checks must hit the ports the services
+          # listen on. Otherwise a typo only shows up as a failed deploy.
           python3 - "$current" <<'EOF'
-          import json, os, sys
+          import json, os, re, sys
           root = sys.argv[1]
           m = json.load(open(os.path.join(root, "deploy/release.json")))
           for unit in m["units"]:
@@ -269,6 +338,26 @@ jobs:
           for svc in m["services"]:
               template = svc.split("@")[0] + "@.service" if "@" in svc else svc
               assert template in m["units"], f"{svc} is not linked by units"
+          for timer in m["timers"]:
+              assert timer in m["units"], f"{timer} is not linked by units"
+          # site@<name>.service takes its address from deploy/sites/<name>.env;
+          # the others pass -addr on their ExecStart line.
+          ports = {}
+          for svc in m["services"]:
+              if "@" in svc:
+                  name = svc.split("@")[1].removesuffix(".service")
+                  path, pattern = f"deploy/sites/{name}.env", r"^ADDR=127\.0\.0\.1:(\d+)$"
+              else:
+                  path, pattern = f"deploy/systemd/{svc}", r"-addr 127\.0\.0\.1:(\d+)"
+              found = re.search(pattern, open(os.path.join(root, path)).read(), re.M)
+              assert found, f"{path} has no 127.0.0.1 address"
+              ports[svc] = int(found.group(1))
+          health = set()
+          for url in m["health"]:
+              found = re.match(r"http://127\.0\.0\.1:(\d+)/", url)
+              assert found, f"health check {url} is not on 127.0.0.1"
+              health.add(int(found.group(1)))
+          assert health == set(ports.values()), f"health ports {sorted(health)} != service ports {ports}"
           print("release.json OK")
           EOF
 
@@ -276,7 +365,8 @@ jobs:
   # because nothing in their scope changed count as passing.
   ci-ok:
     name: ci-ok
-    needs: [changes, go, play, admin, mc-server, infra]
+    needs: [changes, go, play, play-e2e, admin, mc-server, infra]
+    needs: [changes, go, mc-server, infra]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -305,10 +395,12 @@ jobs:
     environment: production
     permissions:
       contents: write # create the release and its tag
+      pull-requests: read # get info for release notes from PRs in release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # read merged PRs
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: web/go.mod
@@ -321,8 +413,19 @@ jobs:
           last=$(gh release list --limit 200 --json tagName \
             --jq '[.[].tagName | select(test("^r[0-9]+$")) | ltrimstr("r") | tonumber] | max // 0')
           echo "tag=r$((last + 1))" | tee -a "$GITHUB_OUTPUT"
+      - name: Release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # Without pipefail, a failing release-changes.sh is hidden.
+          set -o pipefail
+          scripts/release-changes.sh | scripts/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.json"
+          cat "$RUNNER_TEMP/notes.json"
       - name: Build
-        run: scripts/build-release.sh "${{ steps.tag.outputs.tag }}" dist
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: scripts/build-release.sh "$TAG" dist "$RUNNER_TEMP/notes.json"
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}

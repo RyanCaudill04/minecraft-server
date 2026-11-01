@@ -52,7 +52,6 @@
     --green: #30d158;
     --amber: #ffb340;
     --red: #ff453a;
-    --gray: #8e8e93;
 
     --accent-l: 64%;
   }
@@ -70,7 +69,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-h1, h2, h3 { margin: 0; letter-spacing: -0.02em; }
+h1, h2 { margin: 0; letter-spacing: -0.02em; }
 h1 { font-size: 1.75rem; font-weight: 700; }
 h2 { font-size: 1.25rem; font-weight: 650; }
 p { margin: 0; }
@@ -248,6 +247,7 @@ p { margin: 0; }
   letter-spacing: -0.03em;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .metric-unit { margin-left: 4px; color: var(--faint); font-size: 1.25rem; font-weight: 600; }
 .metric-sub { margin-top: auto; color: var(--muted); font-size: 0.8125rem; }
@@ -258,6 +258,14 @@ p { margin: 0; }
 @keyframes appear { from { transform: translateY(6px); opacity: 0; } }
 
 /* ---------- Responsive ---------- */
+
+/* Below this the status card is too narrow for the address and its button,
+   and the metric cards too narrow for values like "11:27 AM", in three
+   columns. Give the status card its own row. */
+@media (max-width: 1200px) {
+  .overview-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .status-card { grid-column: 1 / -1; }
+}
 
 /* Phones and narrow windows: the sidebar becomes a top bar. */
 @media (max-width: 900px) {
@@ -284,12 +292,12 @@ p { margin: 0; }
   .nav svg { display: none; }
   .content { padding: 24px 16px 72px; }
   html { scroll-padding-top: 110px; }
-  .overview-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .status-card { grid-column: 1 / -1; }
 }
 
+/* Two metric cards side by side leave ~115px for a value on small phones,
+   so shrink with the screen to keep "11:27 AM" on one line. */
 @media (max-width: 420px) {
-  .metric-value { font-size: 1.75rem; }
+  .metric-value { font-size: clamp(1.25rem, 7vw, 1.75rem); }
 }
 
 @media (prefers-reduced-motion: reduce) {

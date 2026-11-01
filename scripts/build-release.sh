@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Builds a release for the Pi: arm64 binaries, the static sites, and the
 # deploy files, packed as release.tar.gz plus a SHA-256 checksum file.
+# A notes file (from release-notes.sh) ships as deploy/notes.json.
 #
-# Usage: scripts/build-release.sh <tag> <output folder>
+# Usage: scripts/build-release.sh <tag> <output folder> [notes.json]
 set -euo pipefail
 
 tag=${1:?usage: build-release.sh <tag> <output folder>}
 out=${2:?usage: build-release.sh <tag> <output folder>}
+notes=${3:-}
 root=$(cd "$(dirname "$0")/.." && pwd)
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
@@ -21,14 +23,31 @@ mkdir -p "$stage/bin" "$out"
 )
 
 cp -R "$root/sites" "$stage/sites"
-mkdir -p "$stage/deploy"
-cp -R "$root/deploy/systemd" "$root/deploy/sites" "$root/deploy/release.json" "$stage/deploy/"
+mkdir -p "$stage/deploy/systemd"
+cp -R "$root/deploy/sites" "$root/deploy/release.json" "$stage/deploy/"
+# Only the units the manifest links. The others in deploy/systemd, like
+# minecraft.service, are linked from the server checkout instead.
+jq -r '.units[]' "$root/deploy/release.json" | while read -r unit; do
+  cp "$root/deploy/systemd/$unit" "$stage/deploy/systemd/"
+done
+if [ -n "$notes" ]; then
+  # Fail here, not on the Pi, if the notes aren't valid JSON.
+  jq -e . "$notes" >/dev/null || { echo "build-release: $notes is not valid JSON" >&2; exit 1; }
+  cp "$notes" "$stage/deploy/notes.json"
+fi
+# Nothing reads VERSION (mc-agent takes the tag from the current
+# symlink); it's there for a human looking inside an unpacked release.
 echo "$tag" > "$stage/VERSION"
 
 # Sorted names and fixed owners and times make the tarball reproducible.
-tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='2000-01-01 00:00Z' \
-  -C "$stage" -czf "$out/release.tar.gz" . 2>/dev/null \
-  || tar -C "$stage" -czf "$out/release.tar.gz" .   # BSD tar on macOS lacks those flags
+# Pick the tar flavor up front rather than falling back on any error, so
+# a real GNU tar failure (disk full, unreadable file) stops the build.
+if tar --version 2>/dev/null | grep -q GNU; then
+  tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='2000-01-01 00:00Z' \
+    -C "$stage" -czf "$out/release.tar.gz" .
+else # BSD tar on macOS lacks those flags, so its tarball isn't reproducible
+  tar -C "$stage" -czf "$out/release.tar.gz" .
+fi
 if command -v sha256sum >/dev/null; then
   (cd "$out" && sha256sum release.tar.gz > release.tar.gz.sha256)
 else # macOS
