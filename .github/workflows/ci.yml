@@ -198,6 +198,22 @@ jobs:
           assert cfg["public"]["address"].endswith(":25565"), cfg["public"]["address"]
           print("lazymc.toml OK")
           EOF
+      - name: Pinned server files match deploy/server.json
+        run: |
+          # Until the jars are untracked, the tracked copies must be the
+          # pinned ones. fetch-server.sh fails on any SHA-256 mismatch,
+          # including the Paperclip-patched jar under versions/.
+          tracked=$RUNNER_TEMP/tracked
+          mkdir -p "$tracked"
+          git ls-files -z server.jar 'plugins/*.jar' 'versions/*.jar' | xargs -0 cp --parents -t "$tracked"
+          scripts/fetch-server.sh --arch arm64 "$tracked"
+          for jar in $(git ls-files 'plugins/*.jar'); do
+            jq -e --arg p "$jar" 'any(.plugins[]; .path == $p)' deploy/server.json >/dev/null ||
+              { echo "::error::$jar is tracked but not pinned in deploy/server.json"; exit 1; }
+          done
+          # Every pinned URL still serves the pinned file.
+          mkdir -p "$RUNNER_TEMP/fresh"
+          scripts/fetch-server.sh --arch amd64 "$RUNNER_TEMP/fresh"
       - name: No secrets in tracked config
         run: |
           if git ls-files --error-unmatch server.properties >/dev/null 2>&1; then
@@ -232,6 +248,10 @@ jobs:
         run: scripts/ci-changes_test.sh
       - name: Release notes tests
         run: scripts/release-notes_test.sh
+      - name: Server fetch and migration tests
+        run: |
+          scripts/fetch-server_test.sh
+          scripts/migrate-server-dir_test.sh
       - name: Build a release and verify its units
         run: |
           scripts/build-release.sh ci-check "$RUNNER_TEMP/dist"

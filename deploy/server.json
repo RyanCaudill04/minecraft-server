@@ -1,0 +1,46 @@
+{
+  "minecraft": "26.2",
+  "java": 25,
+  "paper": {
+    "build": 132,
+    "path": "server.jar",
+    "url": "https://fill-data.papermc.io/v1/objects/5ab560a769c1ab413cb7f637dd0dc697974571f2db0a667cfbac511422e51b26/paper-26.2-132.jar",
+    "sha256": "5ab560a769c1ab413cb7f637dd0dc697974571f2db0a667cfbac511422e51b26",
+    "patched": {
+      "path": "versions/26.2/paper-26.2.jar",
+      "sha256": "0ce49f92d9dfb22d1a08b063cc383d48f5fbf07ff93fa28d92d16b93efe4a197"
+    }
+  },
+  "lazymc": {
+    "version": "0.2.11",
+    "path": "lazymc",
+    "builds": {
+      "arm64": {
+        "url": "https://github.com/timvisee/lazymc/releases/download/v0.2.11/lazymc-v0.2.11-linux-aarch64",
+        "sha256": "a2b80b32e0b2825a44a1bf79cf1c0f01fba2bf3e12af09e426379091e2945202"
+      },
+      "amd64": {
+        "url": "https://github.com/timvisee/lazymc/releases/download/v0.2.11/lazymc-v0.2.11-linux-x64-static",
+        "sha256": "5a4149570efe224c3d06ce9d1468b7bfd43eb569f1275fa5028ca32e43555758"
+      }
+    }
+  },
+  "plugins": [
+    {
+      "name": "Chunky",
+      "version": "1.5.3",
+      "source": "https://hangar.papermc.io/pop4959/Chunky",
+      "path": "plugins/Chunky-Bukkit-1.5.3.jar",
+      "url": "https://hangarcdn.papermc.io/plugins/pop4959/Chunky/versions/1.5.3/PAPER/Chunky-Bukkit-1.5.3.jar",
+      "sha256": "530d2c7430a96a39957391b7088be144daa3108f7665896d1c23aa8dd4af32f3"
+    },
+    {
+      "name": "ViaVersion",
+      "version": "5.12.0",
+      "source": "https://hangar.papermc.io/ViaVersion/ViaVersion",
+      "path": "plugins/ViaVersion-5.12.0.jar",
+      "url": "https://hangarcdn.papermc.io/plugins/ViaVersion/ViaVersion/versions/5.12.0/PAPER/ViaVersion-5.12.0.jar",
+      "sha256": "c4d512fa9760fa41d17abaedde12aa1f4c9bde920d0a992fe0fc016962f126be"
+    }
+  ]
+}
