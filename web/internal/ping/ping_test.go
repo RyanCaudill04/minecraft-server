@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,7 +36,11 @@ func fakeServer(t *testing.T, reply func(*bytes.Buffer)) (addr string, handshake
 				if err != nil {
 					return
 				}
-				got <- handshake
+				// Only the first handshake is read; don't block on later ones.
+				select {
+				case got <- handshake:
+				default:
+				}
 				if _, _, err := readPacket(r); err != nil { // status request
 					return
 				}
@@ -45,7 +50,9 @@ func fakeServer(t *testing.T, reply func(*bytes.Buffer)) (addr string, handshake
 				}
 				var body bytes.Buffer
 				reply(&body)
-				writePacket(conn, body.Bytes())
+				w := bufio.NewWriter(conn)
+				writePacket(w, body.Bytes())
+				w.Flush()
 			}()
 		}
 	}()
@@ -99,8 +106,7 @@ func TestStatusErrors(t *testing.T) {
 			writeVarInt(b, 0x05)
 			writeString(b, "{}")
 		},
-		"invalid JSON":    statusReply(`{"players": `),
-		"bad description": statusReply(`{"description": 42}`),
+		"invalid JSON": statusReply(`{"players": `),
 		"string length lies": func(b *bytes.Buffer) {
 			writeVarInt(b, 0x00)
 			writeVarInt(b, 1000) // claims 1000 bytes, sends 2
@@ -116,6 +122,41 @@ func TestStatusErrors(t *testing.T) {
 				t.Error("want an error")
 			}
 		})
+	}
+}
+
+// The MOTD is cosmetic, so an odd one must not fail a ping that brought
+// back the version and player counts.
+func TestStatusOddDescription(t *testing.T) {
+	for _, desc := range []string{`null`, `42`, `{"text": 1}`, `{"text": "a", "extra": [true, null, "b"]}`} {
+		addr, _ := fakeServer(t, statusReply(`{"players": {"online": 1}, "description": `+desc+`}`))
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		resp, err := Status(ctx, addr)
+		cancel()
+		if err != nil {
+			t.Errorf("description %s: %v", desc, err)
+			continue
+		}
+		if resp.Players.Online != 1 {
+			t.Errorf("description %s: Players.Online = %d, want 1", desc, resp.Players.Online)
+		}
+	}
+}
+
+// Only Status adds the "ping: " prefix, so it appears once.
+func TestStatusErrorPrefix(t *testing.T) {
+	addr, _ := fakeServer(t, func(b *bytes.Buffer) {
+		writeVarInt(b, 0x00)
+		b.Write([]byte{0x80, 0x80, 0x80, 0x80, 0x80, 0x01}) // 6-byte string length
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := Status(ctx, addr)
+	if !errors.Is(err, errVarIntTooLong) {
+		t.Fatalf("err = %v, want errVarIntTooLong", err)
+	}
+	if n := strings.Count(err.Error(), "ping:"); n != 1 {
+		t.Errorf("err = %q, want one \"ping:\" prefix", err)
 	}
 }
 
@@ -203,16 +244,16 @@ func TestComponentText(t *testing.T) {
 		{`[{"text": "x"}, "y"]`, "xy"},
 		{`"§7Server is sleeping"`, "§7Server is sleeping"},
 		{``, ""},
+		// Shapes that aren't text count as none, and keep the rest.
+		{`null`, ""},
+		{`42`, ""},
+		{`[1, "a", true]`, "a"},
+		{`{"text": 1, "extra": ["b"]}`, "b"},
+		{`{"text": "a", "extra": [null, {"text": false}, "c"]}`, "ac"},
 	}
 	for _, tt := range tests {
-		got, err := componentText([]byte(tt.json))
-		if err != nil || got != tt.want {
-			t.Errorf("componentText(%s) = %q, %v; want %q", tt.json, got, err, tt.want)
-		}
-	}
-	for _, bad := range []string{`42`, `{"text": 1}`, `[1]`} {
-		if _, err := componentText([]byte(bad)); err == nil {
-			t.Errorf("componentText(%s): want an error", bad)
+		if got := componentText([]byte(tt.json)); got != tt.want {
+			t.Errorf("componentText(%s) = %q, want %q", tt.json, got, tt.want)
 		}
 	}
 }
