@@ -232,6 +232,8 @@ jobs:
         run: scripts/ci-changes_test.sh
       - name: Release notes tests
         run: scripts/release-notes_test.sh
+      - name: Install script tests
+        run: scripts/install_test.sh
       - name: Build a release and verify its units
         run: |
           scripts/build-release.sh ci-check "$RUNNER_TEMP/dist"

@@ -6,7 +6,11 @@
 Description=play.ryancaudill.dev dashboard
 
 [Service]
-ExecStart=%h/apps/current/bin/play -dir %h/apps/current/sites/play -shared %h/apps/current/sites/shared -server %h/minecraft_server -addr 127.0.0.1:8082
+# Defaults, overridden by host.env (see deploy/host.example.env).
+Environment=SERVER_DIR=%h/minecraft_server
+Environment=PLAY_ADDR=127.0.0.1:8082
+EnvironmentFile=-%h/.config/minecraft/host.env
+ExecStart=%h/apps/current/bin/play -dir %h/apps/current/sites/play -shared %h/apps/current/sites/shared -server ${SERVER_DIR} -addr ${PLAY_ADDR}
 Restart=on-failure
 RestartSec=10
 
