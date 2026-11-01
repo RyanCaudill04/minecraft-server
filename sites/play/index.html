@@ -7,7 +7,9 @@
   <title>play.ryancaudill.dev</title>
   <link rel="stylesheet" href="/shared/base.css">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="live.css">
   <script src="app.js" defer></script>
+  <script src="live.js" defer></script>
 </head>
 <body>
   <div class="app">
@@ -21,6 +23,10 @@
         <a href="#overview">
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5"/><rect x="3" y="11" width="6" height="6" rx="1.5"/><rect x="11" y="11" width="6" height="6" rx="1.5"/></svg>
           Overview
+        </a>
+        <a href="#activity">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10h3.5l2-5 4 10 2-5h3.5"/></svg>
+          Activity
         </a>
         <a href="#players">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.2"/><path d="M3.5 17c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"/></svg>
@@ -77,6 +83,16 @@
             <p class="metric-sub" id="clock-sub">&nbsp;</p>
           </article>
         </div>
+      </section>
+
+      <section id="activity" class="section">
+        <header class="section-head">
+          <h2>Activity</h2>
+          <p class="muted" id="feed-sub">&nbsp;</p>
+        </header>
+        <article class="card feed-card">
+          <ol class="feed" id="feed"></ol>
+        </article>
       </section>
 
       <section id="players" class="section">
