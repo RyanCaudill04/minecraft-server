@@ -1,0 +1,18 @@
+# Backs up the Minecraft world (deploy/backup/mc-backup.sh). Run nightly by
+# mc-backup.timer; run one now with: systemctl --user start mc-backup
+#
+# Deliberately has no dependency on minecraft.service: a backup never
+# starts, stops or waits on the server, and a failed backup only shows up
+# here (journalctl --user -u mc-backup), never in the server's state.
+# Settings go in ~/.config/mc-backup.env (see the script's header).
+
+[Unit]
+Description=Back up the Minecraft world
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/mc-backup.env
+ExecStart=%h/apps/current/deploy/backup/mc-backup.sh
+# Stay out of Paper's way on the Pi.
+Nice=19
+IOSchedulingClass=idle
