@@ -62,7 +62,7 @@
   transition: transform 0.2s var(--ease), background 0.2s, border-color 0.2s;
 }
 .player-card:hover { transform: translateY(-2px); background: var(--card-hover); border-color: var(--accent-soft); }
-.player-card img, .head-fallback {
+.player-card img, .player-card .head-fallback {
   flex: none;
   width: 44px;
   height: 44px;

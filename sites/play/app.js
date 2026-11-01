@@ -343,13 +343,18 @@ function headURL(id, size) {
 
 // A player's skin head, or a blank tile if it's hidden or fails to load.
 function head(player, size) {
-  if (!player.id || player.id === ANONYMOUS_ID) return el("span", "head-fallback");
+  const fallback = () => {
+    const span = el("span", "head-fallback");
+    span.style.width = span.style.height = `${size}px`;
+    return span;
+  };
+  if (!player.id || player.id === ANONYMOUS_ID) return fallback();
   const img = el("img");
   img.src = headURL(player.id, size * 2);
   img.width = img.height = size;
   img.alt = "";
   img.loading = "lazy";
-  img.onerror = () => img.replaceWith(el("span", "head-fallback"));
+  img.onerror = () => img.replaceWith(fallback());
   return img;
 }
 
