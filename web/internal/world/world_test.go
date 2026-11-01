@@ -1,9 +1,12 @@
 package world_test
 
 import (
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,21 +37,41 @@ func TestReadInfo(t *testing.T) {
 	}
 }
 
-func TestReadInfoOptionalFiles(t *testing.T) {
-	server := worldtest.Build(t)
-	data := filepath.Join(server, "world", "dimensions", "minecraft", "overworld", "data", "minecraft")
-	for _, name := range []string{"world_clocks.dat", "weather.dat"} {
-		if err := os.Remove(filepath.Join(data, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
+// quietLog hides the package's log output for the rest of the test.
+func quietLog(t *testing.T) {
+	w := log.Writer()
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(w) })
+}
 
-	got, err := world.ReadInfo(filepath.Join(server, "world"))
-	if err != nil {
-		t.Fatalf("a world without clock or weather files: %v", err)
-	}
-	if got.Day != 0 || got.Raining {
-		t.Errorf("Day = %d, Raining = %v; want zero values", got.Day, got.Raining)
+// A missing, empty or corrupt clock or weather file leaves its fields at
+// zero, but the rest of the summary is still read.
+func TestReadInfoOptionalFiles(t *testing.T) {
+	quietLog(t)
+	for name, change := range map[string]func(path string) error{
+		"missing": os.Remove,
+		"empty":   func(path string) error { return os.WriteFile(path, nil, 0o644) },
+		"corrupt": func(path string) error { return os.WriteFile(path, []byte("not nbt"), 0o644) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := worldtest.Build(t)
+			for _, file := range []string{"world_clocks.dat", "weather.dat"} {
+				if err := change(filepath.Join(worldtest.DataDir(server), file)); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			got, err := world.ReadInfo(filepath.Join(server, "world"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Day != 0 || got.TimeOfDay != 0 || got.Raining {
+				t.Errorf("Day = %d, TimeOfDay = %d, Raining = %v; want zero values", got.Day, got.TimeOfDay, got.Raining)
+			}
+			if got.Name != "world" || got.AgeTicks != worldtest.AgeTicks {
+				t.Errorf("Name = %q, AgeTicks = %d; want level.dat still read", got.Name, got.AgeTicks)
+			}
+		})
 	}
 }
 
@@ -58,26 +81,22 @@ func TestReadInfoErrors(t *testing.T) {
 			t.Error("want an error")
 		}
 	})
-	t.Run("corrupt clock file", func(t *testing.T) {
+	t.Run("corrupt level.dat", func(t *testing.T) {
 		server := worldtest.Build(t)
-		path := filepath.Join(server, "world", "dimensions", "minecraft", "overworld", "data", "minecraft", "world_clocks.dat")
+		path := filepath.Join(server, "world", "level.dat")
 		if err := os.WriteFile(path, []byte("not nbt"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := world.ReadInfo(filepath.Join(server, "world")); err == nil {
-			t.Error("want an error")
+		_, err := world.ReadInfo(filepath.Join(server, "world"))
+		if err == nil || !strings.Contains(err.Error(), "level.dat") {
+			t.Errorf("error %v, want one naming level.dat", err)
 		}
 	})
 }
 
-func TestReadPlayers(t *testing.T) {
-	server := worldtest.Build(t)
-
-	got, err := world.ReadPlayers(server, filepath.Join(server, "world"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []world.Player{
+// wantPlayers is what ReadPlayers returns for worldtest.Build.
+func wantPlayers() []world.Player {
+	return []world.Player{
 		{
 			ID:        worldtest.BobID,
 			Name:      "Bob",
@@ -102,7 +121,16 @@ func TestReadPlayers(t *testing.T) {
 			Name: "33333333", // not in usercache.json; never seen
 		},
 	}
-	if !reflect.DeepEqual(got, want) {
+}
+
+func TestReadPlayers(t *testing.T) {
+	server := worldtest.Build(t)
+
+	got, err := world.ReadPlayers(server, filepath.Join(server, "world"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := wantPlayers(); !reflect.DeepEqual(got, want) {
 		t.Errorf("ReadPlayers:\n got %+v\nwant %+v", got, want)
 	}
 }
@@ -124,22 +152,47 @@ func TestReadPlayersWithoutUserCache(t *testing.T) {
 	}
 }
 
-func TestReadPlayersErrors(t *testing.T) {
-	corrupt := map[string]string{
-		"usercache.json":    "usercache.json",
-		"stats file":        filepath.Join("world", "players", "stats", worldtest.AliceID+".json"),
-		"advancements file": filepath.Join("world", "players", "advancements", worldtest.AliceID+".json"),
+// The server rewrites these files in place, so one can be empty or
+// half-written when it's read. That must only affect what the file holds,
+// not the whole list.
+func TestReadPlayersBadFiles(t *testing.T) {
+	quietLog(t)
+	players := filepath.Join("world", "players")
+	tests := []struct {
+		name string
+		rel  string // file to break, relative to the server folder
+		want func([]world.Player) []world.Player
+	}{
+		{"usercache.json", "usercache.json", func(ps []world.Player) []world.Player {
+			for i := range ps {
+				ps[i].Name = ps[i].ID[:8]
+			}
+			return ps
+		}},
+		{"stats file", filepath.Join(players, "stats", worldtest.CarolID+".json"), func(ps []world.Player) []world.Player {
+			return ps[:2] // Carol is skipped
+		}},
+		{"advancements file", filepath.Join(players, "advancements", worldtest.AliceID+".json"), func(ps []world.Player) []world.Player {
+			ps[1].Advancements = 0
+			return ps
+		}},
 	}
-	for name, rel := range corrupt {
-		t.Run(name, func(t *testing.T) {
-			server := worldtest.Build(t)
-			if err := os.WriteFile(filepath.Join(server, rel), []byte("{not json"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := world.ReadPlayers(server, filepath.Join(server, "world")); err == nil {
-				t.Error("want an error")
-			}
-		})
+	for _, tt := range tests {
+		for content, data := range map[string]string{"empty": "", "corrupt": "{not json"} {
+			t.Run(tt.name+" "+content, func(t *testing.T) {
+				server := worldtest.Build(t)
+				if err := os.WriteFile(filepath.Join(server, tt.rel), []byte(data), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				got, err := world.ReadPlayers(server, filepath.Join(server, "world"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if want := tt.want(wantPlayers()); !reflect.DeepEqual(got, want) {
+					t.Errorf("ReadPlayers:\n got %+v\nwant %+v", got, want)
+				}
+			})
+		}
 	}
 }
 
