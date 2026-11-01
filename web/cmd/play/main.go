@@ -11,7 +11,7 @@
 // they work while the server sleeps, and so does the map: squaremap writes
 // its tiles while Paper is awake and play serves them from disk.
 //
-// Usage: play -dir folder -shared folder -server folder [-map folder] [-map-players] [-addr host:port] [-paper host:port] [-lazymc host:port]
+// Usage: play -dir folder -shared folder -server folder [-map folder] [-addr host:port] [-paper host:port] [-lazymc host:port]
 package main
 
 import (
@@ -33,7 +33,7 @@ import (
 // newHandler routes the API and serves the static page from dir and the
 // shared files from sharedDir. World and player data are read from
 // serverDir, and the map from m.
-func newHandler(dir, sharedDir, serverDir string, m mapConfig, c *mcstatus.Checker) http.Handler {
+func newHandler(dir, sharedDir, serverDir, mapDir string, c *mcstatus.Checker) http.Handler {
 	worldDir := filepath.Join(serverDir, "world")
 	status := &site.Cache[mcstatus.Status]{MaxAge: 5 * time.Second, Load: c.Check}
 	worldInfo := &site.Cache[*world.Info]{MaxAge: 30 * time.Second, Load: func(context.Context) (*world.Info, error) {
@@ -47,7 +47,7 @@ func newHandler(dir, sharedDir, serverDir string, m mapConfig, c *mcstatus.Check
 	mux.HandleFunc("GET /api/status", site.JSON("play: status", status))
 	mux.HandleFunc("GET /api/world", site.JSON("play: world", worldInfo))
 	mux.HandleFunc("GET /api/players", site.JSON("play: players", players))
-	mux.Handle("GET /map/", http.StripPrefix("/map", mapHandler(m.Dir, m.Players)))
+	mux.Handle("GET /map/", http.StripPrefix("/map", mapHandler(mapDir)))
 	mux.Handle("GET /map", http.RedirectHandler("/map/", http.StatusMovedPermanently))
 	mux.Handle("GET /", site.Static(dir, sharedDir))
 	return mux
@@ -62,7 +62,6 @@ func main() {
 	lazymc := flag.String("lazymc", "127.0.0.1:25565", "LazyMC's address (answers while Paper sleeps)")
 	timeout := flag.Duration("timeout", 2*time.Second, "how long to wait for each ping")
 	mapDir := flag.String("map", "", "squaremap's web folder (default <server>/plugins/squaremap/web)")
-	mapPlayers := flag.Bool("map-players", false, "show players' live positions on the map")
 	flag.Parse()
 
 	if *dir == "" || *sharedDir == "" || *serverDir == "" {
@@ -78,17 +77,13 @@ func main() {
 			log.Fatalf("play: %s is not a directory", d)
 		}
 	}
-	m := mapConfig{Dir: *mapDir, Players: *mapPlayers}
-	if m.Dir == "" {
-		m.Dir = filepath.Join(*serverDir, "plugins", "squaremap", "web")
-	}
-	if m.Players {
-		log.Printf("play: the map shows players' live positions (-map-players)")
+	if *mapDir == "" {
+		*mapDir = filepath.Join(*serverDir, "plugins", "squaremap", "web")
 	}
 	c := &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status}
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandler(*dir, *sharedDir, *serverDir, m, c),
+		Handler:           newHandler(*dir, *sharedDir, *serverDir, *mapDir, c),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("serving %s and the API on http://%s", *dir, *addr)

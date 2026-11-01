@@ -54,8 +54,7 @@ func newTestServer(t *testing.T, responses map[string]*ping.Response, pings *ato
 		t.Fatal(err)
 	}
 	server := worldtest.Build(t)
-	m := mapConfig{Dir: filepath.Join(server, "plugins", "squaremap", "web")}
-	ts := httptest.NewServer(newHandler(dir, shared, server, m, fakeChecker(responses, pings)))
+	ts := httptest.NewServer(newHandler(dir, shared, server, filepath.Join(server, "plugins", "squaremap", "web"), fakeChecker(responses, pings)))
 	t.Cleanup(ts.Close)
 	return ts, server
 }

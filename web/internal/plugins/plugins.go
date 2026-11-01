@@ -29,16 +29,21 @@ import (
 // 1 to 8 MB; anything past 50 MB is refused rather than hashed.
 const MaxJarSize = 50 << 20
 
+// MaxJarEntries is the most files a jar may hold. The plugins here hold at
+// most about 5,000.
+const MaxJarEntries = 20000
+
 // maxDescriptor caps how much of plugin.yml is read, so a jar can't make
 // us inflate a huge file.
 const maxDescriptor = 64 << 10
 
 var (
-	ErrTooLarge  = errors.New("larger than 50 MB")
-	ErrNotJar    = errors.New("not a jar (zip) file")
-	ErrMod       = errors.New("a Fabric, Forge or NeoForge mod, not a Paper plugin; Paper can't load mods")
-	ErrNoPlugin  = errors.New("no plugin.yml or paper-plugin.yml")
-	ErrBadPlugin = errors.New("plugin.yml is missing name, version or main")
+	ErrTooLarge       = errors.New("larger than 50 MB")
+	ErrTooManyEntries = errors.New("holds more than 20,000 files")
+	ErrNotJar         = errors.New("not a jar (zip) file")
+	ErrMod            = errors.New("a Fabric, Forge or NeoForge mod, not a Paper plugin; Paper can't load mods")
+	ErrNoPlugin       = errors.New("no plugin.yml or paper-plugin.yml")
+	ErrBadPlugin      = errors.New("plugin.yml is missing name, version or main")
 )
 
 // Meta is what a jar's plugin.yml (or paper-plugin.yml) says about it.
@@ -63,23 +68,35 @@ func ReadMeta(r io.ReaderAt, size int64) (*Meta, error) {
 	if err != nil {
 		return nil, ErrNotJar
 	}
-	files := map[string]*zip.File{}
+	// The size cap doesn't bound the entry count, and each entry costs
+	// memory in zip.NewReader, so refuse jars with far more entries than a
+	// plugin has (ViaVersion has about 4,000, squaremap about 5,000).
+	if len(z.File) > MaxJarEntries {
+		return nil, ErrTooManyEntries
+	}
+	var paperYML, pluginYML *zip.File
+	mod := false
 	for _, f := range z.File {
-		files[f.Name] = f
+		switch {
+		case f.Name == "paper-plugin.yml":
+			paperYML = f
+		case f.Name == "plugin.yml":
+			pluginYML = f
+		case slices.Contains(modFiles, f.Name):
+			mod = true
+		}
 	}
 	// Paper prefers paper-plugin.yml when a jar has both.
-	f, paper := files["paper-plugin.yml"], true
+	f, paper := paperYML, true
 	if f == nil {
-		f, paper = files["plugin.yml"], false
+		f, paper = pluginYML, false
 	}
 	if f == nil {
 		// Some jars (ViaVersion) run on several loaders and hold both a
 		// plugin.yml and mod metadata, so a jar is only a mod if it has
 		// no plugin.yml.
-		for _, name := range modFiles {
-			if files[name] != nil {
-				return nil, ErrMod
-			}
+		if mod {
+			return nil, ErrMod
 		}
 		return nil, ErrNoPlugin
 	}

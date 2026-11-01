@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,6 +130,24 @@ func TestReadMetaRejects(t *testing.T) {
 	}
 	if _, err := ReadMeta(bytes.NewReader(nil), MaxJarSize+1); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("oversized jar: err %v, want ErrTooLarge", err)
+	}
+}
+
+// A small zip can hold a huge number of empty entries, which costs memory
+// to parse even though the file is under the size cap.
+func TestReadMetaEntryLimit(t *testing.T) {
+	many := func(n int) []byte {
+		files := map[string]string{"plugin.yml": squaremapYML}
+		for i := len(files); i < n; i++ {
+			files[fmt.Sprintf("e/%d", i)] = ""
+		}
+		return jar(t, files)
+	}
+	if _, err := meta(t, many(MaxJarEntries+1)); !errors.Is(err, ErrTooManyEntries) {
+		t.Errorf("%d entries: err %v, want ErrTooManyEntries", MaxJarEntries+1, err)
+	}
+	if _, err := meta(t, many(MaxJarEntries)); err != nil {
+		t.Errorf("%d entries: %v, want it read", MaxJarEntries, err)
 	}
 }
 

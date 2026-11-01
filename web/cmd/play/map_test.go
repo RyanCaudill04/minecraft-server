@@ -25,7 +25,7 @@ func writeFile(t *testing.T, dir, name, body string) {
 // newMapServer lays out a server folder with squaremap's web folder in it,
 // plus a secret next to it that must never be served, and returns play's
 // handler for it.
-func newMapServer(t *testing.T, showPlayers bool) (http.Handler, string) {
+func newMapServer(t *testing.T) (http.Handler, string) {
 	t.Helper()
 	server := t.TempDir()
 	web := filepath.Join(server, "plugins", "squaremap", "web")
@@ -35,7 +35,7 @@ func newMapServer(t *testing.T, showPlayers bool) (http.Handler, string) {
 	writeFile(t, web, "tiles/settings.json", `{"ui":{}}`)
 	writeFile(t, web, "tiles/players.json", `{"players":[{"name":"Steve","x":10,"z":20}],"max":20}`)
 	writeFile(t, web, "tiles/minecraft_overworld/3/0_0.png", "\x89PNG\r\n\x1a\nfake")
-	return newHandler(t.TempDir(), t.TempDir(), server, mapConfig{Dir: web, Players: showPlayers}, fakeChecker(nil, nil)), web
+	return newHandler(t.TempDir(), t.TempDir(), server, web, fakeChecker(nil, nil)), web
 }
 
 // get sends a GET for target, which may hold anything a client could put
@@ -47,7 +47,7 @@ func get(h http.Handler, target string) *httptest.ResponseRecorder {
 }
 
 func TestMapServesPageAndTiles(t *testing.T) {
-	h, _ := newMapServer(t, false)
+	h, _ := newMapServer(t)
 
 	tests := []struct {
 		path, body, cache string
@@ -82,7 +82,7 @@ func TestMapServesPageAndTiles(t *testing.T) {
 }
 
 func TestMapRedirectsToSlash(t *testing.T) {
-	h, _ := newMapServer(t, false)
+	h, _ := newMapServer(t)
 	rec := get(h, "/map")
 	if rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "/map/" {
 		t.Errorf("/map: %d to %q, want 301 to /map/", rec.Code, rec.Header().Get("Location"))
@@ -90,7 +90,7 @@ func TestMapRedirectsToSlash(t *testing.T) {
 }
 
 func TestMapMissingTile(t *testing.T) {
-	h, _ := newMapServer(t, false)
+	h, _ := newMapServer(t)
 	rec := get(h, "/map/tiles/minecraft_overworld/3/9_9.png")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("missing tile: status %d, want 404", rec.Code)
@@ -103,7 +103,7 @@ func TestMapMissingTile(t *testing.T) {
 
 func TestMapNotRenderedYet(t *testing.T) {
 	server := t.TempDir()
-	h := newHandler(t.TempDir(), t.TempDir(), server, mapConfig{Dir: filepath.Join(server, "nope")}, fakeChecker(nil, nil))
+	h := newHandler(t.TempDir(), t.TempDir(), server, filepath.Join(server, "nope"), fakeChecker(nil, nil))
 	for _, p := range []string{"/map/", "/map/tiles/minecraft_overworld/0/0_0.png"} {
 		rec := get(h, p)
 		if rec.Code != http.StatusNotFound {
@@ -116,7 +116,7 @@ func TestMapNotRenderedYet(t *testing.T) {
 }
 
 func TestMapStaysInsideItsFolder(t *testing.T) {
-	h, web := newMapServer(t, false)
+	h, web := newMapServer(t)
 
 	// A symlink inside the folder must not lead out of it.
 	if err := os.Symlink(filepath.Join(web, "..", "..", "..", "server.properties"), filepath.Join(web, "tiles", "link.png")); err != nil {
@@ -148,7 +148,7 @@ func TestMapStaysInsideItsFolder(t *testing.T) {
 }
 
 func TestMapNoListings(t *testing.T) {
-	h, web := newMapServer(t, false)
+	h, web := newMapServer(t)
 	for _, p := range []string{"/map/tiles/", "/map/tiles/minecraft_overworld/3/", "/map/assets/"} {
 		rec := get(h, p)
 		if rec.Code != http.StatusNotFound {
@@ -169,7 +169,7 @@ func TestMapNoListings(t *testing.T) {
 }
 
 func TestMapHidesPlayers(t *testing.T) {
-	h, _ := newMapServer(t, false)
+	h, _ := newMapServer(t)
 	for _, p := range []string{"/map/tiles/players.json", "/map/tiles/./players.json", "/map/tiles/Players.json"} {
 		rec := get(h, p)
 		if strings.Contains(rec.Body.String(), "Steve") {
@@ -183,15 +183,10 @@ func TestMapHidesPlayers(t *testing.T) {
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("players.json: Cache-Control %q, want no-store", got)
 	}
-
-	shown, _ := newMapServer(t, true)
-	if rec := get(shown, "/map/tiles/players.json"); !strings.Contains(rec.Body.String(), "Steve") {
-		t.Errorf("with -map-players: %q, want squaremap's file", rec.Body)
-	}
 }
 
 func TestMapIsReadOnly(t *testing.T) {
-	h, _ := newMapServer(t, false)
+	h, _ := newMapServer(t)
 	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(m, "/map/tiles/settings.json", strings.NewReader("x")))

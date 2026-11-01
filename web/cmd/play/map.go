@@ -15,7 +15,9 @@ const mapCSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self'
 	"frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 // noPlayers stands in for squaremap's tiles/players.json, so the map never
-// shows where anyone is unless -map-players is set.
+// shows where anyone is. Showing positions would need a filter by the
+// players' server-list consent (#113) and a CSP that allows squaremap's
+// player heads, so there is no switch for it yet.
 const noPlayers = `{"players":[],"max":0}` + "\n"
 
 // mapHandler serves squaremap's web folder (the page, its scripts and the
@@ -28,14 +30,14 @@ const noPlayers = `{"players":[],"max":0}` + "\n"
 // because squaremap rewrites one only when its area changes; everything
 // else is checked on every load, because squaremap replaces its page on
 // each update.
-func mapHandler(webDir string, showPlayers bool) http.Handler {
+func mapHandler(webDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", mapCSP)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 
-		if !showPlayers && strings.EqualFold(path.Clean(r.URL.Path), "/tiles/players.json") {
+		if strings.EqualFold(path.Clean(r.URL.Path), "/tiles/players.json") {
 			h.Set("Content-Type", "application/json")
 			h.Set("Cache-Control", "no-store")
 			w.Write([]byte(noPlayers))
@@ -83,11 +85,4 @@ func (f filesOnly) Open(name string) (fs.File, error) {
 		return nil, fs.ErrNotExist
 	}
 	return file, nil
-}
-
-// mapConfig says where squaremap's web folder is and whether to pass its
-// live player positions through.
-type mapConfig struct {
-	Dir     string
-	Players bool
 }

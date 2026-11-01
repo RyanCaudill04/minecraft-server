@@ -30,7 +30,16 @@ world-settings:
         max-chunks-per-interval: 256
         interval-seconds: 30
         max-render-threads: 1
+      # Only this area is rendered and published. Without a limit, a full
+      # render covers every generated chunk (all of a Chunky pregen), which
+      # costs disk and shows every build to anyone with the URL. Center it
+      # on spawn, and widen it when people build farther out.
+      visibility-limits:
+        - type: circle
+          center-x: 0
+          center-z: 0
+          radius: 5000
     # Live positions are visible to anyone with the URL, so they're off.
-    # play also hides tiles/players.json unless it runs with -map-players.
+    # play also always serves an empty tiles/players.json.
     player-tracker:
       enabled: false

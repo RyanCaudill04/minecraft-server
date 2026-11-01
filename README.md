@@ -55,9 +55,16 @@ so nothing new listens on the Pi.
   per region, so a 5,000-block-wide explored area (~100 regions) is about
   15–35 MB and a 20,000-block-wide one (~1,600 regions) is about 200–550 MB.
   `du -sh plugins/squaremap/web/tiles` shows the real number.
-- **Privacy:** live player positions are off in squaremap's config, and
-  play also answers `tiles/players.json` with an empty list unless it runs
-  with `-map-players`.
+- **Area:** `visibility-limits` in the config renders only a circle of
+  radius 5,000 blocks around 0,0 (~300 regions, at most about 40–100 MB).
+  Without it, a full render covers every generated chunk, including a whole
+  Chunky pregen. Move the center to spawn, and widen it as people build
+  farther out.
+- **Privacy:** every build inside the limit is visible to anyone with the
+  URL. Live player positions are off in squaremap's config, and play always
+  answers `tiles/players.json` with an empty list. Showing positions would
+  first need a filter for players who hide from the server list (#113) and
+  a CSP that allows squaremap's player heads.
 - To reset the map, stop Paper and delete `plugins/squaremap/web/tiles`.
 
 ## Plugins
