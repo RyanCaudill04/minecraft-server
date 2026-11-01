@@ -99,27 +99,28 @@
         <header class="section-head">
           <h2>Leaderboards</h2>
         </header>
-        <div class="segmented" role="tablist" id="board-tabs"></div>
+        <div class="segmented" role="group" aria-label="Leaderboard" id="board-tabs"></div>
         <article class="card board-card">
-          <ol class="board" id="board"></ol>
+          <ol class="board" id="board" aria-label="Leaderboard"></ol>
         </article>
       </section>
     </main>
   </div>
 
-  <div class="sheet-backdrop" id="backdrop" hidden></div>
-  <aside class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-name" hidden>
-    <button class="sheet-close" id="sheet-close" type="button" aria-label="Close">
-      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
-    </button>
-    <div class="sheet-head">
-      <img id="sheet-head" alt="" width="72" height="72">
-      <div>
-        <h2 id="sheet-name"></h2>
-        <p id="sheet-seen" class="muted"></p>
+  <dialog class="sheet" id="sheet" aria-labelledby="sheet-name">
+    <div class="sheet-body">
+      <button class="sheet-close" id="sheet-close" type="button" aria-label="Close" autofocus>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+      </button>
+      <div class="sheet-head">
+        <img id="sheet-head" alt="" width="72" height="72">
+        <div>
+          <h2 id="sheet-name"></h2>
+          <p id="sheet-seen" class="muted"></p>
+        </div>
       </div>
+      <dl class="sheet-stats" id="sheet-stats"></dl>
     </div>
-    <dl class="sheet-stats" id="sheet-stats"></dl>
-  </aside>
+  </dialog>
 </body>
 </html>
