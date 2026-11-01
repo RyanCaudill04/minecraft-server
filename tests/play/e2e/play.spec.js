@@ -34,7 +34,7 @@ async function open(page, state = "active") {
 
 test.describe("server states", () => {
   const cases = [
-    { state: "active", title: "Online", message: "The server is up. Jump in!", sub: "Alice" },
+    { state: "active", title: "Online", message: "The server is up. Jump in!", sub: "Alice and 1 other" },
     { state: "sleeping", title: "Sleeping", message: /^Asleep since 2:46\sAM\.$/, sub: "Last played 15h ago by Bob" },
     { state: "starting", title: "Starting up", message: "Almost ready. Try joining in a moment.", sub: "Last played 15h ago by Bob" },
     { state: "offline", title: "Offline", message: "The server is down right now. Check back later.", sub: "Last played 15h ago by Bob" },

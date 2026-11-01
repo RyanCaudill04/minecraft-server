@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,6 +211,9 @@ func TestTeamIssuer(t *testing.T) {
 		if got != want || ok != (want != "") {
 			t.Errorf("teamIssuer(%q) = %q, %v; want %q", in, got, ok, want)
 		}
+	}
+}
+
 // activate makes tag the active release in apps, as mc-agent would, and
 // writes its notes and applied record if they're given.
 func activate(t *testing.T, apps, tag, notes, applied string) {
