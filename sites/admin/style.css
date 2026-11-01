@@ -94,6 +94,41 @@ code {
 }
 .kind[data-kind="feature"] { --kind: var(--green); }
 .kind[data-kind="fix"]     { --kind: var(--amber); }
+/* Deploy outcomes and installed-release marks reuse the badge. */
+.kind[data-kind="success"],
+.kind[data-kind="active"]      { --kind: var(--green); }
+.kind[data-kind="rolled_back"] { --kind: var(--amber); }
+.kind[data-kind="failed"]      { --kind: var(--red); }
+
+/* The last deploy's result beside the installed releases. */
+.deploy-state {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.deploy-state .cell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 20px;
+  border-left: 1px solid var(--border);
+}
+.deploy-state .cell:first-child { padding-left: 0; border-left: 0; }
+.deploy-state .at { color: var(--muted); font-size: 0.75rem; }
+.deploy-error {
+  margin: 0;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.installed-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.installed-list li { display: flex; align-items: center; gap: 6px; }
 
 .changes { display: flex; flex-direction: column; gap: 10px; }
 .change-list { margin: 0; padding: 0; list-style: none; }
@@ -124,4 +159,6 @@ code {
   .release-strip .cell:nth-child(2) { padding-left: 0; border-left: 0; }
   .release-strip .cell:nth-child(3) { padding-left: 20px; border-left: 1px solid var(--border); }
   .release-strip .cell:nth-child(4) { padding-left: 0; border-left: 0; }
+  .deploy-state { grid-template-columns: minmax(0, 1fr); row-gap: 16px; }
+  .deploy-state .cell { padding-left: 0; border-left: 0; }
 }
