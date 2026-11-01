@@ -2,7 +2,6 @@
 # Reads changed file paths (one per line) on stdin and prints which CI
 # scopes they touch, as key=true|false lines for $GITHUB_OUTPUT.
 #
-#   go         always true: Go vet and unit tests are cheap and cached
 #   play       play.ryancaudill.dev: its command, its site, the shared
 #              stylesheet, or shared Go code
 #   admin      admin.ryancaudill.dev and the other static sites: admin,
@@ -43,5 +42,5 @@ if touched '^\.github/'; then
   play=true admin=true mc_server=true infra=true
 fi
 
-printf 'go=true\nplay=%s\nadmin=%s\nmc_server=%s\ninfra=%s\ndeploy=%s\n' \
+printf 'play=%s\nadmin=%s\nmc_server=%s\ninfra=%s\ndeploy=%s\n' \
   "$play" "$admin" "$mc_server" "$infra" "$deploy"
