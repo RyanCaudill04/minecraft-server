@@ -1,6 +1,7 @@
 // Package ping implements the Minecraft Java Edition Server List Ping
 // (status) protocol. It reports whether the server is reachable and what it
 // advertises, without logging in, so it never wakes a sleeping LazyMC proxy.
+// Wake is the one exception: it starts a login on purpose, to wake it.
 //
 // Protocol reference: https://minecraft.wiki/w/Java_Edition_protocol/Server_List_Ping
 package ping
@@ -119,19 +120,48 @@ func joinComponents(parts []json.RawMessage) (string, error) {
 // Status connects to addr ("host:port"), performs the handshake and status
 // request, and returns the decoded response.
 func Status(ctx context.Context, addr string) (*Response, error) {
+	var resp *Response
+	err := dial(ctx, addr, func(conn net.Conn, host string, port uint16) (err error) {
+		resp, err = exchange(conn, host, port)
+		return err
+	})
+	return resp, err
+}
+
+// Wake starts a login as name on addr and hangs up, which makes a sleeping
+// LazyMC start Paper. LazyMC starts it as soon as it reads the Login Start
+// packet, and carries on if the client leaves, so Wake doesn't wait for
+// Paper. Against Paper itself, or a LazyMC that's already awake, it's an
+// abandoned login and does nothing.
+func Wake(ctx context.Context, addr, name string) error {
+	return dial(ctx, addr, func(conn net.Conn, host string, port uint16) error {
+		w := bufio.NewWriter(conn)
+		if err := writePacket(w, handshakePacket(host, port, nextLogin)); err != nil {
+			return err
+		}
+		if err := writePacket(w, loginStartPacket(name)); err != nil {
+			return err
+		}
+		return w.Flush()
+	})
+}
+
+// dial connects to addr and runs talk on the connection, with the
+// context's deadline and cancellation applied to every read and write.
+func dial(ctx context.Context, addr string, talk func(conn net.Conn, host string, port uint16) error) error {
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
-		return nil, fmt.Errorf("ping: %w", err)
+		return fmt.Errorf("ping: %w", err)
 	}
 	port, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
-		return nil, fmt.Errorf("ping: invalid port %q: %w", portStr, err)
+		return fmt.Errorf("ping: invalid port %q: %w", portStr, err)
 	}
 
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("ping: %w", err)
+		return fmt.Errorf("ping: %w", err)
 	}
 	defer conn.Close()
 
@@ -143,26 +173,25 @@ func Status(ctx context.Context, addr string) (*Response, error) {
 	stop := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
 
-	resp, err := exchange(conn, host, uint16(port))
-	if err != nil {
+	if err := talk(conn, host, uint16(port)); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, fmt.Errorf("ping: %w", ctxErr)
+			return fmt.Errorf("ping: %w", ctxErr)
 		}
 		// The connection deadline is the context's deadline, so a read can
 		// time out a moment before the context itself reports expiry.
 		if _, ok := ctx.Deadline(); ok && errors.Is(err, os.ErrDeadlineExceeded) {
-			return nil, fmt.Errorf("ping: %w", context.DeadlineExceeded)
+			return fmt.Errorf("ping: %w", context.DeadlineExceeded)
 		}
-		return nil, fmt.Errorf("ping: %w", err)
+		return fmt.Errorf("ping: %w", err)
 	}
-	return resp, nil
+	return nil
 }
 
 // exchange sends the handshake and status request on conn and decodes the
 // status response.
 func exchange(conn net.Conn, host string, port uint16) (*Response, error) {
 	w := bufio.NewWriter(conn)
-	if err := writePacket(w, handshakePacket(host, port)); err != nil {
+	if err := writePacket(w, handshakePacket(host, port, nextStatus)); err != nil {
 		return nil, err
 	}
 	if err := writePacket(w, statusRequestPacket()); err != nil {
@@ -191,17 +220,35 @@ func exchange(conn net.Conn, host string, port uint16) (*Response, error) {
 	return &resp, nil
 }
 
-// handshakePacket builds the body of the Handshake packet (ID 0x00, next
-// state 1 = status).
-func handshakePacket(host string, port uint16) []byte {
+// The handshake's next state: status for a ping, login to wake LazyMC.
+const (
+	nextStatus = 1
+	nextLogin  = 2
+)
+
+// handshakePacket builds the body of the Handshake packet (ID 0x00).
+func handshakePacket(host string, port uint16, next int32) []byte {
 	// Writes to a bytes.Buffer cannot fail, so their errors are ignored.
 	var b bytes.Buffer
 	writeVarInt(&b, 0x00) // packet ID
-	writeVarInt(&b, -1)   // protocol version; -1 is conventional for status pings
+	// Protocol version: -1 is conventional for status pings, and LazyMC
+	// doesn't check it on a login either.
+	writeVarInt(&b, -1)
 	writeString(&b, host)
 	b.WriteByte(byte(port >> 8))
 	b.WriteByte(byte(port))
-	writeVarInt(&b, 1) // next state: status
+	writeVarInt(&b, next)
+	return b.Bytes()
+}
+
+// loginStartPacket builds the body of the Login Start packet (ID 0x00): the
+// player's name, then their UUID, which is left zero. Clients before 1.19
+// sent only the name; LazyMC reads the name and ignores the rest.
+func loginStartPacket(name string) []byte {
+	var b bytes.Buffer
+	writeVarInt(&b, 0x00)
+	writeString(&b, name)
+	b.Write(make([]byte, 16))
 	return b.Bytes()
 }
 
