@@ -11,7 +11,8 @@ systemd **user** units. Layout on the Pi:
 - `~/minecraft_server`: the server folder (LazyMC, Paper, `world/`, `logs/latest.log`)
 - `~/apps/releases/<tag>`: installed releases (tags `r1`, `r2`, ...)
 - `~/apps/current`: symlink to the active release; every unit runs from it
-- `~/apps/failed`: the tag of the last release that failed its deploy
+- `~/apps/failed`: the tag of the last release that failed its deploy,
+  until the next successful switch (deploy or manual rollback) removes it
 - `~/apps/active.json`: the active tag and when it was applied
 
 Units (from `deploy/systemd/` and `deploy/release.json`):
@@ -59,6 +60,8 @@ Why the newest release isn't active yet:
 - The timer hasn't fired (up to about 2 minutes after the release).
 - Its tag is in `~/apps/failed`: the deploy failed and was rolled back, and
   mc-agent won't retry that tag. Fix it in a PR; the next release deploys.
+  The marker only lasts until the next successful switch, so a manual
+  rollback clears it and the timer will try the failed tag again.
 - The CI/CD run didn't publish one: check `gh run list --branch main --limit 5`.
   Only changes under `web/`, `sites/`, `deploy/`, `scripts/build-release.sh`
   or `.github/workflows/` publish a release.
@@ -88,30 +91,52 @@ ssh mc-pi '~/apps/current/bin/mc-agent status'
 ```
 
 It does nothing if the newest release is already active or is the tag in
-`~/apps/failed`. If a deploy fails, mc-agent rolls back by itself and
-writes `~/apps/failed`.
+`~/apps/failed`. If a deploy fails, mc-agent rolls back to the release that
+was active before and writes `~/apps/failed`.
 
 ## Rollback (ask first)
 
+`mc-agent rollback` takes no tag. It activates the newest installed
+release in `~/apps/releases` (by folder time) that isn't the current one.
+After an automatic rollback that is usually the release that just failed,
+not an older good one. So work out the target before asking:
+
 ```bash
+ssh mc-pi 'readlink ~/apps/current; ls -t ~/apps/releases; cat ~/apps/failed 2>/dev/null'
+```
+
+The target is the first tag in the `ls -t` list that isn't the current one.
+
+- **If the target is the tag in `~/apps/failed`, don't run it.** It would
+  restart every service onto the release that already failed. Tell the
+  user, and suggest fixing forward in a PR instead. There is no command to
+  roll back to a chosen tag yet (#41).
+- Otherwise, name the target tag when you ask, and say that a successful
+  rollback **removes `~/apps/failed`**, so the timer will retry the newest
+  release, including one that failed.
+
+`rollback` re-enables and starts `mc-agent.timer` (every switch enables the
+release's timers), so the timer deploys the newest release again within
+about 2 minutes. To keep the rollback while a fix goes through a PR, stop
+the timer both before and after, and check nothing is mid-deploy. Name all
+four commands in the one ask:
+
+```bash
+ssh mc-pi 'systemctl --user stop mc-agent.timer; systemctl --user is-active mc-agent.service'  # expect inactive
 ssh mc-pi '~/apps/current/bin/mc-agent rollback'
+ssh mc-pi 'systemctl --user stop mc-agent.timer'      # the rollback started it again
 ssh mc-pi '~/apps/current/bin/mc-agent status'
 ```
 
-`rollback` activates the newest *other* installed release in
-`~/apps/releases` (by folder time), restarts the services and runs the
-health checks. It does not mark the newer release as failed, so the timer
-deploys the newest release again within about 2 minutes. To keep the
-rollback while a fix goes through a PR, also stop the timer (ask first),
-and start it again once the fix is released:
+`stop` leaves the timer enabled, so a reboot brings it back. Tell the user
+that, and start it again once the fix is released:
 
 ```bash
-ssh mc-pi 'systemctl --user stop mc-agent.timer'
 ssh mc-pi 'systemctl --user start mc-agent.timer'
 ```
 
-This describes `web/internal/deploy` on `main` today. Check it again if
-mc-agent's rollback has changed since.
+This describes `web/internal/deploy` on `main` today. Once #41 lands,
+follow whatever it adds instead.
 
 ## Minecraft server (ask first, only when nobody is online)
 

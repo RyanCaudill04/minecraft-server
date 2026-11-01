@@ -135,6 +135,9 @@ and push.
 
 - Address review comments with new commits; don't rewrite pushed history
   unless the user asks.
-- A stacked PR needs a rebase onto `main` after its base merges:
-  `git fetch origin && git rebase origin/main && git push --force-with-lease`
-  (only ever on your own branch).
+- A stacked PR needs a rebase onto `main` after its base merges. PRs are
+  squash-merged, so a plain `git rebase origin/main` replays the base
+  branch's commits again and conflicts. Replay only this branch's own
+  commits: `git fetch origin && git rebase --onto origin/main <base-branch>
+  && git push --force-with-lease` (only ever on your own branch, and with
+  `<base-branch>` still at the commit this branch was built on).

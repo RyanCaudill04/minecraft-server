@@ -37,5 +37,9 @@ func TestPreviewFixture(t *testing.T) {
 }
 EOF
 
-(cd "$root/web" && PLAY_PREVIEW_DEST="$dest" go test -count=1 -run '^TestPreviewFixture$' ./internal/world/worldtest/ >/dev/null)
+# go test prints failures on stdout, so keep it and show it if the run fails.
+if ! out=$(cd "$root/web" && PLAY_PREVIEW_DEST="$dest" go test -count=1 -run '^TestPreviewFixture$' ./internal/world/worldtest/ 2>&1); then
+  printf '%s\n' "$out" >&2
+  exit 1
+fi
 echo "synthetic server in $dest"
