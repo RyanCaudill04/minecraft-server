@@ -155,6 +155,21 @@ func TestAPIDeployDetails(t *testing.T) {
 			{"pr":90,"title":"Ship release notes","kind":"feature"},
 			{"pr":null,"title":"Direct push","kind":"other"}]}`,
 		`{"tag":"r7","applied_at":"2026-10-31T22:20:00Z"}`)
+	// r8 failed its health check and r7 was put back.
+	if err := os.MkdirAll(filepath.Join(apps, "releases", "r8"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(apps, "releases", "r7"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(apps, "failed"), []byte("r8\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result := `{"tag":"r8","outcome":"rolled_back","at":"2026-10-31T22:20:01Z","error":"health check failed","rolled_back_to":"r7"}`
+	if err := os.WriteFile(filepath.Join(apps, "result.json"), []byte(result), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	resp, err := http.Get(ts.URL + "/api/deploy")
 	if err != nil {
@@ -173,6 +188,12 @@ func TestAPIDeployDetails(t *testing.T) {
 		"changes": []any{
 			map[string]any{"pr": float64(90), "title": "Ship release notes", "kind": "feature"},
 			map[string]any{"title": "Direct push", "kind": "other"},
+		},
+		"failed":    "r8",
+		"installed": []any{"r8", "r7"},
+		"last_result": map[string]any{
+			"tag": "r8", "outcome": "rolled_back", "at": "2026-10-31T22:20:01Z",
+			"error": "health check failed", "rolled_back_to": "r7",
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -202,7 +223,7 @@ func TestAPIDeployWithoutDetails(t *testing.T) {
 			if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 				t.Fatal(err)
 			}
-			if want := map[string]any{"active": "r7"}; resp.StatusCode != http.StatusOK || !reflect.DeepEqual(got, want) {
+			if want := map[string]any{"active": "r7", "installed": []any{"r7"}}; resp.StatusCode != http.StatusOK || !reflect.DeepEqual(got, want) {
 				t.Errorf("/api/deploy = %d %v, want 200 %v", resp.StatusCode, got, want)
 			}
 		})

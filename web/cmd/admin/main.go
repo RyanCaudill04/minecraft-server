@@ -4,7 +4,8 @@
 //
 //	GET /api/status  active, sleeping, starting or offline, and who is online
 //	GET /api/deploy  the release mc-agent has active, what changed in it,
-//	                 and when it was released and applied
+//	                 when it was released and applied, the installed and
+//	                 failed releases, and the last deploy's result
 //
 // Usage: admin -dir folder -shared folder [-apps folder] [-addr host:port] [-paper host:port] [-lazymc host:port]
 package main
@@ -25,13 +26,16 @@ import (
 )
 
 // Deploy is the JSON body of GET /api/deploy. Releases built before notes
-// were added have only active and applied_at.
+// were added have no kind, changes or released_at.
 type Deploy struct {
 	Active     string          `json:"active"`        // release tag, or "" if none is active
 	Kind       string          `json:"kind,omitzero"` // feature, fix or other
 	Changes    []deploy.Change `json:"changes,omitzero"`
 	ReleasedAt time.Time       `json:"released_at,omitzero"` // when CI built it
 	AppliedAt  time.Time       `json:"applied_at,omitzero"`  // when mc-agent last switched to it
+	Failed     string          `json:"failed,omitzero"`      // a release mc-agent won't retry
+	Installed  []string        `json:"installed,omitzero"`   // newest first
+	LastResult *deploy.Result  `json:"last_result,omitzero"` // the last deploy's outcome
 }
 
 // newHandler routes the API and serves the static page from dir and the
@@ -44,25 +48,30 @@ func newHandler(dir, sharedDir, appsDir string, c *mcstatus.Checker) http.Handle
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", site.JSON("admin: status", status))
 	mux.HandleFunc("GET /api/deploy", func(w http.ResponseWriter, r *http.Request) {
-		// One readlink, so it's read fresh on every request.
-		active, err := agent.Current()
+		// A few small files, so it's read fresh on every request. agent has
+		// no API set, so this never calls GitHub.
+		s, err := agent.Status(r.Context())
 		if err != nil {
 			log.Printf("admin: deploy: %v", err)
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		res := Deploy{Active: active}
-		// The notes and applied time only add detail, so a problem with
-		// either still shows the active release.
+		for _, msg := range s.Warnings {
+			log.Printf("admin: deploy: %s", msg)
+		}
+		res := Deploy{
+			Active:     s.Active,
+			AppliedAt:  s.AppliedAt,
+			Failed:     s.Failed,
+			Installed:  s.Installed,
+			LastResult: s.LastResult,
+		}
+		// The notes only add detail, so a problem with them still shows
+		// the active release.
 		if n, err := agent.Notes(); err != nil {
 			log.Printf("admin: deploy notes: %v", err)
-		} else if n != nil && n.Tag == active {
+		} else if n != nil && n.Tag == s.Active {
 			res.Kind, res.Changes, res.ReleasedAt = n.Kind, n.Changes, n.ReleasedAt
-		}
-		if a, err := agent.LastApplied(); err != nil {
-			log.Printf("admin: deploy applied time: %v", err)
-		} else if a != nil {
-			res.AppliedAt = a.At
 		}
 		site.WriteJSON(w, "admin: deploy", res)
 	})

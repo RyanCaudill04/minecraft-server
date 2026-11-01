@@ -17,6 +17,7 @@ const STATES = {
 };
 
 const KINDS = { feature: "Feature", fix: "Bug fix", other: "Other" };
+const OUTCOMES = { success: "Succeeded", failed: "Failed", rolled_back: "Rolled back" };
 const REPO = "https://github.com/RyanCaudill04/minecraft-server";
 
 const data = { status: null, deploy: null };
@@ -103,8 +104,58 @@ function renderDeploy() {
     .map(([k, n]) => `${n} ${k}`)
     .join(" · ");
 
-
+  renderLastDeploy(d);
+  renderInstalled(d);
   renderChanges(d);
+}
+
+// The last deploy's outcome, e.g. "r8 Rolled back 5m ago", and its error.
+function renderLastDeploy(d) {
+  const r = d?.last_result;
+  $("deploy-last-tag").textContent = r ? r.tag : d ? "None yet" : "Unknown";
+  const outcome = $("deploy-last-outcome");
+  outcome.hidden = !r;
+  outcome.dataset.kind = r?.outcome ?? "";
+  outcome.textContent = r ? (OUTCOMES[r.outcome] ?? r.outcome) : "";
+  $("deploy-last-at").textContent = r ? fmtAgo(r.at) : "";
+  $("deploy-last-at").title = r ? new Date(r.at).toLocaleString() : "";
+
+  let error = r?.error ?? "";
+  if (r?.rolled_back_to) error = `Back on ${r.rolled_back_to}. ${error}`;
+  $("deploy-last-error").textContent = error;
+  $("deploy-last-error").hidden = !error;
+}
+
+// Installed releases, newest first, marking the active and failed ones.
+let shownInstalled;
+function renderInstalled(d) {
+  const key = JSON.stringify([d?.installed, d?.active, d?.failed]);
+  if (key === shownInstalled) return;
+  shownInstalled = key;
+
+  const tags = d?.installed ?? [];
+  const items = tags.map((tag) => {
+    const li = document.createElement("li");
+    const code = document.createElement("code");
+    code.textContent = tag;
+    li.append(code);
+    const mark = tag === d.active ? "active" : tag === d.failed ? "failed" : "";
+    if (mark) {
+      const badge = document.createElement("span");
+      badge.className = "kind";
+      badge.dataset.kind = mark;
+      badge.textContent = mark === "active" ? "Active" : "Failed";
+      li.append(badge);
+    }
+    return li;
+  });
+  if (!items.length) {
+    const li = document.createElement("li");
+    li.className = "muted";
+    li.textContent = d ? "None" : "Unknown";
+    items.push(li);
+  }
+  $("deploy-installed").replaceChildren(...items);
 }
 
 // Shows a release's or change's kind as a badge, or hides it.
