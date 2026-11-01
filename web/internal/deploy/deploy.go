@@ -128,6 +128,14 @@ type Deployer struct {
 	HealthTimeout time.Duration // how long each health URL may take to answer 200
 	Keep          int           // installed releases to keep, at least 2
 	Log           *log.Logger
+
+	// Provenance checks each release's attestation before its tarball is
+	// downloaded. Nil skips the check; mc-agent always sets it.
+	Provenance Provenance
+	// UnattestedBefore, a tag like r12, lets releases numbered below it
+	// that have no attestation install with a warning. Empty refuses every
+	// release without one. A release that has one is always checked.
+	UnattestedBefore string
 }
 
 func (d *Deployer) releasesDir() string { return filepath.Join(d.Apps, "releases") }
@@ -265,6 +273,9 @@ func (d *Deployer) Install(ctx context.Context, rel *Release) error {
 	}
 	want, err := d.fetchChecksum(ctx, sumURL)
 	if err != nil {
+		return err
+	}
+	if err := d.checkProvenance(ctx, rel, want); err != nil {
 		return err
 	}
 

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ryancaudill04/minecraft-server/web/internal/deploy"
+	"github.com/ryancaudill04/minecraft-server/web/internal/provenance"
 )
 
 // version is set at build time with -ldflags "-X main.version=<tag>".
@@ -33,6 +34,8 @@ func main() {
 	apps := flag.String("apps", filepath.Join(home, "apps"), "folder for installed releases")
 	units := flag.String("units", filepath.Join(home, ".config", "systemd", "user"), "systemd user unit folder")
 	api := flag.String("api", "https://api.github.com", "GitHub API base URL")
+	unattestedBefore := flag.String("unattested-before", "",
+		"install releases numbered below this tag (e.g. r12) that have no provenance attestation, with a warning; by default every release must have one")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: mc-agent [flags] deploy|rollback|status|version")
 		flag.PrintDefaults()
@@ -41,6 +44,9 @@ func main() {
 	if flag.NArg() != 1 {
 		flag.Usage()
 		os.Exit(2)
+	}
+	if *unattestedBefore != "" && !deploy.ValidCutoff(*unattestedBefore) {
+		log.Fatalf("mc-agent: -unattested-before must be a tag like r12, not %q", *unattestedBefore)
 	}
 
 	d := &deploy.Deployer{
@@ -53,6 +59,16 @@ func main() {
 		HealthTimeout: 20 * time.Second,
 		Keep:          5,
 		Log:           log.New(os.Stderr, "", 0), // journald adds timestamps
+
+		// Install only releases whose Sigstore provenance shows they were
+		// built by this repo's CI on main. See internal/provenance.
+		Provenance: &provenance.Verifier{
+			Repo:     *repo,
+			Workflow: ".github/workflows/ci.yml",
+			Ref:      "refs/heads/main",
+			CacheDir: filepath.Join(*apps, "sigstore"),
+		},
+		UnattestedBefore: *unattestedBefore,
 	}
 	if err := os.MkdirAll(*apps, 0o755); err != nil {
 		log.Fatalf("mc-agent: %v", err)
