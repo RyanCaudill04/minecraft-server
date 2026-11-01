@@ -1,0 +1,12 @@
+# Points the Minecraft address's A record at the current public IP. Run by
+# ddns.timer. Its settings (a Cloudflare API token, the zone ID and the
+# record name) come from the secrets file; without them it logs that it
+# isn't configured and exits cleanly.
+
+[Unit]
+Description=Update the Minecraft DNS record
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/minecraft/secrets.env
+ExecStart=%h/apps/current/bin/ddns

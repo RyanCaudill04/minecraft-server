@@ -1,0 +1,13 @@
+# Checks the public IP every 5 minutes. When nothing changed, a run costs
+# one Cloudflare API read, far under its rate limit.
+
+[Unit]
+Description=Keep the Minecraft DNS record on the current public IP
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target
