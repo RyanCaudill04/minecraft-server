@@ -4,7 +4,7 @@
   "timers": ["mc-agent.timer"],
   "health": [
     "http://127.0.0.1:8082/api/status",
-    "http://127.0.0.1:8081/api/status",
+    "http://127.0.0.1:8081/healthz",
     "http://127.0.0.1:8080/"
   ]
 }
