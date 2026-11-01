@@ -212,6 +212,90 @@ jobs:
             exit 1
           fi
 
+  paper-boot:
+    name: Paper boot test
+    needs: changes
+    if: needs.changes.outputs.mc_server == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Java version server.jar needs
+        id: jar
+        run: |
+          java=$(unzip -p server.jar version.json | jq -er .java_version)
+          echo "java=$java" | tee -a "$GITHUB_OUTPUT"
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: ${{ steps.jar.outputs.java }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: web/go.mod
+          cache: false
+      - name: Copy the server files to a scratch folder
+        run: |
+          server=$RUNNER_TEMP/server
+          mkdir -p "$server"
+          # The tracked server files, as on the Pi. versions/ and libraries/
+          # are made by Paperclip below.
+          cp -R server.jar start.sh eula.txt bukkit.yml spigot.yml commands.yml \
+            ops.json whitelist.json banned-ips.json banned-players.json config plugins "$server/"
+          cp server.properties.example "$server/server.properties"
+          # Don't report CI runs as the Pi's server to bStats.
+          sed -i 's/^enabled: true$/enabled: false/' "$server/plugins/bStats/config.yml"
+      # Paperclip downloads the Mojang server jar into cache/ and patches it.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/server/cache
+          key: paperclip-${{ hashFiles('server.jar') }}
+      - name: Install the Paper server files
+        working-directory: ${{ runner.temp }}/server
+        run: java -Dpaperclip.patchonly=true -jar server.jar
+      - name: Boot Paper, ping it and stop it
+        working-directory: ${{ runner.temp }}/server
+        env:
+          MC_HEAP: 2G
+        run: |
+          (cd "$GITHUB_WORKSPACE/web" && go build -o "$RUNNER_TEMP/mc-players" ./cmd/mc-players)
+          mkfifo console
+          ./start.sh <console >server.log 2>&1 &
+          pid=$!
+          exec 3>console
+          trap 'kill "$pid" 2>/dev/null || true; echo "--- server.log"; cat server.log' EXIT
+
+          echo "Waiting for Paper to start"
+          for _ in $(seq 600); do
+            grep -q 'Done ([0-9.]*s)! For help' server.log && break
+            kill -0 "$pid" 2>/dev/null || { echo "::error::Paper exited during startup"; exit 1; }
+            sleep 1
+          done
+          grep -q 'Done ([0-9.]*s)! For help' server.log || { echo "::error::Paper didn't finish starting"; exit 1; }
+
+          # Every plugin jar in plugins/ must have been enabled.
+          for jar in plugins/*.jar; do
+            name=$(unzip -p "$jar" paper-plugin.yml plugin.yml 2>/dev/null | sed -n 's/^name: *//p' | head -1 | tr -d "\"'\r")
+            test -n "$name" || { echo "::error::$jar has no plugin name"; exit 1; }
+            grep -q "\[$name\] Enabling $name" server.log || { echo "::error::plugin $name ($jar) was not enabled"; exit 1; }
+            echo "$name enabled"
+          done
+
+          "$RUNNER_TEMP/mc-players" -addr 127.0.0.1:25566 | tee ping.txt
+          grep -q '^0/[0-9]* online$' ping.txt
+
+          echo stop >&3
+          for _ in $(seq 120); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+          if kill -0 "$pid" 2>/dev/null; then echo "::error::Paper didn't stop"; exit 1; fi
+          wait "$pid" || { echo "::error::Paper exited with status $?"; exit 1; }
+
+          if grep -E '^\[[0-9:]+ (ERROR|FATAL)\]' server.log; then
+            echo "::error::Paper logged errors"
+            exit 1
+          fi
+          echo "Paper booted, answered a ping and stopped cleanly"
+
   infra:
     name: deploy files, scripts and workflows
     needs: changes
@@ -269,7 +353,7 @@ jobs:
   # because nothing in their scope changed count as passing.
   ci-ok:
     name: ci-ok
-    needs: [changes, go, play, admin, mc-server, infra]
+    needs: [changes, go, play, admin, mc-server, paper-boot, infra]
     if: always()
     runs-on: ubuntu-latest
     steps:
