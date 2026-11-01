@@ -41,7 +41,7 @@ func newTestServer(t *testing.T) (*httptest.Server, string) {
 			return nil, errors.New("connection refused")
 		},
 	}
-	ts := httptest.NewServer(newHandler(dir, shared, apps, t.TempDir(), c))
+	ts := httptest.NewServer(newHandler(&app{dir: dir, sharedDir: shared, appsDir: apps, serverDir: t.TempDir(), checker: c}))
 	t.Cleanup(ts.Close)
 	return ts, apps
 }

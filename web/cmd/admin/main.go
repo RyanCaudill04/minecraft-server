@@ -1,14 +1,23 @@
 // Command admin serves admin.ryancaudill.dev: the static page in -dir plus a
-// JSON API about the server and its deploys. Cloudflare Access sits in
-// front of it, and every request must also carry a valid Access token
-// (see package access); everything here is read-only for now.
+// JSON API about the server and its deploys, and controls for the server.
+// Cloudflare Access sits in front of it, and every request must also carry
+// a valid Access token (see package access).
 //
-//	GET /api/status  active, sleeping, starting or offline, and who is online
-//	GET /healthz     "ok", without a token, for mc-agent's health check
-//	GET /api/deploy  the release mc-agent has active, what changed in it,
-//	                 and when it was released and applied
-//	GET /api/plugins the jars in the server's plugins folder, checked
-//	                 against plugins/manifest.json
+//	GET  /healthz             "ok", without a token, for mc-agent's health check
+//	GET  /api/status          active, sleeping, starting or offline, who is
+//	                          online, and minecraft.service's systemd state
+//	GET  /api/deploy          the release mc-agent has active, what changed
+//	                          in it, and when it was released and applied
+//	GET  /api/plugins         the jars in the server's plugins folder, checked
+//	                          against plugins/manifest.json
+//	GET  /api/me              who is signed in and which controls they can use
+//	GET  /api/logs?lines=n    the end of Paper's latest.log
+//	POST /api/console         run {"command": "..."} over RCON
+//	POST /api/server/{action} start, stop or restart minecraft.service
+//
+// The last three need the user the Access token names. POSTs must also be
+// same-origin and carry the X-Admin-Request: 1 header, and each one is
+// logged with the user's email.
 //
 // The Access application is read from the environment: ACCESS_TEAM_DOMAIN
 // (e.g. myteam.cloudflareaccess.com) and ACCESS_AUD (its audience tag).
@@ -16,7 +25,11 @@
 // answers everything except /healthz with 503 until they're set. For local
 // development, -dev-user skips the token check instead.
 //
-// Usage: admin -dir folder -shared folder [-apps folder] [-server folder] [-addr host:port] [-paper host:port] [-lazymc host:port] [-dev-user email]
+// The RCON password is read from RCON_PASSWORD (set in
+// ~/.config/minecraft/secrets.env, which admin.service loads), never from a
+// flag. Without it the console is off.
+//
+// Usage: admin -dir folder -shared folder [-apps folder] [-server folder] [-addr host:port] [-paper host:port] [-lazymc host:port] [-rcon host:port] [-logs file] [-dev-user email]
 package main
 
 import (
@@ -28,13 +41,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ryancaudill04/minecraft-server/web/internal/access"
+	"github.com/ryancaudill04/minecraft-server/web/internal/control"
 	"github.com/ryancaudill04/minecraft-server/web/internal/deploy"
 	"github.com/ryancaudill04/minecraft-server/web/internal/mcstatus"
 	"github.com/ryancaudill04/minecraft-server/web/internal/ping"
 	"github.com/ryancaudill04/minecraft-server/web/internal/plugins"
+	"github.com/ryancaudill04/minecraft-server/web/internal/rcon"
 	"github.com/ryancaudill04/minecraft-server/web/internal/site"
 )
 
@@ -54,15 +70,44 @@ type Plugins struct {
 	Plugins  []plugins.Plugin `json:"plugins"`
 }
 
-// newHandler routes the API and serves the static page from dir and the
-// shared files from sharedDir. Deploy state is read from appsDir, the
-// folder mc-agent installs releases into, and plugins from serverDir.
-func newHandler(dir, sharedDir, appsDir, serverDir string, c *mcstatus.Checker) http.Handler {
-	status := &site.Cache[mcstatus.Status]{MaxAge: 5 * time.Second, Load: c.Check}
-	agent := &deploy.Deployer{Apps: appsDir}
+// Status is the JSON body of GET /api/status: the ping state, plus the
+// unit's systemd state when it can be read.
+type Status struct {
+	mcstatus.Status
+	Unit *control.State `json:"unit,omitempty"`
+}
+
+// app is everything the handlers need.
+type app struct {
+	dir, sharedDir, appsDir, serverDir string
+	checker                            *mcstatus.Checker
+	// control starts and stops the server; nil turns the controls off.
+	control control.Controller
+	// rcon runs a console command; nil when there's no RCON password.
+	rcon func(ctx context.Context, cmd string) (string, error)
+	// logPath is Paper's latest.log.
+	logPath string
+	// user returns the verified email of whoever sent r, or "" if there
+	// isn't one. Only a verified user may use the controls. It defaults to
+	// the email the Access check put on the request.
+	user func(r *http.Request) string
+
+	status   *site.Cache[Status]
+	unitErrs logOnce
+}
+
+// newHandler routes the API and serves the static page from a.dir and the
+// shared files from a.sharedDir. Deploy state is read from a.appsDir, the
+// folder mc-agent installs releases into, and plugins from a.serverDir.
+func newHandler(a *app) http.Handler {
+	if a.user == nil {
+		a.user = func(r *http.Request) string { return access.Email(r.Context()) }
+	}
+	a.status = &site.Cache[Status]{MaxAge: 5 * time.Second, Load: a.loadStatus}
+	agent := &deploy.Deployer{Apps: a.appsDir}
 	// Hashing every jar takes a moment on the Pi, and plugins change only
 	// on a restart, so the list is cached for a minute.
-	pluginDir := filepath.Join(serverDir, "plugins")
+	pluginDir := filepath.Join(a.serverDir, "plugins")
 	installed := &site.Cache[Plugins]{MaxAge: time.Minute, Load: func(context.Context) (Plugins, error) {
 		m, err := plugins.LoadManifest(filepath.Join(pluginDir, "manifest.json"))
 		if err != nil {
@@ -73,7 +118,7 @@ func newHandler(dir, sharedDir, appsDir, serverDir string, c *mcstatus.Checker) 
 	}}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/status", site.JSON("admin: status", status))
+	mux.HandleFunc("GET /api/status", site.JSON("admin: status", a.status))
 	mux.HandleFunc("GET /api/deploy", func(w http.ResponseWriter, r *http.Request) {
 		// One readlink, so it's read fresh on every request.
 		active, err := agent.Current()
@@ -90,16 +135,58 @@ func newHandler(dir, sharedDir, appsDir, serverDir string, c *mcstatus.Checker) 
 		} else if n != nil && n.Tag == active {
 			res.Kind, res.Changes, res.ReleasedAt = n.Kind, n.Changes, n.ReleasedAt
 		}
-		if a, err := agent.LastApplied(); err != nil {
+		if ap, err := agent.LastApplied(); err != nil {
 			log.Printf("admin: deploy applied time: %v", err)
-		} else if a != nil {
-			res.AppliedAt = a.At
+		} else if ap != nil {
+			res.AppliedAt = ap.At
 		}
 		site.WriteJSON(w, "admin: deploy", res)
 	})
 	mux.HandleFunc("GET /api/plugins", site.JSON("admin: plugins", installed))
-	mux.Handle("GET /", site.Static(dir, sharedDir))
+	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
+		site.WriteJSON(w, "admin: me", a.me(r))
+	})
+	mux.HandleFunc("GET /api/logs", a.signedIn(a.logs))
+	mux.Handle("POST /api/console", a.writes(a.console))
+	mux.Handle("POST /api/server/{action}", a.writes(a.serverAction))
+	mux.Handle("GET /", site.Static(a.dir, a.sharedDir))
 	return mux
+}
+
+func (a *app) loadStatus(ctx context.Context) (Status, error) {
+	s, err := a.checker.Check(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	res := Status{Status: s}
+	if a.control != nil {
+		st, err := a.control.State(ctx)
+		a.unitErrs.log("admin: unit state", err)
+		if err == nil {
+			res.Unit = &st
+		}
+	}
+	return res, nil
+}
+
+// logOnce logs an error when it first appears or changes, so a status
+// check every few seconds doesn't repeat it forever.
+type logOnce struct {
+	mu   sync.Mutex
+	last string
+}
+
+func (l *logOnce) log(name string, err error) {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if msg != l.last && msg != "" {
+		log.Printf("%s: %s", name, msg)
+	}
+	l.last = msg
 }
 
 // protect puts auth in front of h, except for /healthz: mc-agent's health
@@ -199,8 +286,13 @@ func main() {
 	paper := flag.String("paper", "127.0.0.1:25566", "Paper's address (answers only while awake)")
 	lazymc := flag.String("lazymc", "127.0.0.1:25565", "LazyMC's address (answers while Paper sleeps)")
 	timeout := flag.Duration("timeout", 2*time.Second, "how long to wait for each ping")
+	rconAddr := flag.String("rcon", "127.0.0.1:25575", "Paper's RCON address (answers only while awake)")
+	logPath := flag.String("logs", "", "Paper's log file (default: logs/latest.log in -server)")
 	devUser := flag.String("dev-user", "", "skip the Access token check and act as this email (local development only)")
 	flag.Parse()
+	if *logPath == "" {
+		*logPath = filepath.Join(*serverDir, "logs", "latest.log")
+	}
 
 	if *dir == "" || *sharedDir == "" {
 		fmt.Fprintln(os.Stderr, "admin: set -dir and -shared (e.g. -dir sites/admin -shared sites/shared)")
@@ -216,10 +308,31 @@ func main() {
 		}
 	}
 	auth := authFromEnv(*devUser)
-	c := &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status}
+
+	a := &app{
+		dir: *dir, sharedDir: *sharedDir, appsDir: *appsDir, serverDir: *serverDir,
+		checker: &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status},
+		logPath: *logPath,
+	}
+	if ctl, err := control.NewSystemd(control.Unit, nil); err != nil {
+		log.Fatalf("admin: %v", err)
+	} else {
+		a.control = ctl
+	}
+	// Read the password once and drop it from the environment, so
+	// systemctl and anything else admin runs never inherit it.
+	if pw := os.Getenv("RCON_PASSWORD"); pw != "" {
+		os.Unsetenv("RCON_PASSWORD")
+		a.rcon = func(ctx context.Context, cmd string) (string, error) {
+			return rcon.Run(ctx, *rconAddr, pw, cmd)
+		}
+	} else {
+		log.Printf("admin: RCON_PASSWORD isn't set, so the console is off; see deploy/secrets.example.env")
+	}
+
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           protect(newHandler(*dir, *sharedDir, *appsDir, *serverDir, c), auth),
+		Handler:           protect(newHandler(a), auth),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("serving %s and the API on http://%s", *dir, *addr)

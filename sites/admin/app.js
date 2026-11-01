@@ -1,6 +1,8 @@
 // admin.ryancaudill.dev: polls the admin API and renders the dashboard.
 // Updates only text and data-state, so polling never moves keyboard focus;
-// the list of changes is rebuilt only when the release changes.
+// the list of changes is rebuilt only when the release changes. The Server
+// and Console sections POST actions and commands; their output is only
+// ever set as text.
 
 const STATUS_MS = 10_000; // server state and who's online
 const DEPLOY_MS = 60_000; // the active release (changes a few times a day)
@@ -20,7 +22,7 @@ const STATES = {
 const KINDS = { feature: "Feature", fix: "Bug fix", other: "Other" };
 const REPO = "https://github.com/RyanCaudill04/minecraft-server";
 
-const data = { status: null, deploy: null, plugins: null };
+const data = { status: null, deploy: null, plugins: null, me: null };
 
 const PLUGIN_STATUS = {
   pinned: { label: "Pinned", note: "Matches the manifest." },
@@ -48,6 +50,7 @@ async function refreshStatus() {
     data.status = { state: "unknown", online: 0, max: 0, players: [] };
   }
   renderStatus();
+  renderUnit();
   tick();
 }
 
@@ -216,6 +219,245 @@ function renderPlugins() {
   );
 }
 
+// ---------- Server controls ----------
+
+// minecraft.service's systemd state. Paper's own state comes from the ping.
+const UNIT = {
+  active: {
+    title: "Running",
+    message: (s) =>
+      s.state === "active"
+        ? "LazyMC and Paper are up."
+        : s.state === "starting"
+          ? "LazyMC is up and Paper is starting."
+          : s.state === "sleeping"
+            ? "LazyMC is up. Paper sleeps until someone joins."
+            : "systemd says it's running, but LazyMC isn't answering pings yet.",
+  },
+  activating: { title: "Starting…", message: () => "systemd is starting LazyMC." },
+  deactivating: { title: "Stopping…", message: () => "Paper is saving the world. This can take a few minutes." },
+  inactive: { title: "Stopped", message: () => "LazyMC and Paper are off. Nobody can join until it's started." },
+  failed: { title: "Failed", message: () => "systemd gave up on it. Start it again, or check journalctl --user-unit minecraft." },
+  unknown: { title: "Unknown", message: () => "admin can't read the unit's state from systemd." },
+};
+
+const ACTIONS = {
+  start: { doing: "Starting the server…", done: "Asked systemd to start the server." },
+  stop: { doing: "Stopping the server…", done: "Asked systemd to stop the server. Paper saves first." },
+  restart: { doing: "Restarting the server…", done: "Asked systemd to restart the server. Paper saves first." },
+};
+
+const PENDING_MS = 2_000; // status poll while an action settles
+const PENDING_FOR = 60_000; // how long to poll that fast
+
+let pending = null; // the action being sent, if any
+let fastUntil = 0;
+
+// POSTs as JSON. The custom header is admin's CSRF check: another site
+// can't send it without a CORS preflight, which admin never allows.
+async function post(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", "X-Admin-Request": "1" },
+    body: JSON.stringify(body ?? {}),
+  });
+  let reply = {};
+  try {
+    reply = await res.json();
+  } catch {
+    // Not JSON: fall back to the status code.
+  }
+  if (!res.ok) throw new Error(reply.error || `HTTP ${res.status}`);
+  return reply;
+}
+
+async function refreshMe() {
+  try {
+    data.me = await getJSON("/api/me");
+  } catch (err) {
+    console.warn(err);
+    data.me = { control: false, console: false, locked: "Couldn't ask admin who you are." };
+  }
+  renderMe();
+  renderUnit();
+  renderConsole();
+}
+
+function renderMe() {
+  const me = data.me;
+  $("me-email").textContent = me.email || "Not verified";
+  $("me-sub").textContent = me.locked || "You can start, stop and restart the server and use its console.";
+}
+
+function renderUnit() {
+  const s = data.status;
+  const st = s?.unit?.active;
+  const key = !s ? "loading" : st in UNIT ? st : "unknown";
+  const info = UNIT[key] ?? { title: "Checking…", message: () => "One moment." };
+
+  const card = document.querySelector(".unit-card");
+  card.dataset.unit = key;
+  $("unit-title").textContent = info.title;
+  $("unit-message").textContent = info.message(s ?? {});
+
+  const can = data.me?.control && !pending;
+  const enabled = {
+    start: can && (st === "inactive" || st === "failed"),
+    stop: can && st === "active",
+    restart: can && st === "active",
+  };
+  for (const b of card.querySelectorAll("[data-action]")) {
+    const off = !enabled[b.dataset.action];
+    // Disabling the focused button would drop focus to the top of the
+    // page, so keep it on the card instead.
+    if (off && b === document.activeElement) card.focus();
+    b.disabled = off;
+  }
+}
+
+function setNote(text, isError = false) {
+  const note = $("server-note");
+  note.textContent = text;
+  note.classList.toggle("error", isError);
+}
+
+// Asks before stopping or restarting, and says who would be kicked off.
+function confirmAction(action) {
+  if (action === "start") return Promise.resolve(true);
+  const s = data.status;
+  const names = (s?.players ?? []).filter((p) => p.id !== ANONYMOUS_ID).map((p) => p.name);
+  let who = "Nobody is online.";
+  if (s?.online === 1) who = `${names[0] ?? "1 player"} is online and will be disconnected.`;
+  else if (s?.online > 1) who = `${s.online} players are online and will be disconnected.`;
+
+  const verb = action === "stop" ? "Stop" : "Restart";
+  $("confirm-title").textContent = `${verb} the server?`;
+  $("confirm-message").textContent =
+    action === "stop"
+      ? `${who} Nobody can join until it's started again.`
+      : `${who} Paper saves and LazyMC starts again.`;
+  $("confirm-ok").textContent = verb;
+
+  const dialog = $("confirm");
+  dialog.returnValue = "";
+  dialog.showModal();
+  return new Promise((resolve) =>
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok"), { once: true }),
+  );
+}
+
+async function runAction(action) {
+  if (pending || !(await confirmAction(action))) return;
+  pending = action;
+  renderUnit();
+  setNote(ACTIONS[action].doing);
+  try {
+    await post(`/api/server/${action}`);
+    setNote(ACTIONS[action].done);
+    fastUntil = Date.now() + PENDING_FOR;
+  } catch (err) {
+    setNote(err.message, true);
+  } finally {
+    pending = null;
+  }
+  await refreshStatus();
+  if (fastUntil > Date.now()) pollFast();
+}
+
+// Polls status every couple of seconds for a minute after an action, so
+// Stopping… and Stopped show up without waiting for the normal poll.
+let fastTimer;
+function pollFast() {
+  clearTimeout(fastTimer);
+  fastTimer = setTimeout(async () => {
+    if (document.hidden || Date.now() > fastUntil) return;
+    await refreshStatus();
+    pollFast();
+  }, PENDING_MS);
+}
+
+for (const b of document.querySelectorAll(".unit-card [data-action]")) {
+  b.addEventListener("click", () => runAction(b.dataset.action));
+}
+
+// ---------- Console ----------
+
+const LOG_MS = 5_000;
+const TRANSCRIPT_MAX = 20;
+
+let consoleBusy = false; // a command is running
+
+function renderConsole() {
+  const on = !!data.me?.console;
+  $("command").disabled = !on || consoleBusy;
+  $("command-run").disabled = !on || consoleBusy;
+  if (!on) {
+    $("console-empty").textContent = data.me?.locked ?? "Checking…";
+    $("log").textContent = data.me?.locked ?? "";
+    $("log-updated").textContent = "";
+  } else if (!$("transcript").children.length) {
+    $("console-empty").textContent = "Output appears here.";
+  }
+}
+
+// Adds one command and its output (or error) to the transcript, newest
+// first. Everything goes in as text.
+function addTranscript(cmd, text, isError) {
+  const li = document.createElement("li");
+  const head = document.createElement("div");
+  head.className = "cmd";
+  head.textContent = `/${cmd}`;
+  const out = document.createElement("pre");
+  out.className = isError ? "out error" : "out";
+  out.textContent = text || "(no output)";
+  li.append(head, out);
+  const list = $("transcript");
+  list.prepend(li);
+  while (list.children.length > TRANSCRIPT_MAX) list.lastChild.remove();
+  $("console-empty").hidden = true;
+}
+
+$("command-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = $("command");
+  const cmd = input.value.trim().replace(/^\//, "");
+  if (!cmd || consoleBusy) return;
+  consoleBusy = true;
+  renderConsole();
+  try {
+    const { output } = await post("/api/console", { command: cmd });
+    addTranscript(cmd, output, false);
+    input.value = "";
+  } catch (err) {
+    addTranscript(cmd, err.message, true);
+  } finally {
+    consoleBusy = false;
+    renderConsole();
+    input.focus();
+    refreshLogs();
+  }
+});
+
+async function refreshLogs() {
+  if (!data.me?.console) return;
+  let lines;
+  try {
+    ({ lines } = await getJSON("/api/logs?lines=200"));
+  } catch (err) {
+    console.warn(err);
+    $("log-updated").textContent = "Couldn't read the log.";
+    return;
+  }
+  const log = $("log");
+  // Stay pinned to the newest line unless the reader has scrolled up.
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+  const text = lines.length ? lines.join("\n") : "The log is empty. Paper writes it once it starts.";
+  if (log.textContent !== text) log.textContent = text;
+  if (atBottom) log.scrollTop = log.scrollHeight;
+  $("log-updated").textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
+}
+
 // ---------- Scroll spy ----------
 
 // Highlights the last section whose top has scrolled above a line 30% down
@@ -257,16 +499,20 @@ function start() {
   refreshStatus();
   refreshDeploy();
   refreshPlugins();
+  refreshMe().then(refreshLogs);
   timers = [
     setInterval(refreshStatus, STATUS_MS),
     setInterval(refreshDeploy, DEPLOY_MS),
     setInterval(refreshPlugins, PLUGINS_MS),
+    setInterval(refreshLogs, LOG_MS),
     setInterval(tick, 1000),
   ];
+  if (fastUntil > Date.now()) pollFast();
 }
 function stop() {
   timers.forEach(clearInterval);
   timers = [];
+  clearTimeout(fastTimer);
 }
 
 // Don't poll while the tab is in the background.

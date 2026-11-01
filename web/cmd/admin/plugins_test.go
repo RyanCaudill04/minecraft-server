@@ -48,7 +48,7 @@ func newPluginServer(t *testing.T) (*httptest.Server, string) {
 		t.Fatal(err)
 	}
 	c := &mcstatus.Checker{Timeout: time.Millisecond}
-	ts := httptest.NewServer(newHandler(t.TempDir(), t.TempDir(), t.TempDir(), server, c))
+	ts := httptest.NewServer(newHandler(&app{dir: t.TempDir(), sharedDir: t.TempDir(), appsDir: t.TempDir(), serverDir: server, checker: c}))
 	t.Cleanup(ts.Close)
 	return ts, dir
 }

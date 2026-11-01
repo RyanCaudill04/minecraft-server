@@ -16,7 +16,7 @@ trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/bin" "$out"
 (
   cd "$root/web"
-  for cmd in play admin serve mc-agent; do
+  for cmd in play admin serve mc-agent mc-rcon; do
     CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
       -ldflags "-s -w -X main.version=$tag" -o "$stage/bin/$cmd" "./cmd/$cmd"
   done

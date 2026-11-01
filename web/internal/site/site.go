@@ -39,6 +39,14 @@ func (c *Cache[T]) Get(ctx context.Context) (T, error) {
 	return c.value, c.err
 }
 
+// Reset makes the next Get load a fresh value, for when the caller knows
+// the cached one is out of date.
+func (c *Cache[T]) Reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fetched = time.Time{}
+}
+
 // JSON returns a handler that writes the cached value as JSON. name is
 // used in log messages.
 func JSON[T any](name string, c *Cache[T]) http.HandlerFunc {

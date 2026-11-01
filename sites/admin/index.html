@@ -81,14 +81,36 @@
           <h2>Server</h2>
           <p class="muted">Control the Minecraft server and its sleep state.</p>
         </header>
-        <article class="card planned">
-          <span class="eyebrow">Coming next</span>
-          <ul>
-            <li>Start, stop and restart <code>minecraft.service</code></li>
-            <li>LazyMC sleep state</li>
-          </ul>
-          <a href="https://github.com/RyanCaudill04/minecraft-server/issues/26">#26 Build the admin app</a>
-        </article>
+        <div class="grid server-grid">
+          <article class="card unit-card" data-unit="loading" aria-live="polite" tabindex="-1">
+            <span class="eyebrow"><span class="dot"></span><code>minecraft.service</code></span>
+            <h3 id="unit-title">Checking…</h3>
+            <p id="unit-message" class="muted">One moment.</p>
+            <div class="actions">
+              <button type="button" class="btn btn-secondary" data-action="start" disabled>Start</button>
+              <button type="button" class="btn btn-secondary" data-action="restart" disabled>Restart</button>
+              <button type="button" class="btn btn-danger" data-action="stop" disabled>Stop</button>
+            </div>
+            <p class="note" id="server-note" role="status"></p>
+          </article>
+
+          <article class="card metric access-card">
+            <span class="eyebrow">Signed in as</span>
+            <div class="access-value" id="me-email">–</div>
+            <p class="metric-sub" id="me-sub">&nbsp;</p>
+          </article>
+        </div>
+
+        <dialog class="card confirm" id="confirm" aria-labelledby="confirm-title">
+          <form method="dialog">
+            <h3 id="confirm-title"></h3>
+            <p class="muted" id="confirm-message"></p>
+            <div class="actions">
+              <button type="submit" class="btn btn-secondary" value="cancel" autofocus>Cancel</button>
+              <button type="submit" class="btn btn-danger" value="ok" id="confirm-ok"></button>
+            </div>
+          </form>
+        </dialog>
       </section>
 
       <section id="console" class="section">
@@ -96,14 +118,29 @@
           <h2>Console</h2>
           <p class="muted">Send commands over RCON and read recent log output.</p>
         </header>
-        <article class="card planned">
-          <span class="eyebrow">Coming next</span>
-          <ul>
-            <li>Run server commands</li>
-            <li>Recent log lines</li>
-          </ul>
-          <a href="https://github.com/RyanCaudill04/minecraft-server/issues/28">#28 RCON client and console</a>
-        </article>
+        <div class="grid console-grid">
+          <article class="card console-card">
+            <span class="eyebrow">Run a command</span>
+            <form class="command" id="command-form" autocomplete="off">
+              <label class="prompt">
+                <span aria-hidden="true">/</span>
+                <input id="command" name="command" type="text" maxlength="1446" spellcheck="false"
+                       placeholder="list" aria-label="Server command" disabled>
+              </label>
+              <button type="submit" class="btn btn-primary" id="command-run" disabled>Run</button>
+            </form>
+            <ol class="transcript" id="transcript" aria-live="polite"></ol>
+            <p class="muted" id="console-empty">Output appears here.</p>
+          </article>
+
+          <article class="card log-card">
+            <div class="log-head">
+              <span class="eyebrow">Recent log <code>logs/latest.log</code></span>
+              <span class="muted small" id="log-updated"></span>
+            </div>
+            <pre class="log" id="log" tabindex="0" aria-label="Recent log lines"></pre>
+          </article>
+        </div>
       </section>
 
       <section id="deploys" class="section">
