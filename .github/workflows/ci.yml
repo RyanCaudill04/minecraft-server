@@ -238,6 +238,10 @@ jobs:
         run: |
           scripts/build-release.sh ci-check "$RUNNER_TEMP/dist"
           (cd "$RUNNER_TEMP/dist" && sha256sum -c release.tar.gz.sha256)
+          # mc-agent must have this repo baked in, or a Pi without host.env
+          # can't deploy.
+          tar -xzOf "$RUNNER_TEMP/dist/release.tar.gz" ./bin/mc-agent | grep -qaF "$GITHUB_REPOSITORY" ||
+            { echo "mc-agent has no repo baked in"; exit 1; }
           # Unpack where the units expect it (%h/apps/current) and let
           # systemd check them, including that every program exists.
           current="$HOME/apps/current"

@@ -19,6 +19,13 @@ trap 'rm -rf "$stage"' EXIT
 repo=${GITHUB_REPOSITORY:-$(git -C "$root" remote get-url origin 2>/dev/null \
   | sed -nE 's#^(https://|ssh://git@|git@)github\.com[:/]([^/]+/[^/]+)$#\2#p' | sed 's/\.git$//' || true)}
 
+# In CI the repo must be known: a release without it can't deploy on a Pi
+# that has no host.env.
+if [ -z "$repo" ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
+  echo "build-release: no repo to bake into mc-agent (GITHUB_REPOSITORY is empty)" >&2
+  exit 1
+fi
+
 mkdir -p "$stage/bin" "$out"
 (
   cd "$root/web"
