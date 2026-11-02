@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Downloads the server files that deploy/server.json pins (Paper's
-# Paperclip jar, LazyMC and each plugin jar) into a server folder, and
-# checks every file's SHA-256.
+# Paperclip jar and LazyMC) and the plugin jars that plugins/manifest.json
+# pins into a server folder, and checks every file's SHA-256.
 #
 # Usage: scripts/fetch-server.sh [--arch arm64|amd64] [--replace] [--patch]
-#          [--manifest FILE] <server folder>
+#          [--manifest FILE] [--plugins FILE] <server folder>
 #
 # Safe to re-run: a file that's already there with the right SHA-256 is
 # left alone, and a missing one is downloaded, checked, then moved into
@@ -19,11 +19,13 @@
 # It needs the Java version the manifest names.
 #
 # --arch picks the LazyMC build; the default is this machine's.
+# Downloads are HTTPS only, redirects included.
 # Needs curl, jq, and sha256sum or shasum.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 manifest=$root/deploy/server.json
+plugins=$root/plugins/manifest.json
 arch='' replace=false patch=false target=''
 
 usage() { sed -n '6,7p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -32,9 +34,13 @@ die() { echo "fetch-server: $*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
   case $1 in
-    --arch | --manifest)
+    --arch | --manifest | --plugins)
       [ $# -ge 2 ] || bad "$1 needs a value"
-      if [ "$1" = --arch ]; then arch=$2; else manifest=$2; fi
+      case $1 in
+        --arch) arch=$2 ;;
+        --manifest) manifest=$2 ;;
+        --plugins) plugins=$2 ;;
+      esac
       shift 2
       ;;
     --replace) replace=true; shift ;;
@@ -51,6 +57,7 @@ done
 [ -n "$target" ] || bad "which server folder?"
 [ -d "$target" ] || die "$target isn't a folder"
 [ -f "$manifest" ] || die "no manifest at $manifest"
+[ -f "$plugins" ] || die "no plugin manifest at $plugins"
 for cmd in curl jq; do
   command -v "$cmd" >/dev/null || die "needs $cmd (e.g. sudo apt install $cmd)"
 done
@@ -75,11 +82,18 @@ rows=$(jq -r --arg arch "$arch" '
   (.paper | row("644")),
   (.lazymc as $l
     | ($l.builds[$arch] // error("the manifest has no LazyMC build for \($arch)"))
-    | .path = $l.path | row("755")),
-  (.plugins[] | row("644"))
+    | .path = $l.path | row("755"))
 ' "$manifest") || die "can't read $manifest"
-summary=$(jq -r --arg arch "$arch" \
-  '"Minecraft \(.minecraft), Paper build \(.paper.build), LazyMC \(.lazymc.version) (\($arch)), \(.plugins | length) plugins"' \
+# Admin reads plugins/manifest.json too; there a plugin is a file name in
+# plugins/ and its download URL is "source".
+plugin_rows=$(jq -r '
+  .plugins[]
+  | if (.file | test("^[^/]+\\.jar$")) then . else error("bad plugin file name: \(.file)") end
+  | ["plugins/\(.file)", .source, .sha256, "644"] | @tsv
+' "$plugins") || die "can't read $plugins"
+[ -z "$plugin_rows" ] || rows+=$'\n'$plugin_rows
+summary=$(jq -r --arg arch "$arch" --argjson n "$(jq '.plugins | length' "$plugins")" \
+  '"Minecraft \(.minecraft), Paper build \(.paper.build), LazyMC \(.lazymc.version) (\($arch)), \($n) plugins"' \
   "$manifest")
 patched_path=$(jq -r '.paper.patched.path // empty' "$manifest")
 patched_sha=$(jq -r '.paper.patched.sha256 // empty' "$manifest")
@@ -92,6 +106,10 @@ check_path() {
   esac
 }
 
+# file:// is only for fetch-server_test.sh, which has no network.
+protos='=https'
+[ -z "${FETCH_SERVER_ALLOW_FILE:-}" ] || protos='=https,file'
+
 failed=0
 tmp=''
 trap 'rm -f "$tmp"' EXIT
@@ -100,7 +118,8 @@ echo "$summary into $target"
 while IFS=$'\t' read -r path url sha mode; do
   check_path "$path"
   [[ $sha =~ ^[0-9a-f]{64}$ ]] || die "the manifest has a bad SHA-256 for $path: $sha"
-  [[ $url == https://* || $url == file://* ]] || die "the manifest has a non-https URL for $path: $url"
+  [[ $url == https://* || ($protos != =https && $url == file://*) ]] ||
+    die "the manifest has a non-https URL for $path: $url"
   dest=$target/$path
 
   if [ -f "$dest" ]; then
@@ -125,7 +144,7 @@ while IFS=$'\t' read -r path url sha mode; do
 
   mkdir -p "$(dirname "$dest")"
   tmp=$(mktemp "$dest.download.XXXXXX")
-  if ! curl -fsSL --retry 3 -o "$tmp" "$url"; then
+  if ! curl -fsSL --proto "$protos" --proto-redir "$protos" --retry 3 -o "$tmp" "$url"; then
     echo "  ERROR    $path: download failed from $url" >&2
     rm -f "$tmp"
     failed=$((failed + 1))
@@ -161,9 +180,12 @@ if [ -n "$patched_path" ] && [ "$failed" = 0 ]; then
   patched=$target/$patched_path
   have=''
   [ ! -f "$patched" ] || have=$(sha256 "$patched")
+  # A stale patched jar is what start.sh runs, so it's a failure unless
+  # this run re-makes it (--patch --replace), even after --replace
+  # upgraded server.jar.
   if [ "$have" = "$patched_sha" ]; then
     echo "  ok       $patched_path"
-  elif [ -n "$have" ] && ! $replace; then
+  elif [ -n "$have" ] && ! { $patch && $replace; }; then
     echo "  MISMATCH $patched_path: has $have, the manifest pins $patched_sha (--patch --replace to re-run Paperclip)" >&2
     failed=$((failed + 1))
   elif ! $patch; then
@@ -184,4 +206,4 @@ fi
 if [ "$failed" != 0 ]; then
   die "$failed file(s) failed; see above"
 fi
-echo "All pinned files match deploy/server.json."
+echo "All pinned files match deploy/server.json and plugins/manifest.json."

@@ -24,23 +24,5 @@
         "sha256": "5a4149570efe224c3d06ce9d1468b7bfd43eb569f1275fa5028ca32e43555758"
       }
     }
-  },
-  "plugins": [
-    {
-      "name": "Chunky",
-      "version": "1.5.3",
-      "source": "https://hangar.papermc.io/pop4959/Chunky",
-      "path": "plugins/Chunky-Bukkit-1.5.3.jar",
-      "url": "https://hangarcdn.papermc.io/plugins/pop4959/Chunky/versions/1.5.3/PAPER/Chunky-Bukkit-1.5.3.jar",
-      "sha256": "530d2c7430a96a39957391b7088be144daa3108f7665896d1c23aa8dd4af32f3"
-    },
-    {
-      "name": "ViaVersion",
-      "version": "5.12.0",
-      "source": "https://hangar.papermc.io/ViaVersion/ViaVersion",
-      "path": "plugins/ViaVersion-5.12.0.jar",
-      "url": "https://hangarcdn.papermc.io/plugins/ViaVersion/ViaVersion/versions/5.12.0/PAPER/ViaVersion-5.12.0.jar",
-      "sha256": "c4d512fa9760fa41d17abaedde12aa1f4c9bde920d0a992fe0fc016962f126be"
-    }
-  ]
+  }
 }

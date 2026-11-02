@@ -250,18 +250,17 @@ jobs:
           assert cfg["public"]["address"].endswith(":25565"), cfg["public"]["address"]
           print("lazymc.toml OK")
           EOF
-      - name: Pinned server files match deploy/server.json
+      - name: Pinned server files match deploy/server.json and plugins/manifest.json
         run: |
           # Until the jars are untracked, the tracked copies must be the
-          # pinned ones. fetch-server.sh fails on any SHA-256 mismatch,
-          # including the Paperclip-patched jar under versions/.
+          # pinned ones. fetch-server.sh fails on any SHA-256 mismatch.
           tracked=$RUNNER_TEMP/tracked
           mkdir -p "$tracked"
-          git ls-files -z server.jar 'plugins/*.jar' 'versions/*.jar' | xargs -0 cp --parents -t "$tracked"
+          git ls-files -z server.jar 'plugins/*.jar' | xargs -0 cp --parents -t "$tracked"
           scripts/fetch-server.sh --arch arm64 "$tracked"
           for jar in $(git ls-files 'plugins/*.jar'); do
-            jq -e --arg p "$jar" 'any(.plugins[]; .path == $p)' deploy/server.json >/dev/null ||
-              { echo "::error::$jar is tracked but not pinned in deploy/server.json"; exit 1; }
+            jq -e --arg f "${jar#plugins/}" 'any(.plugins[]; .file == $f)' plugins/manifest.json >/dev/null ||
+              { echo "::error::$jar is tracked but not pinned in plugins/manifest.json"; exit 1; }
           done
           # Every pinned URL still serves the pinned file.
           mkdir -p "$RUNNER_TEMP/fresh"

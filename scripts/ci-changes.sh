@@ -7,7 +7,8 @@
 #              tests/play, the shared stylesheet, or shared Go code
 #   admin      admin.ryancaudill.dev and the other static sites: admin,
 #              serve, their sites, the shared stylesheet, or shared Go code
-#   mc_server  the Minecraft server's own files (configs, jars, start.sh)
+#   mc_server  the Minecraft server's own files (configs, jars, start.sh),
+#              plus fetch-server.sh and mc-players, which its checks run
 #   infra      deploy files, scripts and workflows
 #   deploy     anything that ships in a release, so main publishes one.
 #              mc-players (a dev tool, #32) and deploy/server.json (read
@@ -39,7 +40,7 @@ play=false admin=false mc_server=false infra=false deploy=false
 
 touched "$shared|^web/cmd/play/|^sites/play/|^tests/play/" && play=true
 touched "$shared|^web/cmd/(admin|serve)/|^sites/(admin|portfolio)/" && admin=true
-touched '^(lazymc\.toml|start\.sh|server\.properties\.example|server\.jar|eula\.txt|bukkit\.yml|spigot\.yml|commands\.yml|ops\.json|whitelist\.json|banned-[a-z]+\.json)$|^(config|plugins|versions)/|^deploy/server\.json$' && mc_server=true
+touched '^(lazymc\.toml|start\.sh|server\.properties\.example|server\.jar|eula\.txt|bukkit\.yml|spigot\.yml|commands\.yml|ops\.json|whitelist\.json|banned-[a-z]+\.json)$|^(config|plugins|versions)/|^deploy/server\.json$|^scripts/fetch-server\.sh$|^web/cmd/mc-players/' && mc_server=true
 touched '^(deploy|scripts|\.github)/' && infra=true
 grep -qE '^(web|sites|deploy)/|^scripts/build-release\.sh$|^\.github/workflows/' <<<"$shipped" && deploy=true
 

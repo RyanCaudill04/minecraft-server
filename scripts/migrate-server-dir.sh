@@ -31,10 +31,20 @@
 # $SERVER_DIR, else ~/minecraft_server. With no options that's the same
 # folder as the checkout on the Pi, which is today's layout: nothing to do.
 #
-# --apply refuses to run while minecraft.service or this server's LazyMC is
+# A server folder other than ~/minecraft_server needs a minecraft.service
+# that reads SERVER_DIR (#107); until then --server-dir refuses one.
+#
+# --apply refuses to run while minecraft.service, LazyMC or Paper is
 # running, or if the server folder already has files in it. Before moving
-# anything it writes a backup of the world and the server's own files to
-# --backup-dir (default ~/backups/minecraft) and checks it can be read.
+# anything it writes a backup of the world (level-name in
+# server.properties, and any other folder with a level.dat) and the
+# server's own files to --backup-dir (default ~/backups/minecraft) and
+# checks it can be read.
+#
+# If --apply stops partway (a full disk, a permission problem, Ctrl-C), it
+# prints what's left, and the server folder keeps a .migrate-in-progress
+# note. Running it again with --checkout set to where the checkout is now
+# picks up where it stopped.
 set -euo pipefail
 
 # Entries that belong to the repo, not the server. Anything else at the
@@ -53,6 +63,30 @@ abs() {
     *) printf '%s/%s\n' "$(pwd)" "${1%/}" ;;
   esac
 }
+
+# canon prints a path made absolute with symlinks, "." and repeated
+# slashes resolved, so two spellings of one folder compare equal. Parts
+# that don't exist yet are kept as given.
+canon() {
+  local p parent
+  p=$(abs "$1")
+  if [ -d "$p" ]; then
+    (cd -P "$p" && pwd -P)
+  else
+    parent=$(canon "$(dirname "$p")")
+    printf '%s/%s\n' "${parent%/}" "$(basename "$p")"
+  fi
+}
+
+# level_name prints server.properties' level-name in folder $1, or world.
+level_name() {
+  local level=''
+  [ ! -f "$1/server.properties" ] ||
+    level=$(sed -n 's/^level-name=//p' "$1/server.properties" | tail -n 1 | tr -d '\r')
+  printf '%s\n' "${level:-world}"
+}
+
+marker_name=.migrate-in-progress
 
 is_repo_only() {
   local e
@@ -87,10 +121,12 @@ main() {
   done
 
   [ -d "$checkout/.git" ] || [ -f "$checkout/.git" ] || die "$checkout isn't a git checkout"
-  checkout=$(cd "$checkout" && pwd)
-  server_dir=$(abs "$server_dir")
-  [ -z "$new_checkout" ] || new_checkout=$(abs "$new_checkout")
+  checkout=$(cd -P "$checkout" && pwd -P)
+  server_dir=$(canon "$server_dir")
+  [ -z "$new_checkout" ] || new_checkout=$(canon "$new_checkout")
   [[ $server_dir$new_checkout != *[[:space:]]* ]] || die "paths with spaces aren't supported"
+  local home_server
+  home_server=$(canon "$HOME/minecraft_server")
 
   # Where the checkout's files are when the moves run.
   local src=$checkout
@@ -104,9 +140,27 @@ main() {
     return 0
   fi
   case $server_dir/ in "$src"/*) die "the server folder can't be inside the checkout" ;; esac
-  if [ "$server_dir" != "$checkout" ] && [ -e "$server_dir" ] &&
+
+  # A run that stopped partway left a note: line 1 is where the checkout
+  # was, line 2 where it went. Only that checkout may finish it.
+  local marker=$server_dir/$marker_name resume=false old_checkout=$checkout
+  if [ "$server_dir" != "$checkout" ] && [ -f "$marker" ]; then
+    [ -z "$new_checkout" ] || die "$server_dir has an unfinished migration; run again with --checkout $(sed -n 2p "$marker")"
+    [ "$(sed -n 2p "$marker")" = "$checkout" ] ||
+      die "$server_dir has an unfinished migration from $(sed -n 2p "$marker"), not $checkout"
+    resume=true
+    old_checkout=$(sed -n 1p "$marker")
+    echo "Resuming the migration that stopped partway (see $marker)."
+  elif [ "$server_dir" != "$checkout" ] && [ -e "$server_dir" ] &&
     [ -n "$(find "$server_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
     die "$server_dir already has files in it; this only moves into a new or empty folder"
+  fi
+
+  # minecraft.service on main runs ~/minecraft_server/lazymc; #107's reads
+  # SERVER_DIR from host.env.
+  local unit_link=$HOME/.config/systemd/user/minecraft.service
+  if [ "$server_dir" != "$home_server" ] && ! grep -qs 'SERVER_DIR' "$unit_link"; then
+    die "minecraft.service runs ~/minecraft_server, and the installed unit doesn't read SERVER_DIR (#107); use --move-checkout-to to keep the server folder at ~/minecraft_server"
   fi
 
   # Sort each top-level entry into keep, move or copy.
@@ -131,12 +185,15 @@ main() {
   [ ${#copy[@]} = 0 ] || printf '  copy  %s\n' "${copy[@]}"
   echo
 
-  local unit_link=$HOME/.config/systemd/user/minecraft.service unit_target=''
-  if [ -n "$new_checkout" ] && [ -L "$unit_link" ]; then
-    unit_target=$(readlink "$unit_link")
+  # The unit links into the checkout, so it moves with it.
+  local unit_target='' unit_new=''
+  if [ "$src" != "$old_checkout" ] && [ -L "$unit_link" ]; then
+    unit_target=$(canon "$(readlink "$unit_link")")
     case $unit_target in
-      "$checkout"/*) echo "  relink $unit_link -> $new_checkout/${unit_target#"$checkout"/}" ;;
-      *) unit_target='' ;;
+      "$old_checkout"/*)
+        unit_new=$src/${unit_target#"$old_checkout"/}
+        echo "  relink $unit_link -> $unit_new"
+        ;;
     esac
   fi
   if [ ${#move[@]} = 0 ] && [ ${#copy[@]} = 0 ]; then
@@ -152,23 +209,44 @@ main() {
   if command -v systemctl >/dev/null && systemctl --user is-active --quiet minecraft.service 2>/dev/null; then
     die "minecraft.service is running; stop it first: systemctl --user stop minecraft"
   fi
-  if command -v pgrep >/dev/null && pgrep -f "$checkout/lazymc" >/dev/null; then
-    die "LazyMC from $checkout is running; stop it first"
-  fi
-  if [ -e "$checkout/world/session.lock" ] && command -v fuser >/dev/null &&
-    fuser "$checkout/world/session.lock" >/dev/null 2>&1; then
-    die "something has $checkout/world/session.lock open; stop Paper first"
+  # Any LazyMC or Paper on this machine, including one started by hand.
+  if command -v pgrep >/dev/null; then
+    ! pgrep -x lazymc >/dev/null || die "LazyMC is running; stop it first"
+    ! pgrep -f org.bukkit.craftbukkit.Main >/dev/null || die "Paper is running; stop it first"
+  else
+    echo "warning: no pgrep, so this can't check that LazyMC and Paper are stopped" >&2
   fi
 
-  if $backup; then
-    # The world and the files the server owns: what can't be re-made.
-    local stamp archive saved=() f
+  # The worlds: level-name's three, and any other folder with a level.dat.
+  # Nothing has moved yet, so the files are still in $checkout.
+  local level worlds=() f
+  level=$(level_name "$checkout")
+  for f in "${move[@]}"; do
+    case $f in
+      "$level" | "${level}_nether" | "${level}_the_end") worlds+=("$f") ;;
+      *) [ ! -f "$checkout/$f/level.dat" ] || worlds+=("$f") ;;
+    esac
+  done
+  for f in "${worlds[@]}"; do
+    if [ -e "$checkout/$f/session.lock" ] && command -v fuser >/dev/null &&
+      fuser "$checkout/$f/session.lock" >/dev/null 2>&1; then
+      die "something has $checkout/$f/session.lock open; stop Paper first"
+    fi
+  done
+  if ! $resume && [ ! -d "$checkout/$level" ]; then
+    echo "warning: server.properties says level-name=$level, but there's no $level folder" >&2
+  fi
+
+  if $resume; then
+    echo "Not backing up again: the first run did, before it moved anything (see $backup_dir)."
+  elif $backup; then
+    # The worlds and the files the server owns: what can't be re-made.
+    local stamp archive saved=()
     stamp=$(date +%Y%m%d-%H%M%S)
     archive=$backup_dir/pre-migrate-$stamp.tar.gz
-    for f in "${move[@]}" ops.json whitelist.json banned-ips.json banned-players.json; do
-      case $f in world* | server.properties | usercache.json | ops.json | whitelist.json | banned-*.json)
-        [ -e "$checkout/$f" ] && saved+=("$f") ;;
-      esac
+    saved=("${worlds[@]}")
+    for f in server.properties usercache.json ops.json whitelist.json banned-ips.json banned-players.json; do
+      [ ! -e "$checkout/$f" ] || saved+=("$f")
     done
     if [ ${#saved[@]} -gt 0 ]; then
       mkdir -p "$backup_dir"
@@ -181,14 +259,21 @@ main() {
     fi
   fi
 
+  # If anything below fails, say how to finish. Nothing is deleted before
+  # it's in the server folder, so a re-run only has what's left to do.
+  # shellcheck disable=SC2064 # expand now: these locals are gone at exit
+  trap "on_exit '$src' '$server_dir'" EXIT
+
   if [ -n "$new_checkout" ]; then
     mkdir -p "$(dirname "$new_checkout")"
     echo "+ mv $checkout $new_checkout"
     mv "$checkout" "$new_checkout"
   fi
   mkdir -p "$server_dir"
+  printf '%s\n%s\n' "$old_checkout" "$src" >"$marker"
 
   for name in "${move[@]}"; do
+    [ ! -e "$server_dir/$name" ] || die "both $src/$name and $server_dir/$name exist; move one aside, then run again"
     echo "+ mv $src/$name $server_dir/"
     mv "$src/$name" "$server_dir/"
   done
@@ -202,16 +287,18 @@ main() {
     fi
   done
 
-  if [ -n "$unit_target" ]; then
-    ln -sfn "$new_checkout/${unit_target#"$checkout"/}" "$unit_link"
+  if [ -n "$unit_new" ]; then
+    ln -sfn "$unit_new" "$unit_link"
     echo "+ relinked $unit_link"
   fi
+  rm -f "$marker"
+  trap - EXIT
 
   echo
   echo "Done. Next:"
-  [ -z "$unit_target" ] || echo "  systemctl --user daemon-reload"
-  if [ "$server_dir" != "$HOME/minecraft_server" ]; then
-    echo "  set SERVER_DIR=$server_dir in ~/.config/minecraft/host.env (the units default to ~/minecraft_server)"
+  [ -z "$unit_new" ] || echo "  systemctl --user daemon-reload"
+  if [ "$server_dir" != "$home_server" ]; then
+    echo "  set SERVER_DIR=$server_dir in ~/.config/minecraft/host.env (the unit defaults to ~/minecraft_server)"
   fi
   echo "  systemctl --user start minecraft, then join and check the world"
   local dirty line
@@ -221,6 +308,16 @@ main() {
     while IFS= read -r line; do echo "    $line"; done <<<"$dirty"
     echo "  reset it with: git -C $src checkout -- . (only after checking the server folder)"
   fi
+}
+
+# on_exit <checkout> <server folder> runs if --apply stops partway.
+on_exit() {
+  {
+    echo
+    echo "migrate-server-dir: stopped partway. Nothing was deleted, and the backup is intact."
+    echo "Fix the error above, then finish with:"
+    echo "  $1/scripts/migrate-server-dir.sh --checkout $1 --server-dir $2 --apply"
+  } >&2
 }
 
 main "$@"

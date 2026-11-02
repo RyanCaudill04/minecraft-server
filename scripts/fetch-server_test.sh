@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for fetch-server.sh. Each case runs it against a made-up manifest
+# Tests for fetch-server.sh. Each case runs it against made-up manifests
 # whose URLs are local file:// paths, and a stand-in java for --patch, so
 # it needs no network and runs the same on a Mac and in CI.
 #
@@ -27,9 +27,13 @@ echo lazymc-amd >"$up/lazymc-amd64"
 echo plugin-a >"$up/a.jar"
 echo patched >"$up/patched.jar"
 
-# manifest <file> [jq filter applied to the good manifest]
+# manifest <file> [jq filter applied to the good manifests]
+# writes <file> (like deploy/server.json) and <file>.plugins (like
+# plugins/manifest.json). The filter sees both in one object, with the
+# plugin list as .plugins.
 manifest() {
-  jq -n --arg up "$up" \
+  local both
+  both=$(jq -n --arg up "$up" \
     --arg paper "$(sha256 "$up/paper.jar")" --arg arm "$(sha256 "$up/lazymc-arm64")" \
     --arg amd "$(sha256 "$up/lazymc-amd64")" --arg a "$(sha256 "$up/a.jar")" \
     --arg patched "$(sha256 "$up/patched.jar")" '{
@@ -39,9 +43,11 @@ manifest() {
       lazymc: {version: "0.1", path: "lazymc", builds: {
         arm64: {url: "file://\($up)/lazymc-arm64", sha256: $arm},
         amd64: {url: "file://\($up)/lazymc-amd64", sha256: $amd}}},
-      plugins: [{name: "A", version: "1", source: "x", path: "plugins/A-1.jar",
-                 url: "file://\($up)/a.jar", sha256: $a}]
-    }' | jq "${2:-.}" >"$1"
+      plugins: [{name: "A", version: "1", file: "A-1.jar",
+                 source: "file://\($up)/a.jar", sha256: $a}]
+    }' | jq "${2:-.}")
+  jq 'del(.plugins)' <<<"$both" >"$1"
+  jq '{plugins}' <<<"$both" >"$1.plugins"
 }
 good=$work/good.json
 manifest "$good"
@@ -56,7 +62,10 @@ cp "\${FAKE_PATCHED:-$up/patched.jar}" versions/1.0/paper-1.0.jar
 EOF
 chmod +x "$bin/java"
 
-fetch() { PATH="$bin:$PATH" "$dir/fetch-server.sh" --manifest "${mf:-$good}" "$@"; }
+fetch() {
+  FETCH_SERVER_ALLOW_FILE=1 PATH="$bin:$PATH" "$dir/fetch-server.sh" \
+    --manifest "${mf:-$good}" --plugins "${mf:-$good}.plugins" "$@"
+}
 
 # case <name>: a fresh server folder in $srv
 case_dir() { srv=$work/$1; mkdir -p "$srv"; }
@@ -119,9 +128,16 @@ unset mf
 
 case_dir unsafe
 mf="$work/unsafe.json"
-manifest "$mf" '.plugins[0].path = "plugins/../../escape.jar"'
+manifest "$mf" '.paper.path = "../escape.jar"'
 if fetch --arch arm64 "$srv" >/dev/null 2>&1; then fail "unsafe path: want a non-zero exit"; fi
 [ ! -e "$work/escape.jar" ] || fail "unsafe path: wrote outside the server folder"
+unset mf
+
+case_dir unsafeplugin
+mf="$work/unsafeplugin.json"
+manifest "$mf" '.plugins[0].file = "../../escape.jar"'
+if fetch --arch arm64 "$srv" >/dev/null 2>&1; then fail "unsafe plugin file: want a non-zero exit"; fi
+[ ! -e "$work/escape.jar" ] || fail "unsafe plugin file: wrote outside the server folder"
 unset mf
 
 case_dir http
@@ -129,6 +145,15 @@ mf="$work/http.json"
 manifest "$mf" '.paper.url = "http://example.com/paper.jar"'
 if fetch --arch arm64 "$srv" >/dev/null 2>&1; then fail "http url: want a non-zero exit"; fi
 unset mf
+
+# file:// URLs work only with the test override.
+case_dir fileurl
+if out=$(PATH="$bin:$PATH" "$dir/fetch-server.sh" --manifest "$good" --plugins "$good.plugins" \
+  --arch arm64 "$srv" 2>&1); then
+  fail "file url: want a non-zero exit without FETCH_SERVER_ALLOW_FILE"
+else
+  grep -q 'non-https URL' <<<"$out" || fail "file url: wrong error: $out"
+fi
 
 case_dir unlisted
 mkdir -p "$srv/plugins"
@@ -145,6 +170,19 @@ else
 fi
 out=$(fetch --arch arm64 --patch "$srv" 2>&1) || fail "patch rerun: exit $?"
 grep -q 'ok       versions/1.0/paper-1.0.jar' <<<"$out" || fail "patch rerun: want ok: $out"
+
+# --replace without --patch can't fix a stale patched jar, so it fails
+# instead of reporting that everything matches.
+case_dir stalepatch
+fetch --arch arm64 --patch "$srv" >/dev/null 2>&1 || fail "stale patch: setup failed"
+echo stale >"$srv/versions/1.0/paper-1.0.jar"
+if out=$(fetch --arch arm64 --replace "$srv" 2>&1); then
+  fail "stale patch: --replace without --patch should fail: $out"
+else
+  grep -q 'MISMATCH versions/1.0/paper-1.0.jar' <<<"$out" || fail "stale patch: no MISMATCH line: $out"
+fi
+out=$(fetch --arch arm64 --replace --patch "$srv" 2>&1) || fail "stale patch: --replace --patch: exit $?: $out"
+cmp -s "$srv/versions/1.0/paper-1.0.jar" "$up/patched.jar" || fail "stale patch: not re-patched"
 
 case_dir badpatch
 echo wrong >"$work/wrong.jar"
