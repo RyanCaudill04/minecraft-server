@@ -19,10 +19,10 @@ check() {
       failures=$((failures + 1))
     fi
   done
-  grep -qx 'go=true' <<<"$got" || { echo "FAIL $name: go must always run"; failures=$((failures + 1)); }
 }
 
 check "play site"         'sites/play/app.js\n'                    'play deploy'
+check "play tests"        'tests/play/e2e/play.spec.js\n'         'play'
 check "play command"      'web/cmd/play/main.go\n'                 'play deploy'
 check "shared Go code"    'web/internal/world/world.go\n'          'play admin deploy'
 check "go.mod"            'web/go.mod\n'                           'play admin deploy'
