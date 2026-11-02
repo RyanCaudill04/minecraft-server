@@ -1,13 +1,13 @@
 # Template user unit for the static sites. The instance name is the site:
 # site@portfolio.service serves sites/portfolio on the address in deploy/sites/portfolio.env.
-# Installed by mc-agent from the active release (~/apps/current).
+# Installed by mc-agent from the active release (~/apps/sites/current).
 
 [Unit]
 Description=Static site %i
 
 [Service]
-EnvironmentFile=%h/apps/current/deploy/sites/%i.env
-ExecStart=%h/apps/current/bin/serve -dir %h/apps/current/sites/%i -addr ${ADDR}
+EnvironmentFile=%h/apps/sites/current/deploy/sites/%i.env
+ExecStart=%h/apps/sites/current/bin/serve -dir %h/apps/sites/current/sites/%i -addr ${ADDR}
 Restart=on-failure
 RestartSec=10
 

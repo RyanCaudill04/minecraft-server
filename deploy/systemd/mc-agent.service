@@ -5,4 +5,4 @@ Description=Deploy the latest web app release
 
 [Service]
 Type=oneshot
-ExecStart=%h/apps/current/bin/mc-agent deploy
+ExecStart=%h/apps/agent/current/bin/mc-agent deploy

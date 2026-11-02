@@ -4,7 +4,8 @@
 //
 //	GET /api/status  active, sleeping, starting or offline, and who is online
 //	GET /api/deploy  the release mc-agent has active, what changed in it,
-//	                 and when it was released and applied
+//	                 and when it was released and applied; once the Pi
+//	                 runs one folder per track, the same for each track
 //
 // Usage: admin -dir folder -shared folder [-apps folder] [-addr host:port] [-paper host:port] [-lazymc host:port]
 package main
@@ -19,19 +20,86 @@ import (
 	"time"
 
 	"github.com/ryancaudill04/minecraft-server/web/internal/deploy"
+	"github.com/ryancaudill04/minecraft-server/web/internal/deploy/state"
 	"github.com/ryancaudill04/minecraft-server/web/internal/mcstatus"
 	"github.com/ryancaudill04/minecraft-server/web/internal/ping"
 	"github.com/ryancaudill04/minecraft-server/web/internal/site"
 )
 
 // Deploy is the JSON body of GET /api/deploy. Releases built before notes
-// were added have only active and applied_at.
+// were added have only active and applied_at. On the single release, the
+// top-level fields describe it and tracks is empty. With one folder per
+// track, they describe admin's own track, and tracks lists every track.
 type Deploy struct {
-	Active     string          `json:"active"`        // release tag, or "" if none is active
-	Kind       string          `json:"kind,omitzero"` // feature, fix or other
+	Release
+	Layout string    `json:"layout,omitzero"` // "tracks", or left out for the single release
+	Tracks []Release `json:"tracks,omitzero"`
+}
+
+// Release is what one track (or the single release) has active.
+type Release struct {
+	Track      string          `json:"track,omitzero"` // "" for the single release
+	Active     string          `json:"active"`         // release tag, or "" if none is active
+	Kind       string          `json:"kind,omitzero"`  // feature, fix or other
 	Changes    []deploy.Change `json:"changes,omitzero"`
 	ReleasedAt time.Time       `json:"released_at,omitzero"` // when CI built it
 	AppliedAt  time.Time       `json:"applied_at,omitzero"`  // when mc-agent last switched to it
+}
+
+// adminTrack is the track this program ships in.
+const adminTrack = "admin"
+
+// release reads what d has active, fresh on every request.
+func release(d *deploy.Deployer, track string) (Release, error) {
+	active, err := d.Current()
+	if err != nil {
+		return Release{}, err
+	}
+	res := Release{Track: track, Active: active}
+	// The notes and applied time only add detail, so a problem with
+	// either still shows the active release.
+	if n, err := d.Notes(); err != nil {
+		log.Printf("admin: deploy notes: %v", err)
+	} else if n != nil && n.Tag == active {
+		res.Kind, res.Changes, res.ReleasedAt = n.Kind, n.Changes, n.ReleasedAt
+	}
+	if a, err := d.LastApplied(); err != nil {
+		log.Printf("admin: deploy applied time: %v", err)
+	} else if a != nil {
+		res.AppliedAt = a.At
+	}
+	return res, nil
+}
+
+// readDeploy reads the deploy state in appsDir.
+func readDeploy(appsDir string) (*Deploy, error) {
+	st, err := state.Read(appsDir)
+	if err != nil {
+		return nil, err // a newer agent's format: says to update admin
+	}
+	agent := &deploy.Agent{Apps: appsDir}
+	res := &Deploy{}
+	if st.Layout != state.Tracks {
+		d, _ := agent.TrackDeployer("")
+		res.Release, err = release(d, "")
+		return res, err
+	}
+	res.Layout = string(state.Tracks)
+	for _, track := range st.Tracks {
+		d, err := agent.TrackDeployer(track)
+		if err != nil {
+			return nil, err
+		}
+		r, err := release(d, track)
+		if err != nil {
+			return nil, err
+		}
+		res.Tracks = append(res.Tracks, r)
+		if track == adminTrack {
+			res.Release = r
+		}
+	}
+	return res, nil
 }
 
 // newHandler routes the API and serves the static page from dir and the
@@ -39,30 +107,15 @@ type Deploy struct {
 // folder mc-agent installs releases into.
 func newHandler(dir, sharedDir, appsDir string, c *mcstatus.Checker) http.Handler {
 	status := &site.Cache[mcstatus.Status]{MaxAge: 5 * time.Second, Load: c.Check}
-	agent := &deploy.Deployer{Apps: appsDir}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", site.JSON("admin: status", status))
 	mux.HandleFunc("GET /api/deploy", func(w http.ResponseWriter, r *http.Request) {
-		// One readlink, so it's read fresh on every request.
-		active, err := agent.Current()
+		res, err := readDeploy(appsDir)
 		if err != nil {
 			log.Printf("admin: deploy: %v", err)
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
-		}
-		res := Deploy{Active: active}
-		// The notes and applied time only add detail, so a problem with
-		// either still shows the active release.
-		if n, err := agent.Notes(); err != nil {
-			log.Printf("admin: deploy notes: %v", err)
-		} else if n != nil && n.Tag == active {
-			res.Kind, res.Changes, res.ReleasedAt = n.Kind, n.Changes, n.ReleasedAt
-		}
-		if a, err := agent.LastApplied(); err != nil {
-			log.Printf("admin: deploy applied time: %v", err)
-		} else if a != nil {
-			res.AppliedAt = a.At
 		}
 		site.WriteJSON(w, "admin: deploy", res)
 	})
