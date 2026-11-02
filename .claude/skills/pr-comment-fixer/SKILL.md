@@ -58,6 +58,11 @@ The log must show only the owner as author and committer and no
 Run the checks for the parts you touched, from "Build and test" in
 `AGENTS.md`. Don't push a red tree: fix it, or report what fails and why.
 
+Run checks in the foreground, or wait on the background job itself. Never
+poll for them with `pgrep -f`: the polling shell's own command line contains
+the pattern, so the loop matches itself and never ends. If you must match a
+process, use `pgrep -x <name>`. Leave nothing running when you report.
+
 ## 5. Push
 
 ```bash
