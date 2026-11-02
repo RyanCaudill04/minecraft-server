@@ -318,6 +318,43 @@ func TestUpgradeAndPrune(t *testing.T) {
 	}
 }
 
+func TestPruneErrorStillSucceeds(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove anything")
+	}
+	h := newHarness(t)
+	h.d.Keep = 1
+	h.publish(t, "r1", "/ok")
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.age(t, "r1", 10*time.Minute)
+	// Make r1 impossible to remove.
+	locked := filepath.Join(h.d.releasesDir(), "r1", "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+
+	h.publish(t, "r2", "/ok")
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatalf("a prune error failed the deploy: %v", err)
+	}
+	st, err := h.d.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.LastResult == nil || st.LastResult.Outcome != "success" || st.LastResult.Tag != "r2" {
+		t.Errorf("last result = %+v, want r2 success", st.LastResult)
+	}
+}
+
 func TestHealthFailureRollsBack(t *testing.T) {
 	h := newHarness(t)
 	h.d.HealthTimeout = 300 * time.Millisecond

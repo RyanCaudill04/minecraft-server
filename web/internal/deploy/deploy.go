@@ -385,7 +385,12 @@ func (d *Deployer) Activate(ctx context.Context, tag string) (err error) {
 
 	os.Remove(d.failedFile())
 	d.Log.Printf("%s is active", tag)
-	return d.prune()
+	// The release is live and healthy; failing to clean up old ones must
+	// not record it as a failed deploy.
+	if err := d.prune(); err != nil {
+		d.Log.Printf("pruning old releases: %v", err)
+	}
+	return nil
 }
 
 // rollBackTo reactivates tag after the current release failed, first
