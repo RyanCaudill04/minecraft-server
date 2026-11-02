@@ -49,6 +49,12 @@ type Verifier struct {
 	Workflow string // workflow file that must have signed, e.g. .github/workflows/ci.yml
 	Ref      string // ref it must have run on, e.g. refs/heads/main
 
+	// RepoID and OwnerID are the repo's and its owner's numeric GitHub
+	// IDs, when set. Names can be taken over after a rename or deletion;
+	// IDs can't.
+	RepoID  string
+	OwnerID string
+
 	// Trusted is the Sigstore trusted root. Nil fetches the public-good
 	// root through TUF on each Verify, caching its metadata in CacheDir
 	// (or ~/.sigstore/root if that is empty).
@@ -171,8 +177,10 @@ func (v *Verifier) identity() (verify.CertificateIdentity, error) {
 		return verify.CertificateIdentity{}, fmt.Errorf("provenance: %w", err)
 	}
 	id, err := verify.NewCertificateIdentity(sanMatcher, issuer, certificate.Extensions{
-		SourceRepositoryRef: v.Ref,
-		RunnerEnvironment:   "github-hosted",
+		SourceRepositoryRef:             v.Ref,
+		SourceRepositoryIdentifier:      v.RepoID,
+		SourceRepositoryOwnerIdentifier: v.OwnerID,
+		RunnerEnvironment:               "github-hosted",
 	})
 	if err != nil {
 		return verify.CertificateIdentity{}, fmt.Errorf("provenance: %w", err)

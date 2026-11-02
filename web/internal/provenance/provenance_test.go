@@ -94,6 +94,21 @@ func TestVerify(t *testing.T) {
 			v.Repo = "CLI/Cli"
 			return v
 		}(), bundle: bundleJSON, digest: ghArm64},
+		{name: "repo and owner IDs match", v: func() *Verifier {
+			v := ghVerifier(tr)
+			v.RepoID, v.OwnerID = "212613049", "59704711"
+			return v
+		}(), bundle: bundleJSON, digest: ghArm64},
+		{name: "wrong repo ID", v: func() *Verifier {
+			v := ghVerifier(tr)
+			v.RepoID = "1409410068"
+			return v
+		}(), bundle: bundleJSON, digest: ghArm64, wantErr: "SourceRepositoryIdentifier"},
+		{name: "wrong owner ID", v: func() *Verifier {
+			v := ghVerifier(tr)
+			v.OwnerID = "112011068"
+			return v
+		}(), bundle: bundleJSON, digest: ghArm64, wantErr: "SourceRepositoryOwnerIdentifier"},
 		{name: "wrong repo", v: func() *Verifier {
 			v := ghVerifier(tr)
 			v.Repo = "RyanCaudill04/minecraft-server"

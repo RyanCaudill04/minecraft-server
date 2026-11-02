@@ -66,6 +66,10 @@ func main() {
 			Repo:     *repo,
 			Workflow: ".github/workflows/ci.yml",
 			Ref:      "refs/heads/main",
+			// GitHub's numeric IDs for the repo and its owner, so a
+			// renamed or deleted account's name can't be re-registered.
+			RepoID:   "1409410068",
+			OwnerID:  "112011068",
 			CacheDir: filepath.Join(*apps, "sigstore"),
 		},
 		UnattestedBefore: *unattestedBefore,
