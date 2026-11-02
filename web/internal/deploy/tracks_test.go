@@ -677,3 +677,91 @@ func TestNewerStateRefused(t *testing.T) {
 		t.Errorf("status err = %v, want ErrUnsupported", err)
 	}
 }
+
+// A move cut off after a track failed, but before the units were put back,
+// is undone by the next run instead of leaving the failed release running.
+func TestCutOffRevertIsFinishedNextRun(t *testing.T) {
+	h := newAgentHarness(t)
+	h.onSingle(t)
+	h.github.publish("admin-r1", tarball(t, trackFiles(t, "admin", h.health.URL+"/bad")))
+	h.failWhen = func(_ string, args []string) bool {
+		if slices.Equal(args, []string{"enable", "play.service", "admin.service"}) {
+			runtime.Goexit() // the agent dies as it puts the single release back
+		}
+		return false
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.a.Run(context.Background())
+	}()
+	<-done
+	h.failWhen = nil
+	h.takeCalls()
+
+	if err := h.a.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []string{"play.service", "admin.service"} {
+		if got := h.linkDir(t, u); got != "current" {
+			t.Errorf("%s links into %s, want the single release's current", u, got)
+		}
+	}
+	if got := h.layout(t); got != state.Single {
+		t.Errorf("layout = %q, want single", got)
+	}
+	st, _ := state.Read(h.a.Apps)
+	if st.Migration == nil || st.Migration.InProgress != nil || st.Migration.Tags["admin"] != "admin-r1" {
+		t.Errorf("migration = %+v, want the failed attempt recorded", st.Migration)
+	}
+	for _, track := range []string{"play", "admin", "agent"} {
+		if got := h.active(t, track); got != "" {
+			t.Errorf("%s still has %s active", track, got)
+		}
+	}
+	// And the one after that has nothing left to undo.
+	h.takeCalls()
+	if err := h.a.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls := h.takeCalls(); len(calls) != 0 {
+		t.Errorf("a settled run called systemctl: %q", calls)
+	}
+}
+
+// A move that runs out of time still puts the units back, and daemon-reload
+// is not given the cancelled context.
+func TestTimedOutMoveIsReverted(t *testing.T) {
+	h := newAgentHarness(t)
+	h.onSingle(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.failWhen = func(_ string, args []string) bool {
+		if slices.Equal(args, []string{"restart", "admin.service"}) {
+			cancel() // the run's time is up
+		}
+		return false
+	}
+	if err := h.a.Run(ctx); err == nil {
+		t.Fatal("want an error from the timed out move")
+	}
+	for _, u := range []string{"play.service", "admin.service"} {
+		if got := h.linkDir(t, u); got != "current" {
+			t.Errorf("%s links into %s, want the single release's current", u, got)
+		}
+	}
+	calls := h.takeCalls()
+	want := []string{"daemon-reload", "enable play.service admin.service", "restart play.service admin.service", "enable --now mc-agent.timer"}
+	if n := len(calls); n < len(want) || !slices.Equal(calls[n-len(want):], want) {
+		t.Errorf("the single release wasn't applied again: %q", calls)
+	}
+	for _, track := range []string{"play", "admin", "agent"} {
+		if got := h.active(t, track); got != "" {
+			t.Errorf("%s still has %s active", track, got)
+		}
+	}
+	st, _ := state.Read(h.a.Apps)
+	if st.Migration == nil || st.Migration.InProgress != nil {
+		t.Errorf("migration = %+v, want the attempt settled", st.Migration)
+	}
+}

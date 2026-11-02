@@ -89,20 +89,27 @@ type State struct {
 	// Tracks lists the track folders in use, in the order mc-agent deploys
 	// them. Empty for Single.
 	Tracks []string `json:"tracks,omitzero"`
-	// Migration records the last move from Single to Tracks that failed,
-	// so mc-agent doesn't retry it until a track has a new release. Nil
-	// once the move worked, or if it never failed.
+	// Migration records a move from Single to Tracks that is running
+	// (InProgress) or that failed, so mc-agent can undo a move that was
+	// cut off and doesn't retry a failed one until a track has a new
+	// release. Nil once the move worked, or if it never ran.
 	Migration *Migration `json:"migration,omitzero"`
 
 	// extra holds fields this version doesn't know, written back as-is.
 	extra map[string]json.RawMessage
 }
 
-// Migration is an attempt to move from Single to Tracks that failed.
+// Migration is an attempt to move from Single to Tracks. While it runs,
+// only InProgress is set: it is written before the first unit is relinked
+// and replaced by the failure record, or removed, once the units are back
+// on the single release or on tracks. A Single layout that still has
+// InProgress means the agent was cut off partway, and the next run puts
+// the units back before doing anything else.
 type Migration struct {
-	Tags  map[string]string `json:"tags"` // the release it tried, per track
-	Error string            `json:"error"`
-	At    time.Time         `json:"at"`
+	InProgress map[string]string `json:"in_progress,omitzero"` // the release being moved to, per track
+	Tags       map[string]string `json:"tags,omitzero"`        // the release that failed, per track
+	Error      string            `json:"error,omitzero"`
+	At         time.Time         `json:"at,omitzero"`
 }
 
 // TrackDir returns the folder of a track in the Tracks layout.

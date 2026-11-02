@@ -215,6 +215,14 @@ func (a *Agent) run(ctx context.Context, force bool) error {
 	}
 
 	single := a.single(gh)
+	if recovered, err := a.recover(ctx, st, gh, single); err != nil {
+		return err
+	} else if recovered {
+		// Read again: recover changed the migration record.
+		if st, err = state.Read(a.Apps); err != nil {
+			return err
+		}
+	}
 	if err := single.resume(ctx); err != nil {
 		return err
 	}
@@ -330,13 +338,25 @@ func (a *Agent) migrate(ctx context.Context, st *state.State, gh *GitHub, single
 		ds = append(ds, d)
 	}
 
+	// Before the first unit is relinked, so that a run cut off from here
+	// on knows to put them back.
+	err = state.Update(a.Apps, func(s *state.State) error {
+		s.Migration = &state.Migration{InProgress: tags}
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("deploy: recording the move to tracks: %w", err)
+	}
 	l.Printf("moving from %s to one folder per track", current)
 	for i, d := range ds {
 		if err := d.activate(ctx, tags[d.Track], true); err != nil {
 			l.Printf("moving to tracks: %s failed; putting every unit back on %s", d.Track, current)
+			cause := fmt.Errorf("%s: %w", d.Track, err)
 			rbErr := a.revert(ctx, single, legacy, ds[:i+1])
-			a.recordFailure(tags, fmt.Errorf("%s: %w", d.Track, err))
-			if rbErr != nil {
+			if rbErr == nil {
+				a.recordFailure(tags, cause)
+			} else {
+				// The in-progress record stays, so the next run tries again.
 				rbErr = fmt.Errorf("putting the units back on %s: %w", current, rbErr)
 			}
 			return true, errors.Join(fmt.Errorf("deploy: moving to tracks: %s: %w", d.Track, err), rbErr)
@@ -377,18 +397,89 @@ func (a *Agent) targets(ctx context.Context, gh *GitHub) (map[string]*Release, b
 
 // revert puts every unit back on the single release after the move to
 // tracks failed partway. done are the tracks that were activated.
+//
+// It runs on its own context: the move may have been stopped by the run's
+// timeout, and the units must be put back anyway. The tracks are only
+// abandoned once the single release is applied again; until then the
+// in-progress record makes the next run try again.
 func (a *Agent) revert(ctx context.Context, single *Deployer, legacy *Manifest, done []*Deployer) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revertTimeout)
+	defer cancel()
 	for _, d := range done {
 		// Units only a track has: the single release won't relink them.
 		if m, err := readManifest(d.currentLink()); err == nil {
 			d.remove(ctx, minus(m, legacy))
 		}
 	}
-	err := single.apply(ctx, false)
+	if err := single.apply(ctx, false); err != nil {
+		return err
+	}
 	for _, d := range done {
 		d.abandon()
 	}
-	return err
+	return nil
+}
+
+// revertTimeout is how long revert may take to restart and check the
+// single release's services.
+const revertTimeout = 5 * time.Minute
+
+// recover undoes a move to tracks that was cut off (the agent was killed,
+// the power went, or the run timed out) after it had started relinking
+// units. It reports whether it found one. The units go back on the single
+// release first; if a track's release failed before the cut, that is
+// recorded like any failed move, and otherwise the move is simply tried
+// again by the caller.
+func (a *Agent) recover(ctx context.Context, st *state.State, gh *GitHub, single *Deployer) (bool, error) {
+	current, err := single.Current()
+	if err != nil || current == "" {
+		return false, err
+	}
+	var tags map[string]string
+	if st.Migration != nil {
+		tags = st.Migration.InProgress
+	}
+	var ds []*Deployer
+	linked := false
+	for _, t := range a.tracks() {
+		d := a.deployer(t, gh)
+		ds = append(ds, d)
+		entries, _ := os.ReadDir(a.UnitDir)
+		for _, e := range entries {
+			if d.linksInto(filepath.Join(a.UnitDir, e.Name()), d.currentLink()) {
+				linked = true
+			}
+		}
+	}
+	if tags == nil && !linked {
+		return false, nil
+	}
+	l := a.logger()
+	l.Printf("an earlier move to tracks was cut off; putting every unit back on %s", current)
+	legacy, err := readManifest(single.currentLink())
+	if err != nil {
+		return false, fmt.Errorf("deploy: %s: %w", current, err)
+	}
+	if err := a.revert(ctx, single, legacy, ds); err != nil {
+		return false, fmt.Errorf("deploy: putting the units back on %s: %w", current, err)
+	}
+	// A track that failed before the cut is recorded; anything else is
+	// the cut's fault, not the release's, so the move may run again.
+	var failed []string
+	for _, d := range ds {
+		if tag := tags[d.Track]; tag != "" && d.hasFailed(tag) {
+			failed = append(failed, tag)
+		}
+	}
+	if len(failed) > 0 {
+		a.recordFailure(tags, fmt.Errorf("%s failed before the move was cut off", strings.Join(failed, ", ")))
+		return true, nil
+	}
+	err = state.Update(a.Apps, func(s *state.State) error {
+		s.Migration = nil
+		return nil
+	})
+	return true, err
 }
 
 // abandon makes a track folder read as having nothing active, after the
