@@ -147,6 +147,12 @@ chmod 600 "$home/.config/minecraft/secrets.env"
 install --repo someone/fork --domain example.com --server-dir "$server" --heap 4G || fail "exit $?"
 grep -q 'rcon.password in server.properties differs' "$case_dir/out" || fail "no note about the mismatch"
 
+fresh "an installed minecraft.service keeps the 10G heap"
+mkdir -p "$home/.config/systemd/user"
+ln -s "$root/deploy/systemd/minecraft.service" "$home/.config/systemd/user/minecraft.service"
+install --repo someone/fork --domain example.com --server-dir "$server" || fail "exit $?"
+[ "$(key "$home/.config/minecraft/host.env" HEAP)" = 10G ] || fail "HEAP is $(key "$home/.config/minecraft/host.env" HEAP)"
+
 fresh "no EULA, no start"
 echo 'eula=false' >"$server/eula.txt"
 install --repo someone/fork --domain example.com --server-dir "$server" --heap 4G || fail "exit $?"

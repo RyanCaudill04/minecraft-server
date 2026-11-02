@@ -149,6 +149,13 @@ domain=${domain:-$(get_key "$host_env" DOMAIN)}
 server_dir=${server_dir:-$(get_key "$host_env" SERVER_DIR)}
 server_dir=${server_dir:-$root}
 heap=${heap:-$(get_key "$host_env" HEAP)}
+if [ -z "$heap" ] && { [ -e "$unit_dir/minecraft.service" ] || [ -L "$unit_dir/minecraft.service" ] ||
+  [ "$(systemctl --user is-active minecraft.service 2>/dev/null || true)" = active ]; }; then
+  # An installed server keeps start.sh's default, so this script doesn't
+  # shrink its heap at the next restart.
+  heap=10G
+  note "HEAP=10G (start.sh's default) was set in host.env because minecraft.service already exists; lower it with --heap if the machine has less RAM"
+fi
 if [ -z "$heap" ]; then
   # About 60% of RAM, leaving the rest for the OS and the web apps.
   mem_kb=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo 2>/dev/null || true)
