@@ -26,8 +26,11 @@ const (
 
 // GitHub finds releases. Within one value, each repo's list is fetched at
 // most once, so a run that checks every track makes one API call. It sends
-// the ETag of the last list it got, and a 304 Not Modified, which GitHub
-// doesn't count against the rate limit, reuses that list from Cache.
+// the ETag of the last list it got, and a 304 Not Modified reuses that list
+// from Cache. GitHub only leaves a 304 out of the rate limit for requests
+// that carry an Authorization header; this one sends none, so every run
+// still counts against the 60 requests per hour that unauthenticated
+// callers get per IP address. The cache saves bandwidth, not rate limit.
 //
 // Make a new GitHub for each run, so the next run asks again.
 type GitHub struct {
