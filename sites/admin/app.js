@@ -120,8 +120,7 @@ function renderLastDeploy(d) {
   $("deploy-last-at").textContent = r ? fmtAgo(r.at) : "";
   $("deploy-last-at").title = r ? new Date(r.at).toLocaleString() : "";
 
-  let error = r?.error ?? "";
-  if (r?.rolled_back_to) error = `Back on ${r.rolled_back_to}. ${error}`;
+  const error = r?.error ?? "";
   $("deploy-last-error").textContent = error;
   $("deploy-last-error").hidden = !error;
 }
