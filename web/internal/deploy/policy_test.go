@@ -475,6 +475,28 @@ func TestRefusedPinLeavesNothingToRollBackTo(t *testing.T) {
 	}
 }
 
+func TestUnpinFollowsLatest(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1", "r2")
+	if err := h.d.SetMode(ModeNotify); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.Pin(context.Background(), "r1"); err != nil {
+		t.Fatal(err)
+	}
+	h.publish(t, "r3", "/ok")
+	if err := h.d.Unpin(); err != nil {
+		t.Fatal(err)
+	}
+	h.run(t)
+	if got := h.current(t); got != "r3" {
+		t.Errorf("current = %q after unpin, want r3", got)
+	}
+	if got := h.mode(t).Mode; got != ModeAuto {
+		t.Errorf("mode = %q, want auto", got)
+	}
+}
+
 func TestInterruptedPinOfANewReleaseChecksItsAgent(t *testing.T) {
 	for _, cut := range []string{"before the switch", "after the switch"} {
 		t.Run(cut, func(t *testing.T) {
@@ -535,25 +557,21 @@ func TestPausedRunFinishesAnInterruptedPin(t *testing.T) {
 	}
 }
 
-func TestUnpinFollowsLatest(t *testing.T) {
+func TestRecordLatestSkipsUnchangedWrites(t *testing.T) {
 	h := newHarness(t)
-	h.deployAll(t, "r1", "r2")
-	if err := h.d.SetMode(ModeNotify); err != nil {
+	h.d.recordLatest("r1")
+	path := h.d.latestFile()
+	old := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.d.Pin(context.Background(), "r1"); err != nil {
-		t.Fatal(err)
+	h.d.recordLatest("r1")
+	if fi, _ := os.Stat(path); fi.ModTime().After(old.Add(time.Second)) {
+		t.Error("an unchanged tag was rewritten")
 	}
-	h.publish(t, "r3", "/ok")
-	if err := h.d.Unpin(); err != nil {
-		t.Fatal(err)
-	}
-	h.run(t)
-	if got := h.current(t); got != "r3" {
-		t.Errorf("current = %q after unpin, want r3", got)
-	}
-	if got := h.mode(t).Mode; got != ModeAuto {
-		t.Errorf("mode = %q, want auto", got)
+	h.d.recordLatest("r2")
+	if s, _ := h.d.LatestSeen(); s == nil || s.Tag != "r2" {
+		t.Errorf("LatestSeen = %+v, want r2", s)
 	}
 }
 

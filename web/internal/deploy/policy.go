@@ -294,9 +294,17 @@ type Seen struct {
 	Checked time.Time `json:"checked_at"`
 }
 
+// seenRefresh is how often recordLatest rewrites an unchanged tag.
+const seenRefresh = 30 * time.Minute
+
 // recordLatest records tag as the newest release. A failure is only
 // logged: it's for admin to show.
 func (d *Deployer) recordLatest(tag string) {
+	// The timer runs every two minutes; rewriting and syncing the file each
+	// time would wear the SD card for a value that rarely changes.
+	if s, err := d.LatestSeen(); err == nil && s != nil && s.Tag == tag && time.Since(s.Checked) < seenRefresh {
+		return
+	}
 	data, err := json.Marshal(Seen{Tag: tag, Checked: time.Now().UTC()})
 	if err == nil {
 		err = d.writeFile(d.latestFile(), data)
