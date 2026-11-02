@@ -98,9 +98,10 @@ only. Cloudflare Tunnel carries public traffic to it (see
   [`site@.service`](deploy/systemd/site@.service). The instance name is the
   site, and its address is in `deploy/sites/<site>.env`. play's address is
   set in `play.service`; nothing reads `deploy/sites/play.env` today.
-- **Caching.** Every static file is served with `Cache-Control: no-cache`, and
-  the API with `no-store`, so a new release shows up without purging
-  Cloudflare's cache.
+- **Caching.** play and admin serve their static files with
+  `Cache-Control: no-cache` and their API with `no-store`, so a new release
+  shows up without purging Cloudflare's cache. `serve` sets no
+  `Cache-Control`, so the portfolio may need a purge after a release.
 
 Shared Go code is in `web/internal/`: `site` (static files and JSON),
 `mcstatus` and `ping` (status pings), `world` and `nbt` (world files), and
@@ -114,7 +115,8 @@ go vet ./...
 go test -race ./...
 
 # Run play against a local server folder (it reads as offline if nothing
-# listens on the Paper and LazyMC ports).
+# listens on the Paper and LazyMC ports, and /api/world returns 503 if the
+# folder has no world/, as in a fresh clone).
 go run ./cmd/play -dir ../sites/play -shared ../sites/shared -server .. -addr 127.0.0.1:8082
 go run ./cmd/admin -dir ../sites/admin -shared ../sites/shared -addr 127.0.0.1:8081
 go run ./cmd/serve -dir ../sites/portfolio -addr 127.0.0.1:8080
@@ -209,9 +211,11 @@ journalctl --user -u mc-agent          # deploy logs
 
 A manual rollback only lasts until the timer's next run. That run sees the
 newest release isn't active and installs it again, unless its tag is in
-`~/apps/failed`. To stay on the older release, stop the timer first
-(`systemctl --user stop mc-agent.timer`) or write the newer tag to
-`~/apps/failed`.
+`~/apps/failed`. To stay on the older release, either disable the timer
+first (`systemctl --user disable --now mc-agent.timer`; a plain `stop` lasts
+only until the next reboot, because the enabled timer starts again at boot),
+or, after the rollback, write the newer tag to `~/apps/failed`. Writing it
+before the rollback doesn't work: a successful rollback clears that file.
 
 ### First install on a new Pi
 
