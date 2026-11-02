@@ -81,7 +81,16 @@ journalctl --user -u mc-agent.service --since "$since" --no-pager -o cat
 exit $rc
 EOF
       ;;
-    rollback) echo "$agent rollback && $agent status" ;;
+    rollback)
+      # A deploy started by the timer may be mid-switch.
+      cat <<EOF
+if systemctl --user is-active --quiet mc-agent.service; then
+  echo 'mc-agent is deploying right now; try again when it finishes' >&2
+  exit 1
+fi
+$agent rollback && $agent status
+EOF
+      ;;
     pause) echo "systemctl --user stop mc-agent.timer && echo 'mc-agent timer stopped'" ;;
     resume) echo "systemctl --user start mc-agent.timer && echo 'mc-agent timer started'" ;;
     *) return 1 ;;

@@ -125,7 +125,7 @@ check "start" 0 '^ssh mc-pi systemctl --user start minecraft.service'
 run --yes deploy
 check "deploy" 0 'systemctl --user start mc-agent.service' 'journalctl --user -u mc-agent.service'
 run --yes rollback
-check "rollback" 0 'mc-agent rollback'
+check "rollback" 0 'mc-agent rollback' 'is-active --quiet mc-agent.service'
 grep -q "scripts/mc pause" <<<"$out" || { echo "FAIL rollback: no hint about pause"; failures=$((failures + 1)); }
 run --yes pause
 check "pause" 0 '^ssh mc-pi systemctl --user stop mc-agent.timer'
