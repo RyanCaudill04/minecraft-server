@@ -293,11 +293,17 @@ const sheet = $("sheet");
 sheet.addEventListener("close", () => {
   if (sheetOpener) focusPlayer(sheetOpener.from, sheetOpener.id);
   sheetOpener = null;
+  pressedOutside = false;
 });
 $("sheet-close").addEventListener("click", () => sheet.close());
-// The content is all inside .sheet-body, so a click on the dialog itself is
-// on the backdrop.
-sheet.addEventListener("click", (e) => e.target === sheet && sheet.close());
+// The dialog fills the viewport height on desktop, so a click on its empty
+// part targets the dialog itself. Decide by where the press started instead.
+let pressedOutside = false;
+sheet.addEventListener("pointerdown", (e) => {
+  const r = sheet.getBoundingClientRect();
+  pressedOutside = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+});
+sheet.addEventListener("click", () => pressedOutside && sheet.close());
 
 // ---------- Day/night ----------
 
