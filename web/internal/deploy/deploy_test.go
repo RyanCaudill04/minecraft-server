@@ -124,13 +124,13 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		tag := r.PathValue("tag")
-		data := g.tarballs[tag]
 		name := r.PathValue("name")
 		tarName := strings.TrimSuffix(name, ChecksumSuffix)
 		if !slices.Contains(g.names, tarName) {
 			http.NotFound(w, r)
 			return
 		}
+		data := tarballVariant(g.tarballs[tag], tarName)
 		if name == tarName {
 			g.downloads = append(g.downloads, name)
 			w.Write(data)
@@ -146,6 +146,19 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 	g.Server = httptest.NewServer(mux)
 	t.Cleanup(g.Close)
 	return g
+}
+
+// tarballVariant makes each asset's bytes (and so its checksum) differ, by
+// appending a gzip member holding the asset's name. Readers stop at the end
+// of the tar archive, so it still installs, but a checksum fetched for a
+// different asset no longer matches.
+func tarballVariant(data []byte, name string) []byte {
+	var buf bytes.Buffer
+	buf.Write(data)
+	zw := gzip.NewWriter(&buf)
+	zw.Write([]byte(name))
+	zw.Close()
+	return buf.Bytes()
 }
 
 func (g *fakeGitHub) publish(tag string, data []byte) {
