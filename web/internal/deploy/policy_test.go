@@ -454,3 +454,23 @@ func TestReadsCreateNothing(t *testing.T) {
 		t.Errorf("reading created %s", d.Apps)
 	}
 }
+
+func TestRefusedPinLeavesNothingToRollBackTo(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1", "r2")
+	// A release without the policy marker, never installed here.
+	h.publishWith(t, "r0", "/ok", Manifest{
+		Units: []string{"play.service", "mc-agent.timer"}, Services: []string{"play.service"}, Timers: []string{"mc-agent.timer"},
+	})
+
+	err := h.d.Pin(context.Background(), "r0")
+	if err == nil || !strings.Contains(err.Error(), "before update policies") {
+		t.Fatalf("err = %v, want r0 refused", err)
+	}
+	if h.exists("releases/r0") {
+		t.Error("a refused release was left in releases/")
+	}
+	if got := h.d.fallback("r2"); got != "r1" {
+		t.Errorf("fallback(r2) = %q, want r1", got)
+	}
+}

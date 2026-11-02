@@ -243,7 +243,9 @@ func (d *Deployer) pin(ctx context.Context, tag string) error {
 		return err
 	}
 	dir := filepath.Join(d.releasesDir(), tag)
-	if _, err := readManifest(dir); err != nil {
+	_, haveErr := readManifest(dir)
+	fresh := haveErr != nil
+	if fresh {
 		rel, err := d.Release(ctx, tag)
 		if err != nil {
 			return err
@@ -257,6 +259,11 @@ func (d *Deployer) pin(ctx context.Context, tag string) error {
 		return fmt.Errorf("deploy: %s: %w", tag, err)
 	}
 	if m.Policy < PolicyVersion {
+		if fresh {
+			// Not left in releases/, where fallback would take it for
+			// a release to roll back to.
+			os.RemoveAll(dir)
+		}
 		return fmt.Errorf("deploy: %s is from before update policies, so its mc-agent would ignore the pin and deploy the latest release; pick a newer one", tag)
 	}
 
