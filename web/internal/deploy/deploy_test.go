@@ -205,7 +205,9 @@ func (h *harness) systemctl(args []string) error {
 }
 
 func (h *harness) publish(t *testing.T, tag, healthPath string) {
-	h.github.publish(tag, tarball(t, releaseFiles(t, h.health.URL+healthPath)))
+	// build-release.sh writes the tag into the tarball as VERSION.
+	files := append(releaseFiles(t, h.health.URL+healthPath), entry{name: "VERSION", body: tag + "\n"})
+	h.github.publish(tag, tarball(t, files))
 }
 
 func (h *harness) takeCalls() []string {

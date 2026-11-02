@@ -11,8 +11,11 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // ProvenanceName is the release asset holding the Sigstore bundle that
@@ -35,34 +38,35 @@ var releaseNumber = regexp.MustCompile(`^r([0-9]{1,9})$`)
 func ValidCutoff(tag string) bool { return releaseNumber.MatchString(tag) }
 
 // checkProvenance checks the release's attestation covers wantHex, the
-// SHA-256 from its checksum file. It runs before the tarball is downloaded:
+// SHA-256 from its checksum file, and reports whether it did: false means
+// the release is old enough to have none. It runs before the tarball is downloaded:
 // the download must then match that checksum, so it is what was attested.
-func (d *Deployer) checkProvenance(ctx context.Context, rel *Release, wantHex string) error {
+func (d *Deployer) checkProvenance(ctx context.Context, rel *Release, wantHex string) (bool, error) {
 	if d.Provenance == nil {
-		return nil
+		return false, nil
 	}
 	bundleURL, err := rel.assetURL(ProvenanceName)
 	if err != nil {
 		if d.builtBeforeAttestations(rel.Tag) {
 			d.Log.Printf("WARNING: installing %s without checking its provenance: it has no %s, and -unattested-before=%s allows that",
 				rel.Tag, ProvenanceName, d.UnattestedBefore)
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("deploy: refusing to install %s: it has no %s, so there is no proof the release workflow built it", rel.Tag, ProvenanceName)
+		return false, fmt.Errorf("deploy: refusing to install %s: it has no %s, so there is no proof the release workflow built it", rel.Tag, ProvenanceName)
 	}
 	digest, err := hex.DecodeString(wantHex)
 	if err != nil {
-		return err
+		return false, err
 	}
 	var b bytes.Buffer
 	if err := d.download(ctx, bundleURL, &b, maxProvenanceSize); err != nil {
-		return err
+		return false, err
 	}
 	if err := d.Provenance.Verify(ctx, b.Bytes(), digest, TarballName); err != nil {
-		return fmt.Errorf("deploy: refusing to install %s: %w", rel.Tag, err)
+		return false, fmt.Errorf("deploy: refusing to install %s: %w", rel.Tag, err)
 	}
 	d.Log.Printf("%s provenance verified", rel.Tag)
-	return nil
+	return true, nil
 }
 
 // builtBeforeAttestations reports whether tag is numbered below
@@ -76,4 +80,32 @@ func (d *Deployer) builtBeforeAttestations(tag string) bool {
 	n, _ := strconv.Atoi(m[1])
 	c, _ := strconv.Atoi(cutoff[1])
 	return n < c
+}
+
+// checkVersion ties the unpacked release to its tag. The attestation only
+// says the release workflow built these bytes at some point; the VERSION
+// file inside them, written by build-release.sh, says for which tag, so an
+// old attested tarball can't be published under a newer tag.
+func checkVersion(dir, tag string) error {
+	data, err := os.ReadFile(filepath.Join(dir, "VERSION"))
+	if err != nil {
+		return fmt.Errorf("deploy: refusing to install %s: its attested tarball has no VERSION: %w", tag, err)
+	}
+	if got := strings.TrimSpace(string(data)); got != tag {
+		return fmt.Errorf("deploy: refusing to install %s: the attested tarball is for %q", tag, got)
+	}
+	return nil
+}
+
+// olderThan reports whether tag and current are both numbered releases and
+// tag comes before current.
+func olderThan(tag, current string) bool {
+	t := releaseNumber.FindStringSubmatch(tag)
+	c := releaseNumber.FindStringSubmatch(current)
+	if t == nil || c == nil {
+		return false
+	}
+	tn, _ := strconv.Atoi(t[1])
+	cn, _ := strconv.Atoi(c[1])
+	return tn < cn
 }

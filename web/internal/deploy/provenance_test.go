@@ -277,3 +277,60 @@ func TestValidCutoff(t *testing.T) {
 		}
 	}
 }
+
+// A genuine attested tarball from an old release, uploaded under a new tag.
+func TestAttestedTarballOfAnotherTagIsRefused(t *testing.T) {
+	h := newHarness(t)
+	a, _ := withProvenance(t, h)
+	h.publish(t, "r1", "/ok")
+	a.attest(h, "r1")
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	h.github.publish("r200", h.github.tarballs["r1"]) // says VERSION r1
+	a.attest(h, "r200")
+	err := h.d.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), `attested tarball is for "r1"`) {
+		t.Fatalf("Run = %v, want it to refuse r200", err)
+	}
+	assertNotInstalled(t, h, "r200", "r1")
+}
+
+func TestOlderReleaseIsNotDeployedOverNewer(t *testing.T) {
+	h := newHarness(t)
+	a, p := withProvenance(t, h)
+	h.publish(t, "r1", "/ok")
+	a.attest(h, "r1")
+	h.publish(t, "r2", "/ok")
+	a.attest(h, "r2")
+	h.github.mu.Lock()
+	h.github.latest = "r1"
+	h.github.mu.Unlock()
+	if err := h.d.Run(context.Background()); err != nil { // installs r1
+		t.Fatal(err)
+	}
+	h.github.mu.Lock()
+	h.github.latest = "r2"
+	h.github.mu.Unlock()
+	if err := h.d.Run(context.Background()); err != nil { // installs r2
+		t.Fatal(err)
+	}
+
+	// r1's release object is deleted and published again; it's still in
+	// releases/, so Install would be a no-op and Activate would switch back.
+	h.github.mu.Lock()
+	h.github.latest = "r1"
+	h.github.mu.Unlock()
+	n := len(p.digests)
+	h.takeCalls()
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.current(t); got != "r2" {
+		t.Errorf("current = %q, want r2", got)
+	}
+	if len(p.digests) != n || len(h.takeCalls()) > 0 {
+		t.Error("the older release was processed")
+	}
+}
