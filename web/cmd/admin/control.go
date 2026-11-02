@@ -19,6 +19,7 @@ import (
 	"unicode"
 
 	"github.com/ryancaudill04/minecraft-server/web/internal/control"
+	"github.com/ryancaudill04/minecraft-server/web/internal/mcstatus"
 	"github.com/ryancaudill04/minecraft-server/web/internal/rcon"
 	"github.com/ryancaudill04/minecraft-server/web/internal/site"
 )
@@ -34,7 +35,12 @@ const (
 	logTailBytes    = 256 << 10 // read at most this much of the end of the log
 	maxBody         = 4 << 10
 	rconTimeout     = 10 * time.Second
+	wakeTimeout     = 5 * time.Second
 )
+
+// wakeName is the player name admin logs in as to wake Paper. LazyMC
+// logs it ("Starting server for 'admin_wake'"), so it says who woke it.
+const wakeName = "admin_wake"
 
 // Me is the JSON body of GET /api/me: who admin thinks is asking, and
 // which controls they can use.
@@ -126,6 +132,50 @@ func (a *app) serverAction(w http.ResponseWriter, r *http.Request, user string) 
 	}
 }
 
+// wakeServer handles POST /api/server/wake: a sleeping LazyMC starts
+// Paper, so the console works without anyone joining. LazyMC puts it back
+// to sleep once it has been empty for a while.
+func (a *app) wakeServer(w http.ResponseWriter, r *http.Request, user string) {
+	if a.wake == nil {
+		writeError(w, http.StatusServiceUnavailable, "Waking the server isn't available.")
+		return
+	}
+	// Check now, not from the cache: only a sleeping LazyMC should get a
+	// login, and a second click while Paper starts should be refused.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), wakeTimeout)
+	defer cancel()
+	s, err := a.checker.Check(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "Couldn't check the server.")
+		return
+	}
+	switch s.State {
+	case mcstatus.StateSleeping:
+	case mcstatus.StateActive:
+		writeError(w, http.StatusConflict, "Paper is already awake.")
+		return
+	case mcstatus.StateStarting:
+		writeError(w, http.StatusConflict, "Paper is already starting.")
+		return
+	default:
+		writeError(w, http.StatusConflict, "LazyMC isn't answering. Start the server first.")
+		return
+	}
+
+	log.Printf("admin: audit: %s: wake", user)
+	err = a.wake(ctx)
+	a.status.Reset()
+	if err != nil {
+		log.Printf("admin: wake: %v", err)
+		writeError(w, http.StatusBadGateway, "LazyMC didn't take the login: see admin's log.")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"action": "wake"})
+}
+
 // Command is the JSON body of POST /api/console.
 type Command struct {
 	Command string `json:"command"`
@@ -163,7 +213,7 @@ func (a *app) console(w http.ResponseWriter, r *http.Request, user string) {
 	out, err := a.rcon(ctx, cmd)
 	switch {
 	case errors.Is(err, rcon.ErrUnreachable):
-		writeError(w, http.StatusServiceUnavailable, "RCON isn't answering. Paper is probably asleep; LazyMC wakes it when someone joins.")
+		writeError(w, http.StatusServiceUnavailable, "RCON isn't answering. Paper is probably asleep: wake it from the Server section.")
 	case errors.Is(err, rcon.ErrAuth):
 		log.Printf("admin: console: RCON refused the password")
 		writeError(w, http.StatusBadGateway, "RCON refused admin's password. Check that RCON_PASSWORD matches rcon.password.")

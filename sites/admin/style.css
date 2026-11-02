@@ -45,27 +45,41 @@ code {
 
 /* ---------- Server ---------- */
 
-.server-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
-
 /* The unit's systemd state; data-unit, not data-state, so the ping state
    the page sets on every [data-state] doesn't overwrite it. */
 .unit-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 22px;
+  padding: 24px;
   overflow: hidden;
 }
 .unit-card::before {
   content: "";
   position: absolute;
   inset: 0;
-  background: radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--state, var(--gray)) 12%, transparent), transparent 60%);
+  background: radial-gradient(90% 120% at 0% 0%, color-mix(in srgb, var(--state, var(--gray)) 12%, transparent), transparent 55%);
   pointer-events: none;
   transition: background 0.6s var(--ease);
 }
 .unit-card > * { position: relative; }
-.unit-card h3 { margin-top: 6px; font-size: 1.5rem; font-weight: 700; }
-.unit-card .actions { margin-top: 12px; }
+.unit-card:focus-visible { outline-offset: -2px; }
+
+.unit-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.unit-state { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.unit-card h3 {
+  margin: 6px 0 0;
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+}
 [data-unit="active"]       { --state: var(--green); }
 [data-unit="activating"],
 [data-unit="deactivating"] { --state: var(--amber); }
@@ -76,16 +90,106 @@ code {
 [data-unit="deactivating"] .dot,
 [data-unit="loading"] .dot { animation: pulse 1.4s ease-in-out infinite; }
 
-.note { min-height: 1.5em; color: var(--muted); font-size: 0.8125rem; }
-.note.error,
-.out.error { color: var(--red); }
+.unit-card .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.btn[hidden] { display: none; }
+.btn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.btn [d^="M7 5"],
+.btn rect { fill: currentColor; stroke: none; }
 
-.access-value {
-  margin-top: 4px;
-  font-size: 1.125rem;
-  font-weight: 600;
+/* The chain: systemd unit, LazyMC, Paper. Each step has a node on one
+   line; the line into a step fills with its color once it's up. */
+.chain {
+  --node: 14px;
+  --gap: 16px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: var(--gap);
+  margin: 0;
+  padding: 18px 0 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+.link {
+  --link: var(--faint);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-top: calc(var(--node) + 12px);
+}
+.link[data-link="on"]     { --link: var(--green); }
+.link[data-link="busy"],
+.link[data-link="idle"]   { --link: var(--amber); }
+.link[data-link="failed"] { --link: var(--red); }
+
+/* The line from the previous node into this one. */
+.link + .link::before {
+  content: "";
+  position: absolute;
+  top: calc(var(--node) / 2 - 1px);
+  right: calc(100% - var(--node) / 2);
+  width: calc(100% + var(--gap));
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(to right, var(--link) 50%, var(--border) 50%) right / 200% 100% no-repeat;
+  transition: background-position 0.7s var(--ease), background-color 0.4s;
+}
+.link:is([data-link="on"], [data-link="busy"], [data-link="idle"]) + .link:is([data-link="on"], [data-link="busy"], [data-link="idle"])::before {
+  background-position: left;
+}
+
+.node {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--node);
+  height: var(--node);
+  border-radius: 50%;
+  background: var(--card);
+  box-shadow: inset 0 0 0 2px var(--link);
+  transition: box-shadow 0.4s var(--ease), background 0.4s var(--ease);
+}
+.link:not([data-link="off"], [data-link="unknown"]) .node {
+  background: var(--link);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--link) 18%, transparent);
+}
+.link[data-link="busy"] .node { animation: pulse 1.4s ease-in-out infinite; }
+.link-name { font-size: 0.9375rem; font-weight: 600; }
+.link-state {
+  color: var(--muted);
+  font-size: 0.8125rem;
   overflow-wrap: anywhere;
 }
+.link[data-link="failed"] .link-state { color: var(--red); }
+
+.unit-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 20px;
+  flex-wrap: wrap;
+  margin-top: -8px;
+}
+.note { min-height: 1.5em; color: var(--muted); font-size: 0.8125rem; }
+.note:empty { min-height: 0; }
+.note.error,
+.out.error { color: var(--red); }
+.who-am-i { margin-left: auto; font-size: 0.8125rem; text-align: right; overflow-wrap: anywhere; }
+#me-email { font-weight: 600; }
+#me-sub { display: block; }
 
 /* Confirmation for stop and restart. */
 .confirm {
@@ -103,6 +207,21 @@ html:has(dialog[open]) { overflow: hidden; }
 .console-grid { grid-template-columns: minmax(0, 1fr); }
 .console-card,
 .log-card { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* Shown over the console while Paper sleeps. */
+.asleep {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+  font-size: 0.875rem;
+}
+.asleep p { flex: 1 1 280px; }
+.asleep[hidden] { display: none; }
 
 .prompt input,
 .transcript,
@@ -232,7 +351,10 @@ html:has(dialog[open]) { overflow: hidden; }
 /* Narrow screens: the strip becomes two columns, and the server and
    console cards stack. */
 @media (max-width: 760px) {
-  .server-grid { grid-template-columns: minmax(0, 1fr); }
+  .unit-card { padding: 20px; }
+  .unit-head .actions { width: 100%; }
+  .unit-head .btn { flex: 1; justify-content: center; padding-inline: 10px; }
+  .who-am-i { margin-left: 0; text-align: left; }
   .log { height: 320px; }
   .release-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 16px; }
   .release-strip .cell:first-child { grid-column: 1 / -1; }
