@@ -474,3 +474,63 @@ func TestRefusedPinLeavesNothingToRollBackTo(t *testing.T) {
 		t.Errorf("fallback(r2) = %q, want r1", got)
 	}
 }
+
+func TestInterruptedPinOfANewReleaseChecksItsAgent(t *testing.T) {
+	for _, cut := range []string{"before the switch", "after the switch"} {
+		t.Run(cut, func(t *testing.T) {
+			h := newHarness(t)
+			checked := map[string]int{}
+			h.d.CheckAgent = func(ctx context.Context) error {
+				current, _ := h.d.Current()
+				checked[current]++
+				return nil
+			}
+			h.deployAll(t, "r1")
+			h.publish(t, "r2", "/ok")
+			rel, err := h.d.Release(context.Background(), "r2")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := h.d.Install(context.Background(), rel); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.d.writeFile(h.d.pinnedFile(), []byte("r2\n")); err != nil {
+				t.Fatal(err)
+			}
+			if cut == "after the switch" {
+				if err := h.d.writeFile(h.d.pendingFile(), []byte("r2\n")); err != nil {
+					t.Fatal(err)
+				}
+				if err := h.d.switchTo("r2"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			delete(checked, "r1")
+			h.run(t)
+			if got := h.current(t); got != "r2" {
+				t.Fatalf("current = %q, want r2", got)
+			}
+			if checked["r2"] != 1 {
+				t.Errorf("agents checked = %v, want r2's checked once", checked)
+			}
+			if !h.d.deployed("r2") {
+				t.Error("r2 isn't recorded as deployed")
+			}
+		})
+	}
+}
+
+func TestPausedRunFinishesAnInterruptedPin(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1", "r2")
+	if err := h.d.SetPaused(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.writeFile(h.d.pinnedFile(), []byte("r1\n")); err != nil {
+		t.Fatal(err)
+	}
+	h.run(t)
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q, want the pin to r1 finished", got)
+	}
+}

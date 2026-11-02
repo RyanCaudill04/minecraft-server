@@ -316,21 +316,24 @@ func (d *Deployer) Run(ctx context.Context) error {
 		return err
 	}
 	policy := d.policy()
-	if policy.Paused {
-		d.Log.Printf("updates are paused; run \"mc-agent resume\" to deploy again")
-		return nil
-	}
 	current, err := d.Current()
 	if err != nil {
 		return err
 	}
+	pinned := readTag(d.pinnedFile())
+	// A pin that was cut short is finished even while paused, like the
+	// activation resume finishes: the owner asked for it.
+	if policy.Paused && (pinned == "" || pinned == current) {
+		d.Log.Printf("updates are paused; run \"mc-agent resume\" to deploy again")
+		return nil
+	}
 
-	if pinned := readTag(d.pinnedFile()); pinned != "" {
+	if pinned != "" {
 		d.Log.Printf("pinned to %s, so newer releases aren't deployed; run \"mc-agent unpin\" to follow the latest release", pinned)
 		if pinned == current {
 			return nil
 		}
-		if err := d.activate(ctx, pinned, false); err != nil {
+		if err := d.activate(ctx, pinned, !d.deployed(pinned)); err != nil {
 			return fmt.Errorf("deploy: pinned release %s: %w", pinned, err)
 		}
 		return nil
@@ -393,8 +396,9 @@ func (d *Deployer) resume(ctx context.Context) error {
 	}
 
 	// A release activated by a rollback ran here before, and may be older
-	// than "mc-agent selfcheck", so only a new release's agent is checked.
-	forward := current == pending && !d.deployed(current) && current != readTag(d.pinnedFile())
+	// than "mc-agent selfcheck", so only a release that never passed a
+	// deploy here (a new one, pinned or not) has its agent checked.
+	forward := current == pending && !d.deployed(current)
 	d.Log.Printf("activating %s was interrupted; applying %s again", pending, current)
 	if err := d.apply(ctx, forward); err != nil {
 		if current != pending {
