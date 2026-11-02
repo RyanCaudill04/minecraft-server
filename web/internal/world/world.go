@@ -131,14 +131,23 @@ func ReadPlayers(serverDir, worldDir string) ([]Player, error) {
 		if err := readStats(path, &p); err != nil {
 			return nil, fmt.Errorf("world: %s: %w", id, err)
 		}
-		// The player data file is rewritten on every save while they're
-		// online and on logout, so its time is when they were last seen.
-		if fi, err := os.Stat(filepath.Join(playersDir, "data", id+".dat")); err == nil {
-			p.LastSeen = fi.ModTime().UTC()
-		}
 		p.Advancements, err = countAdvancements(filepath.Join(playersDir, "advancements", id+".json"))
 		if err != nil {
 			return nil, fmt.Errorf("world: %s: %w", id, err)
+		}
+		// The player data file is rewritten on every save while they're
+		// online and on logout, and Paper saves the stats and advancements
+		// with it. LastSeen is the newest of the three, taken after the
+		// contents were read, so a save that lands mid-read looks newer
+		// than what was read rather than older.
+		for _, f := range []string{
+			filepath.Join(playersDir, "data", id+".dat"),
+			path,
+			filepath.Join(playersDir, "advancements", id+".json"),
+		} {
+			if fi, err := os.Stat(f); err == nil && fi.ModTime().After(p.LastSeen) {
+				p.LastSeen = fi.ModTime().UTC()
+			}
 		}
 		players = append(players, p)
 	}
