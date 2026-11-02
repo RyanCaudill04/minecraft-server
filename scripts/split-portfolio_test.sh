@@ -68,10 +68,10 @@ mkdir -p "$tmp/full" && touch "$tmp/full/x"
 cd "$out"
 want=$(cd "$dir/portfolio-repo" && { find . -type f | sed 's|^\./||'; echo site/index.html; echo site/about/index.html; } | sort)
 [ "$(git ls-files | sort)" = "$want" ] || fail "files: got $(git ls-files | tr '\n' ' ')"
-[ "$(git log --reverse --format='%an <%ae> %aI|%cn %cI' | head -2)" = \
-  "Alice <Alice@example.com> 2026-01-01T10:00:00+00:00|Alice 2026-01-01T10:00:00+00:00
-Carol <Carol@example.com> 2026-01-03T10:00:00+00:00|Carol 2026-01-03T10:00:00+00:00" ] \
-  || fail "authors or dates changed: $(git log --reverse --format='%an <%ae> %aI|%cn %cI')"
+[ "$(git log --reverse --format='%an <%ae> %at|%cn %ct' | head -2)" = \
+  "Alice <Alice@example.com> 1767261600|Alice 1767261600
+Carol <Carol@example.com> 1767434400|Carol 1767434400" ] \
+  || fail "authors or dates changed: $(git log --reverse --format='%an <%ae> %at|%cn %ct')"
 [ "$(git log -1 --format='%an <%ae>')" = "Owner <owner@example.com>" ] || fail "setup commit isn't by the configured user"
 [ "$(git rev-list --count HEAD)" = 3 ] || fail "want 3 commits, got $(git rev-list --count HEAD)"
 [ "$(git branch -a --format='%(refname)')" = refs/heads/main ] || fail "want only main, got $(git branch -a)"
