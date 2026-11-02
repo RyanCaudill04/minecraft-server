@@ -99,14 +99,23 @@ pinned URL still serves the pinned file.
 of the checkout into their own server folder (#73). It's a dry run unless
 given `--apply`, and refuses to run while the server is up. On the Pi, the
 plan is to keep the server folder at `~/minecraft_server` and move the
-checkout:
+checkout.
+
+Releases don't ship `scripts/`, and the Pi's clone isn't pulled, so copy
+the script over from `main` and point it at the checkout:
 
 ```bash
-scripts/migrate-server-dir.sh --move-checkout-to ~/src/minecraft-server
+git fetch origin && git show origin/main:scripts/migrate-server-dir.sh | ssh mc-pi 'cat > ~/migrate-server-dir.sh'
 ```
 
-If it stops partway through, it prints the commands that are left, and
-running it again with `--checkout ~/src/minecraft-server` finishes the job.
+Then, on the Pi, with the server stopped:
+
+```bash
+bash ~/migrate-server-dir.sh --checkout ~/minecraft_server --move-checkout-to ~/src/minecraft-server
+```
+
+Add `--apply` once the plan looks right. If it stops partway through, it
+prints the command that finishes the job.
 
 ## World map (squaremap)
 
