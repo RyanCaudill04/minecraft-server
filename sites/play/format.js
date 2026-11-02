@@ -77,6 +77,10 @@ export function fmtWhen(iso) {
   return d.toLocaleString(undefined, sameDay ? { timeStyle: "short" } : { dateStyle: "medium", timeStyle: "short" });
 }
 
+export function fmtDate(iso) {
+  return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
+}
+
 // Minecraft time to a clock: tick 0 is 6:00 AM.
 export function mcClock(tod) {
   const h = (Math.floor(tod / 1000) + 6) % 24;
