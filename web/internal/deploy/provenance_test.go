@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/ryancaudill04/minecraft-server/web/internal/provenance"
 )
 
 // fakeProvenance accepts a bundle that reads "attests <hex digest>", like
@@ -27,11 +29,15 @@ import (
 type fakeProvenance struct {
 	mu      sync.Mutex
 	digests []string // digests Verify was asked about
+	err     error    // returned instead of checking, if set
 }
 
 func (p *fakeProvenance) Verify(_ context.Context, bundle []byte, digest []byte, name string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.err != nil {
+		return p.err
+	}
 	d := hex.EncodeToString(digest)
 	if name != TarballName {
 		return errors.New("provenance: wrong subject name " + name)
@@ -182,6 +188,33 @@ func TestBadAttestationIsRefused(t *testing.T) {
 	assertNotInstalled(t, h, "r2", "r1")
 	if calls := h.takeCalls(); len(calls) > 0 {
 		t.Errorf("systemctl was called for a refused release: %q", calls)
+	}
+
+	// The refusal is final, so later runs skip it quietly.
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Errorf("second Run = %v, want r2 skipped as failed", err)
+	}
+}
+
+// When the trusted root can't be fetched the release isn't at fault, so
+// it isn't marked failed and the next run tries again.
+func TestUnavailableTrustRootIsRetried(t *testing.T) {
+	h := newHarness(t)
+	a, p := withProvenance(t, h)
+	p.err = fmt.Errorf("provenance: fetching the Sigstore trusted root: %w", provenance.ErrUnavailable)
+	h.publish(t, "r1", "/ok")
+	a.attest(h, "r1")
+
+	if err := h.d.Run(context.Background()); err == nil {
+		t.Fatal("Run succeeded without a trusted root")
+	}
+	assertNotInstalled(t, h, "r1", "")
+	p.err = nil
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatalf("Run after the trusted root came back: %v", err)
+	}
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q, want r1", got)
 	}
 }
 

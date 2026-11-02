@@ -252,6 +252,11 @@ func (d *Deployer) Run(ctx context.Context) error {
 	}
 
 	if err := d.Install(ctx, rel); err != nil {
+		var r refused
+		if errors.As(err, &r) {
+			// Retrying can't change the answer; stop until a new release.
+			os.WriteFile(d.failedFile(), []byte(rel.Tag+"\n"), 0o644)
+		}
 		return err
 	}
 	return d.Activate(ctx, rel.Tag)

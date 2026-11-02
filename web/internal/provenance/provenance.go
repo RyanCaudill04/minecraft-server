@@ -39,6 +39,10 @@ const Issuer = "https://token.actions.githubusercontent.com"
 // SLSAProvenance is the predicate type actions/attest-build-provenance signs.
 const SLSAProvenance = "https://slsa.dev/provenance/v1"
 
+// ErrUnavailable marks a failure to get the Sigstore trusted root, as
+// opposed to a bundle that failed its checks. Trying again later can help.
+var ErrUnavailable = errors.New("sigstore trusted root unavailable")
+
 // Verifier checks Sigstore bundles made by actions/attest-build-provenance.
 type Verifier struct {
 	Repo     string // GitHub "owner/name"; compared ignoring case, like GitHub does
@@ -73,7 +77,7 @@ func (v *Verifier) Verify(ctx context.Context, bundleJSON []byte, digest []byte,
 	if trusted == nil {
 		tr, err := v.fetchTrustedRoot(ctx)
 		if err != nil {
-			return fmt.Errorf("provenance: fetching the Sigstore trusted root: %w", err)
+			return fmt.Errorf("provenance: fetching the Sigstore trusted root: %w", errors.Join(ErrUnavailable, err))
 		}
 		trusted = tr
 	}

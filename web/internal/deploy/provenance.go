@@ -10,12 +10,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/ryancaudill04/minecraft-server/web/internal/provenance"
 )
 
 // ProvenanceName is the release asset holding the Sigstore bundle that
@@ -23,6 +26,12 @@ import (
 const ProvenanceName = "provenance.sigstore.json"
 
 const maxProvenanceSize = 1 << 20
+
+// refused marks an error that retrying can't fix: the release itself is
+// wrong, so Run records it as failed instead of trying it every run.
+type refused struct{ error }
+
+func (r refused) Unwrap() error { return r.error }
 
 // Provenance checks that an artifact was built by the release workflow.
 // *provenance.Verifier implements it.
@@ -52,7 +61,7 @@ func (d *Deployer) checkProvenance(ctx context.Context, rel *Release, wantHex st
 				rel.Tag, ProvenanceName, d.UnattestedBefore)
 			return false, nil
 		}
-		return false, fmt.Errorf("deploy: refusing to install %s: it has no %s, so there is no proof the release workflow built it", rel.Tag, ProvenanceName)
+		return false, refused{fmt.Errorf("deploy: refusing to install %s: it has no %s, so there is no proof the release workflow built it", rel.Tag, ProvenanceName)}
 	}
 	digest, err := hex.DecodeString(wantHex)
 	if err != nil {
@@ -63,7 +72,11 @@ func (d *Deployer) checkProvenance(ctx context.Context, rel *Release, wantHex st
 		return false, err
 	}
 	if err := d.Provenance.Verify(ctx, b.Bytes(), digest, TarballName); err != nil {
-		return false, fmt.Errorf("deploy: refusing to install %s: %w", rel.Tag, err)
+		err = fmt.Errorf("deploy: refusing to install %s: %w", rel.Tag, err)
+		if errors.Is(err, provenance.ErrUnavailable) {
+			return false, err // the trust root, not the release; try again
+		}
+		return false, refused{err}
 	}
 	d.Log.Printf("%s provenance verified", rel.Tag)
 	return true, nil
@@ -89,10 +102,10 @@ func (d *Deployer) builtBeforeAttestations(tag string) bool {
 func checkVersion(dir, tag string) error {
 	data, err := os.ReadFile(filepath.Join(dir, "VERSION"))
 	if err != nil {
-		return fmt.Errorf("deploy: refusing to install %s: its attested tarball has no VERSION: %w", tag, err)
+		return refused{fmt.Errorf("deploy: refusing to install %s: its attested tarball has no VERSION: %w", tag, err)}
 	}
 	if got := strings.TrimSpace(string(data)); got != tag {
-		return fmt.Errorf("deploy: refusing to install %s: the attested tarball is for %q", tag, got)
+		return refused{fmt.Errorf("deploy: refusing to install %s: the attested tarball is for %q", tag, got)}
 	}
 	return nil
 }
