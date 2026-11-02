@@ -8,7 +8,7 @@
 // "rollback <track>" goes back to the track's release deployed before the
 // current one and pins it, so the timer doesn't deploy the newer release
 // again until "unpin <track>". On the single release, leave out the track.
-// "migrate" retries a move to tracks that failed with the same releases.
+// "migrate" tries the move to tracks again, even with releases that failed it before.
 // The agent deploying a release runs that release's own agent with
 // "selfcheck", to make sure it can run the next deploy.
 //

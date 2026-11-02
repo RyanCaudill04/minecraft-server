@@ -813,6 +813,11 @@ func (d *Deployer) record(tag string, ok bool) {
 	if len(h) > maxHistory {
 		h = h[:maxHistory]
 	}
+	d.writeHistory(h)
+}
+
+// writeHistory replaces <apps>/history with h. A failure is only logged.
+func (d *Deployer) writeHistory(h []outcome) {
 	var b strings.Builder
 	for _, o := range h {
 		result := "failed"
@@ -822,7 +827,7 @@ func (d *Deployer) record(tag string, ok bool) {
 		fmt.Fprintf(&b, "%s %s\n", o.tag, result)
 	}
 	if err := d.writeFile(d.historyFile(), []byte(b.String())); err != nil {
-		d.Log.Printf("recording %s in %s: %v", tag, d.historyFile(), err)
+		d.Log.Printf("writing %s: %v", d.historyFile(), err)
 	}
 }
 

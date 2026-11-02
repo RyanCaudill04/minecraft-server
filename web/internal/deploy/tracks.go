@@ -285,7 +285,7 @@ func (a *Agent) migrate(ctx context.Context, st *state.State, gh *GitHub, single
 	if err != nil {
 		return false, err
 	}
-	targets, ready, err := a.targets(ctx, gh)
+	targets, ready, err := a.targets(ctx, gh, force)
 	if err != nil || !ready {
 		return false, err
 	}
@@ -328,6 +328,10 @@ func (a *Agent) migrate(ctx context.Context, st *state.State, gh *GitHub, single
 	var ds []*Deployer
 	for _, t := range a.tracks() {
 		d := a.deployer(t, gh)
+		if force && d.hasFailed(targets[t.Name].Tag) {
+			l.Printf("%s: trying %s again", t.Name, targets[t.Name].Tag)
+			d.forget(targets[t.Name].Tag)
+		}
 		if err := d.Install(ctx, targets[t.Name]); err != nil {
 			err = fmt.Errorf("installing %s: %w", targets[t.Name].Tag, err)
 			a.recordFailure(tags, err)
@@ -370,8 +374,9 @@ func (a *Agent) migrate(ctx context.Context, st *state.State, gh *GitHub, single
 }
 
 // targets returns each track's newest release, and whether every track
-// has one that hasn't failed.
-func (a *Agent) targets(ctx context.Context, gh *GitHub) (map[string]*Release, bool, error) {
+// has one that hasn't failed. With force, a release that failed counts as
+// one that hasn't: "mc-agent migrate" is how to try it again.
+func (a *Agent) targets(ctx context.Context, gh *GitHub, force bool) (map[string]*Release, bool, error) {
 	if len(a.Tracks) == 0 {
 		return nil, false, nil
 	}
@@ -386,7 +391,7 @@ func (a *Agent) targets(ctx context.Context, gh *GitHub) (map[string]*Release, b
 		if err != nil {
 			return nil, false, err
 		}
-		if d.hasFailed(rel.Tag) {
+		if !force && d.hasFailed(rel.Tag) {
 			a.logger().Printf("not moving to tracks yet: %s failed; waiting for a newer %s release", rel.Tag, t.Name)
 			return nil, false, nil
 		}
@@ -480,6 +485,20 @@ func (a *Agent) recover(ctx context.Context, st *state.State, gh *GitHub, single
 		return nil
 	})
 	return true, err
+}
+
+// forget clears tag's failed marker and history entry, so that it can be
+// activated again.
+func (d *Deployer) forget(tag string) {
+	if readTag(d.failedFile()) == tag {
+		if err := os.Remove(d.failedFile()); err != nil {
+			d.Log.Printf("clearing %s: %v", d.failedFile(), err)
+		}
+	}
+	if _, found := d.lastOutcome(tag); !found {
+		return
+	}
+	d.writeHistory(slices.DeleteFunc(d.history(), func(o outcome) bool { return o.tag == tag }))
 }
 
 // abandon makes a track folder read as having nothing active, after the

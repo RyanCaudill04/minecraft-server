@@ -765,3 +765,35 @@ func TestTimedOutMoveIsReverted(t *testing.T) {
 		t.Errorf("migration = %+v, want the attempt settled", st.Migration)
 	}
 }
+
+// "mc-agent migrate" gets past a track whose release failed its health
+// check, which is how a flaky first try is retried.
+func TestMigrateRetriesFailedHealthCheck(t *testing.T) {
+	h := newAgentHarness(t)
+	h.onSingle(t)
+	flaky := true
+	h.failWhen = func(_ string, args []string) bool {
+		return flaky && slices.Equal(args, []string{"restart", "play.service"})
+	}
+	if err := h.a.Run(context.Background()); err == nil {
+		t.Fatal("want the move to fail")
+	}
+	// Same release, but play starts now.
+	flaky = false
+	if err := h.a.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.layout(t); got != state.Single {
+		t.Fatalf("a plain run moved after a failure: layout = %q", got)
+	}
+	h.takeCalls()
+	if err := h.a.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.layout(t); got != state.Tracks {
+		t.Errorf("layout = %q after migrate, want tracks", got)
+	}
+	if got := h.active(t, "play"); got != "play-r1" {
+		t.Errorf("play = %q, want play-r1", got)
+	}
+}
