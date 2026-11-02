@@ -163,11 +163,29 @@ preview() {
 }
 
 cleanup_legacy() {
-  local script=$root/scripts/pi-cleanup-legacy.sh
-  if [[ " $* " == *" --apply "* ]]; then
-    confirm "Remove the old deploy's leftovers"
-  fi
-  on_pi bash -s -- "$@" <"$script"
+  local script=$root/scripts/pi-cleanup-legacy.sh arg words=
+  for arg in "$@"; do
+    case $arg in
+      --apply) ;;
+      --backups) ;;
+      -h | --help)
+        echo "usage: scripts/mc cleanup-legacy [--apply] [--backups]"
+        echo "  without --apply, only lists what would be removed"
+        echo "  --backups  with --apply, also remove world.backup-* folders"
+        return 0
+        ;;
+      *) die "cleanup-legacy: unknown option $arg" ;;
+    esac
+    words+=" $arg"
+  done
+  for arg in "$@"; do
+    if [ "$arg" = --apply ]; then
+      confirm "Remove the old deploy's leftovers"
+      break
+    fi
+  done
+  # Only the options above get here, so the Pi's shell sees plain words.
+  on_pi "bash -s --$words" <"$script"
 }
 
 yes=false

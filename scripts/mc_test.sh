@@ -139,6 +139,16 @@ check "cleanup apply without --yes" 2
 no_calls "cleanup apply without --yes"
 run --yes cleanup-legacy --apply --backups
 check "cleanup apply" 0 '^ssh mc-pi bash -s -- --apply --backups$'
+# shellcheck disable=SC2016 # must stay literal
+run cleanup-legacy '$(touch pwned)'
+check "cleanup stray argument" 2
+no_calls "cleanup stray argument"
+run --yes cleanup-legacy "$(printf -- '--apply\t')"
+check "cleanup tab argument" 2
+no_calls "cleanup tab argument"
+run cleanup-legacy --help
+check "cleanup help" 0
+no_calls "cleanup help"
 
 run preview
 check "preview" 0 \
