@@ -172,6 +172,11 @@ type Deployer struct {
 	// health URLs answer. The timer runs that agent from then on, so a
 	// release whose agent is broken must roll back. Nil skips the check.
 	CheckAgent func(ctx context.Context) error
+	// CheckState runs the current release's "mc-agent status" after a
+	// rollback, which skips CheckAgent: an agent older than the state.json
+	// format can't read what a newer one wrote, and then nothing could
+	// deploy or unpin again. Nil skips the check.
+	CheckState func(ctx context.Context) error
 	// AgentTimer is the timer that runs the agent, e.g. mc-agent.timer. A
 	// release that doesn't start it is refused. Empty skips the check.
 	AgentTimer string
@@ -577,7 +582,13 @@ func (d *Deployer) activate(ctx context.Context, tag string, forward bool) error
 	}
 	d.Log.Printf("activating %s (was %q)", tag, previous)
 
-	if err := d.apply(ctx, forward); err != nil {
+	err = d.apply(ctx, forward)
+	if err == nil && !forward && d.CheckState != nil {
+		if cerr := d.CheckState(ctx); cerr != nil {
+			err = fmt.Errorf("the release's mc-agent can't read the deploy state: %w", cerr)
+		}
+	}
+	if err != nil {
 		back := previous
 		if back == "" || back == tag || d.hasFailed(back) {
 			back = d.fallback(tag)

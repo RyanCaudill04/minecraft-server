@@ -82,6 +82,18 @@ func main() {
 		return nil
 	}
 
+	// "status" reads state.json, so it fails for an agent too old for it.
+	a.CheckState = func(ctx context.Context, agent string) error {
+		ctx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, agent,
+			"-repo", *repo, "-apps", *apps, "-units", *units, "-api", *api, "status").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s status: %w: %s", agent, err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 

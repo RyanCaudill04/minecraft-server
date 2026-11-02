@@ -73,6 +73,10 @@ type Agent struct {
 	// CheckAgent runs "<bin> selfcheck" for the agent at bin, a release's
 	// bin/mc-agent. Nil skips the check.
 	CheckAgent func(ctx context.Context, bin string) error
+	// CheckState runs "<bin> status" for the agent at bin after a rollback
+	// of the agent's track, so a release that can't read state.json is
+	// rolled back from at once. Nil skips the check.
+	CheckState func(ctx context.Context, bin string) error
 
 	HTTP          *http.Client
 	Systemctl     func(ctx context.Context, args ...string) error
@@ -140,6 +144,11 @@ func (a *Agent) deployer(t Track, gh *GitHub) *Deployer {
 	if t.Name == a.AgentTrack {
 		d.AgentTimer = a.AgentTimer
 		d.CheckAgent = a.checkAgent(d)
+		if a.CheckState != nil {
+			d.CheckState = func(ctx context.Context) error {
+				return a.CheckState(ctx, filepath.Join(d.currentLink(), "bin", "mc-agent"))
+			}
+		}
 	}
 	return d
 }

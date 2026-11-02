@@ -39,6 +39,13 @@
 // doesn't know, so an older writer doesn't drop what a newer one added at
 // the same version.
 //
+// An agent that rolls the agent's track back to a release older than a
+// version bump would be locked out by that rule: it refuses the newer
+// state.json for every deploy, rollback and unpin. So mc-agent runs the
+// target's "status" after such a rollback, which reads the state, and
+// rolls back from it if that fails. Keep "status" reading state.json, and
+// bump Version only for a change that has to lock old agents out.
+//
 // # Writers
 //
 // mc-agent and admin may both write: Update holds an exclusive flock on

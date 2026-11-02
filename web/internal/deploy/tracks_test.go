@@ -797,3 +797,37 @@ func TestMigrateRetriesFailedHealthCheck(t *testing.T) {
 		t.Errorf("play = %q, want play-r1", got)
 	}
 }
+
+// Rolling the agent track back to an agent that can't read state.json is
+// undone, so the newer agent stays in charge.
+func TestAgentRollbackNeedsReadableState(t *testing.T) {
+	h := migrated(t)
+	h.pub(t, "agent-r2", "agent", "/ok")
+	if err := h.a.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var checked []string
+	h.a.CheckState = func(_ context.Context, bin string) error {
+		checked = append(checked, bin)
+		return errors.New("unsupported state version 2")
+	}
+	err := h.a.Rollback(context.Background(), "agent")
+	if err == nil || !strings.Contains(err.Error(), "can't read the deploy state") {
+		t.Fatalf("err = %v, want the state check to fail the rollback", err)
+	}
+	if want := []string{filepath.Join(h.a.Apps, "agent", "current", "bin", "mc-agent")}; !slices.Equal(checked, want) {
+		t.Errorf("state check ran %q, want %q", checked, want)
+	}
+	if got := h.active(t, "agent"); got != "agent-r2" {
+		t.Errorf("agent = %q, want agent-r2 after the refused rollback", got)
+	}
+	// Other tracks don't run the agent's check.
+	checked = nil
+	h.pub(t, "play-r2", "play", "/ok")
+	if err := h.a.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.a.Rollback(context.Background(), "play"); err != nil || len(checked) != 0 {
+		t.Errorf("play rollback: err = %v, checks = %q", err, checked)
+	}
+}
