@@ -73,4 +73,4 @@ systemd doesn't strip comments at the end of a line, so keep them on their
 own lines.
 
 Check it with `scripts/mc logs ddns`, or try it without changing anything:
-`set -a; . ~/.config/minecraft/secrets.env; ~/apps/current/bin/ddns -dry-run`.
+`( set -a; . ~/.config/minecraft/secrets.env; exec ~/apps/current/bin/ddns -dry-run )`.
