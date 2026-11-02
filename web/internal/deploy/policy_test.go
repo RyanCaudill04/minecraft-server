@@ -556,3 +556,18 @@ func TestUnpinFollowsLatest(t *testing.T) {
 		t.Errorf("mode = %q, want auto", got)
 	}
 }
+
+func TestRequestClaimedWhileAnotherIsWritten(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1")
+	if err := h.d.Submit(Request{Action: ActionPause, By: "me@example.com", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	h.run(t)
+	if h.exists("request.json.claimed") {
+		t.Error("the claimed request was left behind")
+	}
+	if !h.d.policy().Paused {
+		t.Error("the request wasn't carried out")
+	}
+}

@@ -456,16 +456,21 @@ func (d *Deployer) LastRequest() (*RequestResult, error) {
 // failure to carry out a valid request is returned; a malformed or expired
 // one is dropped and recorded, and the run goes on.
 func (d *Deployer) handleRequest(ctx context.Context) error {
-	data, err := os.ReadFile(d.requestFile())
-	if errors.Is(err, fs.ErrNotExist) {
+	// Claimed with a rename, so a request admin writes meanwhile (it may
+	// replace an expired one) isn't removed unread. Removed before it is
+	// carried out, so a request that kills the agent isn't retried on every
+	// run. A pin that is cut short is finished from the pin file.
+	claimed := d.requestFile() + ".claimed"
+	if err := os.Rename(d.requestFile(), claimed); errors.Is(err, fs.ErrNotExist) {
 		return nil
+	} else if err != nil {
+		return err
 	}
+	data, err := os.ReadFile(claimed)
 	if err != nil {
 		return err
 	}
-	// Removed first, so a request that kills the agent isn't retried on
-	// every run. A pin that is cut short is finished from the pin file.
-	if err := os.Remove(d.requestFile()); err != nil {
+	if err := os.Remove(claimed); err != nil {
 		return err
 	}
 	var r Request
