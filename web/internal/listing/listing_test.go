@@ -179,3 +179,29 @@ func TestDamagedStateFile(t *testing.T) {
 		t.Errorf("file not replaced: %v", err)
 	}
 }
+
+func TestFutureListingDoesNotKeepPlayerPublic(t *testing.T) {
+	future := time.Now().Add(24 * time.Hour)
+	hidden := time.Now().Add(-time.Minute) // a hidden session saved a minute ago
+
+	// Loaded from a file written while the clock was ahead.
+	path := filepath.Join(t.TempDir(), "listed.json")
+	data := `{"` + aliceID + `":{"name":"Alice","listed":"` + future.UTC().Format(time.RFC3339) + `"}}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := open(t, path)
+	if r.Public(aliceID, hidden) {
+		t.Error("a future listing in the file keeps Alice public through a hidden session")
+	}
+	if r.Public(aliceID, time.Time{}) {
+		t.Error("a future listing in the file was kept")
+	}
+
+	// Recorded in memory with a clock that later stepped back.
+	r = open(t, "")
+	observe(t, r, future, alice)
+	if r.Public(aliceID, hidden) {
+		t.Error("a future observation keeps Alice public through a hidden session")
+	}
+}

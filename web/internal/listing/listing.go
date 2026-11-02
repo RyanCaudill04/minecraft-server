@@ -84,8 +84,15 @@ func Open(path string, grace time.Duration) (*Registry, error) {
 	if err := json.Unmarshal(data, &file); err != nil {
 		return r, fmt.Errorf("listing: %s: %w", path, err)
 	}
+	now := time.Now()
 	for id, e := range file {
 		if valid(id, e.Name) && len(r.seen) < MaxPlayers {
+			// A listing can't be from the future: the clock may have
+			// stepped back, or the file been edited. Forget it, which
+			// errs toward hidden.
+			if e.Listed.After(now.Add(grace)) {
+				continue
+			}
 			r.seen[id] = e
 			r.saved[id] = e.Listed
 		}
@@ -139,6 +146,9 @@ func (r *Registry) Public(id string, lastSeen time.Time) bool {
 	e, ok := r.seen[id]
 	if !ok {
 		return false
+	}
+	if e.Listed.After(time.Now().Add(r.grace)) {
+		return false // from a clock that has since stepped back
 	}
 	return !lastSeen.After(e.Listed.Add(r.grace))
 }
