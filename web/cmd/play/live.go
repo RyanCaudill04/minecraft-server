@@ -27,6 +27,13 @@ type Activity struct {
 	Events []activity.Event `json:"events"` // newest first
 }
 
+// skyState is what /api/time works the sky out from.
+type skyState struct {
+	saved  *world.Sky
+	active bool      // Paper is awake
+	since  time.Time // when the log says it started, if it does
+}
+
 // addLive adds the routes that follow the running game: the clock and
 // weather run forward from the last save (GET /api/time), and the feed of
 // joins, leaves, deaths and advancements from the server's log
@@ -67,24 +74,36 @@ func addLive(mux *http.ServeMux, serverDir string, status *site.Cache[mcstatus.S
 	}
 
 	worldDir := filepath.Join(serverDir, "world")
-	sky := &site.Cache[world.Now]{MaxAge: 5 * time.Second, Load: func(ctx context.Context) (world.Now, error) {
+	// The cache holds what takes work to find; At is cheap, so each answer
+	// is worked out for the moment it's sent. Otherwise a cached answer is
+	// up to 5s behind and the page's clock steps back when a fresh one
+	// follows a stale one.
+	sky := &site.Cache[skyState]{MaxAge: 5 * time.Second, Load: func(ctx context.Context) (skyState, error) {
 		s := update(ctx)
 		saved, err := world.ReadSky(worldDir)
 		if err != nil {
-			return world.Now{}, err
+			return skyState{}, err
 		}
 		since, running := feed.Running()
 		if !running {
 			since = time.Time{}
 		}
-		return saved.At(time.Now(), s.State == mcstatus.StateActive, since), nil
+		return skyState{saved, s.State == mcstatus.StateActive, since}, nil
 	}}
 	feedCache := &site.Cache[Activity]{MaxAge: 5 * time.Second, Load: func(ctx context.Context) (Activity, error) {
 		update(ctx)
 		return Activity{Events: feed.Events(feedSize)}, nil
 	}}
 
-	mux.HandleFunc("GET /api/time", site.JSON("play: time", sky))
+	mux.HandleFunc("GET /api/time", func(w http.ResponseWriter, r *http.Request) {
+		st, err := sky.Get(context.WithoutCancel(r.Context()))
+		if err != nil {
+			log.Printf("play: time: %v", err)
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		site.WriteJSON(w, "play: time", st.saved.At(time.Now(), st.active, st.since))
+	})
 	mux.HandleFunc("GET /api/activity", site.JSON("play: activity", feedCache))
 	return func(ctx context.Context) { update(ctx) }
 }

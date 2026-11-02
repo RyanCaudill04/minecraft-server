@@ -136,6 +136,20 @@ func TestAPITime(t *testing.T) {
 			t.Errorf("/api/time = %+v; want a live clock", now)
 		}
 	})
+	t.Run("answers are for the moment they're sent", func(t *testing.T) {
+		ts, server := newTestServer(t, active("Alice"), nil)
+		writeLatestLog(t, server)
+		var a, b world.Now
+		getJSON(t, ts.URL+"/api/time", &a)
+		time.Sleep(1100 * time.Millisecond) // served from the cache
+		getJSON(t, ts.URL+"/api/time", &b)
+		if !b.At.After(a.At) {
+			t.Errorf("At did not advance: %v then %v", a.At, b.At)
+		}
+		if ta, tb := a.Day*24000+a.TimeOfDay, b.Day*24000+b.TimeOfDay; tb < ta+20 {
+			t.Errorf("clock went %d -> %d ticks; want at least 20 more after 1s", ta, tb)
+		}
+	})
 	t.Run("missing world", func(t *testing.T) {
 		ts, server := newTestServer(t, nil, nil)
 		if err := os.RemoveAll(filepath.Join(server, "world")); err != nil {
