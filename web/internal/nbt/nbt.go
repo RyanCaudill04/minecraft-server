@@ -114,7 +114,17 @@ type limitReader struct {
 
 func (l *limitReader) Read(p []byte) (int, error) {
 	if l.n <= 0 {
-		return 0, errTooLarge
+		// At the limit, only more data is too large; a clean end is fine.
+		var one [1]byte
+		for {
+			n, err := l.r.Read(one[:])
+			if n > 0 {
+				return 0, errTooLarge
+			}
+			if err != nil {
+				return 0, err
+			}
+		}
 	}
 	if int64(len(p)) > l.n {
 		p = p[:l.n]

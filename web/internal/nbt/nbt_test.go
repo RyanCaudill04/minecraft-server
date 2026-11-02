@@ -237,3 +237,41 @@ func TestReadFileErrorNamesFile(t *testing.T) {
 		t.Errorf("error %v, want it to name %s", err, path)
 	}
 }
+
+// The size cap applies to the document, not to what gzip reads after it: a
+// document of exactly the cap decodes the same plain or gzipped.
+func TestDecodeSizeLimitBoundary(t *testing.T) {
+	const limit = 1 << 20
+	sized := func(total int) map[string]any {
+		m := map[string]any{}
+		// Each array with a 2-byte name costs 9 bytes plus its data.
+		rest := total - len(nbttest.Encode(m, false))
+		for i := 0; rest > 0; i++ {
+			n := min(60000, rest-9)
+			if left := rest - 9 - n; left > 0 && left < 9 {
+				n -= 9 // leave room for one more entry
+			}
+			m[fmt.Sprintf("%02d", i)] = make([]byte, n)
+			rest -= n + 9
+		}
+		return m
+	}
+	for _, tc := range []struct {
+		delta   int
+		wantErr bool
+	}{{-1, false}, {0, false}, {1, true}} {
+		for _, compress := range []bool{false, true} {
+			data := nbttest.Encode(sized(limit+tc.delta), false)
+			if len(data) != limit+tc.delta {
+				t.Fatalf("fixture is %d bytes, want %d", len(data), limit+tc.delta)
+			}
+			if compress {
+				data = nbttest.Encode(sized(limit+tc.delta), true)
+			}
+			_, err := nbt.Decode(bytes.NewReader(data))
+			if (err != nil) != tc.wantErr {
+				t.Errorf("delta %d gzip %v: err = %v, want error %v", tc.delta, compress, err, tc.wantErr)
+			}
+		}
+	}
+}
