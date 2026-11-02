@@ -91,6 +91,16 @@ func main() {
 		current, err = d.Current()
 		if err == nil {
 			fmt.Printf("agent %s, active release %q\n", version, current)
+			pinned, activating, failed := d.State()
+			if pinned != "" {
+				fmt.Printf("pinned to %s: newer releases aren't deployed until \"mc-agent unpin\"\n", pinned)
+			}
+			if activating != "" {
+				fmt.Printf("activating %s was interrupted; the next deploy run finishes it\n", activating)
+			}
+			if failed != "" {
+				fmt.Printf("%s failed and isn't retried\n", failed)
+			}
 		}
 	case "version":
 		fmt.Println(version)

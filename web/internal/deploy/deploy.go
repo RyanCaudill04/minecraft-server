@@ -628,6 +628,12 @@ func (d *Deployer) Rollback(ctx context.Context) error {
 	return nil
 }
 
+// State returns the release pinned by a rollback, the one whose activation
+// is unfinished and the one marked failed; each is "" if there is none.
+func (d *Deployer) State() (pinned, activating, failed string) {
+	return readTag(d.pinnedFile()), readTag(d.pendingFile()), readTag(d.failedFile())
+}
+
 // Unpin lets the timer deploy the latest release again after a Rollback.
 func (d *Deployer) Unpin() error {
 	unlock, err := d.lock()

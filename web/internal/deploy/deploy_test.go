@@ -1430,3 +1430,13 @@ func TestRollbackFromReleaseWithoutHistoryGoesBack(t *testing.T) {
 	}
 }
 
+func TestStateReportsPinAndMarkers(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1", "r2")
+	if err := h.d.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if pinned, activating, failed := h.d.State(); pinned != "r1" || activating != "" || failed != "" {
+		t.Errorf("State = %q %q %q, want r1 pinned only", pinned, activating, failed)
+	}
+}
