@@ -1346,3 +1346,63 @@ func TestOneAgentAtATime(t *testing.T) {
 		t.Errorf("current = %q, want r2", got)
 	}
 }
+
+// An agent from before pins ignores them, so it can deploy the latest
+// release while a pin is set. The newer agent must not switch back.
+func TestPinOutlivedByAnotherAgentIsDropped(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1", "r2")
+	if err := h.d.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// What an older agent does: install and switch, with no pending marker.
+	h.publish(t, "r3", "/ok")
+	rel, err := h.d.Latest(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.Install(context.Background(), rel); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.switchTo("r3"); err != nil {
+		t.Fatal(err)
+	}
+	h.takeCalls()
+
+	for i := range 2 {
+		if err := h.d.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.current(t); got != "r3" {
+			t.Errorf("run %d: current = %q, want r3 kept", i, got)
+		}
+	}
+	if h.exists("pinned") {
+		t.Error("the pin is still set")
+	}
+	if calls := h.takeCalls(); len(calls) != 0 {
+		t.Errorf("systemctl calls = %q, want none", calls)
+	}
+}
+
+// A rollback interrupted before it switched is finished, not dropped.
+func TestInterruptedRollbackIsFinished(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1", "r2")
+	if err := h.d.writeFile(h.d.pinnedFile(), []byte("r1\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.writeFile(h.d.pendingFile(), []byte("r1\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q, want the rollback to r1 finished", got)
+	}
+	if !h.exists("pinned") {
+		t.Error("the pin was dropped")
+	}
+}
+

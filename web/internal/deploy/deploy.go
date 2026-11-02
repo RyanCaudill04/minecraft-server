@@ -254,6 +254,9 @@ func (d *Deployer) Run(ctx context.Context) error {
 	}
 	defer unlock()
 
+	// Read before resume clears it: it tells a rollback this agent was
+	// doing from a move made by some other agent.
+	pending := readTag(d.pendingFile())
 	if err := d.resume(ctx); err != nil {
 		return err
 	}
@@ -263,14 +266,26 @@ func (d *Deployer) Run(ctx context.Context) error {
 	}
 
 	if pinned := readTag(d.pinnedFile()); pinned != "" {
-		d.Log.Printf("pinned to %s by a rollback, so newer releases aren't deployed; run \"mc-agent unpin\" to follow the latest release", pinned)
-		if pinned == current {
+		switch {
+		case pinned == current:
+			d.Log.Printf("pinned to %s by a rollback, so newer releases aren't deployed; run \"mc-agent unpin\" to follow the latest release", pinned)
 			return nil
+		case pending == pinned:
+			// The rollback was interrupted before it switched.
+			d.Log.Printf("pinned to %s by a rollback, so newer releases aren't deployed; run \"mc-agent unpin\" to follow the latest release", pinned)
+			if err := d.activate(ctx, pinned, false); err != nil {
+				return fmt.Errorf("deploy: pinned release %s: %w", pinned, err)
+			}
+			return nil
+		default:
+			// Something else moved current, such as the older agent of
+			// the pinned release deploying the latest one. Switching back
+			// would hand current back and forth with that agent.
+			d.Log.Printf("%s is active, not the pinned %s; dropping the pin", current, pinned)
+			if err := d.unpin(); err != nil {
+				return err
+			}
 		}
-		if err := d.activate(ctx, pinned, false); err != nil {
-			return fmt.Errorf("deploy: pinned release %s: %w", pinned, err)
-		}
-		return nil
 	}
 
 	rel, err := d.Latest(ctx)
@@ -599,6 +614,9 @@ func (d *Deployer) Rollback(ctx context.Context) error {
 	// the next run instead of undone.
 	if err := d.writeFile(d.pinnedFile(), []byte(to+"\n")); err != nil {
 		return err
+	}
+	if _, known := d.lastOutcome(to); !known {
+		d.Log.Printf("warning: %s isn't in the deploy history, so it may predate pins; if its agent deploys the latest release itself, the pin is dropped", to)
 	}
 	d.Log.Printf("pinning %s: the timer won't deploy newer releases until \"mc-agent unpin\"", to)
 	if err := d.activate(ctx, to, false); err != nil {
