@@ -98,8 +98,12 @@ is_repo_only() {
 # --move-checkout-to renames the folder it lives in.
 main() {
   local checkout='' server_dir=${SERVER_DIR:-$HOME/minecraft_server} new_checkout=''
-  local backup_dir=$HOME/backups/minecraft backup=true apply=false
+  local backup_dir=$HOME/backups/minecraft backup=true apply=false self
   checkout=$(cd "$(dirname "$0")/.." && pwd)
+  # This script, for the finish command if --apply stops partway. On the
+  # Pi it's usually a copy outside the checkout, whose scripts/ isn't
+  # pulled and may not have it.
+  self=$(canon "$0")
 
   while [ $# -gt 0 ]; do
     case $1 in
@@ -261,8 +265,10 @@ main() {
 
   # If anything below fails, say how to finish. Nothing is deleted before
   # it's in the server folder, so a re-run only has what's left to do.
+  local rerun=$self
+  case $self in "$checkout"/*) rerun=$src/${self#"$checkout"/} ;; esac
   # shellcheck disable=SC2064 # expand now: these locals are gone at exit
-  trap "on_exit '$src' '$server_dir'" EXIT
+  trap "on_exit '$rerun' '$src' '$server_dir'" EXIT
 
   if [ -n "$new_checkout" ]; then
     mkdir -p "$(dirname "$new_checkout")"
@@ -310,13 +316,13 @@ main() {
   fi
 }
 
-# on_exit <checkout> <server folder> runs if --apply stops partway.
+# on_exit <script> <checkout> <server folder> runs if --apply stops partway.
 on_exit() {
   {
     echo
     echo "migrate-server-dir: stopped partway. Nothing was deleted, and the backup is intact."
     echo "Fix the error above, then finish with:"
-    echo "  $1/scripts/migrate-server-dir.sh --checkout $1 --server-dir $2 --apply"
+    echo "  bash $1 --checkout $2 --server-dir $3 --apply"
   } >&2
 }
 
