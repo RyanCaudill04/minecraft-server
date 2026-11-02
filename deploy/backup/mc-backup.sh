@@ -94,27 +94,33 @@ saving_off=false
 
 rcon() { MC_RCON_PASSWORD=$rcon_password "$rcon_bin" -addr "$rcon_addr" "$@"; }
 
+# resume_saving sends save-on if saving is off. It fails if save-on does,
+# and then saving stays marked off so the exit trap tries again.
 resume_saving() {
   if $saving_off; then
+    rcon save-on >/dev/null || return 1
     saving_off=false
-    rcon save-on >/dev/null || log "warning: save-on failed (fine if Paper has since stopped)"
   fi
 }
 
 cleanup() {
-  resume_saving
+  resume_saving || log "warning: save-on failed (fine if Paper has since stopped)"
   rm -rf "$staging" "$partial"
 }
 trap cleanup EXIT
 
 paper_running() { pgrep -f "$paper_pattern" >/dev/null; }
 
+# paper_pids prints the PIDs of Paper on one line, so two calls are equal
+# only if the same process kept running in between.
+paper_pids() { pgrep -f "$paper_pattern" | tr '\n' ' ' || true; }
+
 # copy_world copies the sources into the staging folder, taking care that
 # Paper isn't writing them. It returns 1 if the copy has to be retried.
 # It runs as an "until" condition, where set -e is off, so every step that
 # can fail checks for it.
 copy_world() {
-  local mode=asleep
+  local mode=asleep pids=
   { rm -rf "$staging" && mkdir -p "$staging"; } || die "can't create $staging"
 
   if paper_running; then
@@ -123,6 +129,7 @@ copy_world() {
       log "Paper is running; pausing saves over RCON"
       # Set first: if save-off works but the flush fails, the exit trap
       # still turns saving back on.
+      pids=$(paper_pids)
       saving_off=true
       if ! rcon save-off "save-all flush" >/dev/null; then
         paper_running && die "RCON failed while Paper is running; check enable-rcon, rcon.port and rcon.password"
@@ -145,7 +152,18 @@ copy_world() {
   (cd "$server_dir" && cp -a "${sources[@]}" "$staging/") || die "copying the world failed"
 
   if [[ $mode == rcon ]]; then
-    resume_saving
+    # Saving was only off for as long as this same Paper process lived: if
+    # LazyMC stopped it (it writes the world on the way out) or started a
+    # new one (saving is on again there), the copy isn't consistent.
+    if [[ $(paper_pids) != "$pids" ]]; then
+      log "Paper restarted or stopped during the copy; retrying"
+      resume_saving || true
+      return 1
+    fi
+    if ! resume_saving; then
+      log "save-on failed; retrying"
+      return 1
+    fi
   elif paper_running; then
     log "Paper started during the copy; retrying"
     return 1

@@ -113,6 +113,15 @@ cat >"$fake_rcon" <<'EOF'
 [[ $MC_RCON_PASSWORD == hunter2 ]] || exit 3
 echo "$*" >>"$RCON_LOG"
 [[ " $* " != *" save-off "* || -z ${RCON_FAIL:-} ]] || exit 1
+[[ " $* " != *" save-on "* || -z ${SAVEON_FAIL:-} ]] || exit 1
+# RESTART_FLAG: replace Paper with a new process, once, as LazyMC would.
+if [[ " $* " == *" save-off "* && -n ${RESTART_FLAG:-} && -e $RESTART_FLAG ]]; then
+  rm -f "$RESTART_FLAG"
+  kill "$(cat "$PID_FILE")"
+  bash -c "exec -a $MC_PAPER_PATTERN sleep 60" >/dev/null 2>&1 &
+  echo $! >"$PID_FILE"
+  sleep 0.2
+fi
 EOF
 chmod +x "$fake_rcon"
 printf 'level-name=world\nenable-rcon=true\nrcon.port=25575\nrcon.password=hunter2\n' >"$server/server.properties"
@@ -130,6 +139,23 @@ if run "$out" 20261031-070000 MC_RCON="$fake_rcon" RCON_LOG="$tmp/rcon.log" RCON
 fi
 [[ ! -e $out/world-20261031-070000.tar.gz ]] || fail "rcon failure: wrote an archive"
 [[ $(tail -1 "$tmp/rcon.log") == "-addr 127.0.0.1:25575 save-on" ]] || fail "rcon failure: save-on wasn't sent"
+
+# 5b. Paper replaced during the copy (LazyMC slept and woke it): the copy is
+# thrown away and redone, so the archive comes from one steady Paper.
+rm -f "$tmp/rcon.log"
+echo "$fake_paper" >"$tmp/paper.pid"
+touch "$tmp/restart.flag"
+run "$out" 20261031-071000 MC_RCON="$fake_rcon" RCON_LOG="$tmp/rcon.log" \
+  RESTART_FLAG="$tmp/restart.flag" PID_FILE="$tmp/paper.pid" || fail "restart: backup failed"
+[[ -f $out/world-20261031-071000.tar.gz ]] || fail "restart: no archive"
+[[ $(grep -c save-off "$tmp/rcon.log") == 2 ]] || fail "restart: expected a retry, commands were $(tr '\n' '|' <"$tmp/rcon.log")"
+fake_paper=$(cat "$tmp/paper.pid")
+
+# 5c. save-on failing is an error, not a good backup.
+if run "$out" 20261031-072000 MC_RCON="$fake_rcon" RCON_LOG="$tmp/rcon.log" SAVEON_FAIL=1; then
+  fail "save-on failure: should fail"
+fi
+[[ ! -e $out/world-20261031-072000.tar.gz ]] || fail "save-on failure: wrote an archive"
 stop_paper
 
 # 6. A missing world is an error, not an empty backup.
