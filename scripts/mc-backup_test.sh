@@ -168,6 +168,14 @@ grep -q "not enough free space" "$tmp/log" || fail "space: no clear message"
 [[ ! -e $out/world-20261031-073000.tar.gz && ! -e $out/.staging ]] || fail "space: copied anyway"
 [[ ! -e $out/world-20250101-000000.tar.gz.partial ]] || fail "partial: leftover wasn't removed"
 
+# 5e. The shared host.env names work when the MC_ ones aren't set.
+out=$tmp/hostenv
+if (unset MC_SERVER_DIR; run "$out" 20261031-074000 SERVER_DIR="$server" BACKUP_KEEP_DAILY=1); then
+  [[ -f $out/world-20261031-074000.tar.gz ]] || fail "host.env names: no archive"
+else
+  fail "host.env names: backup failed"
+fi
+
 # 6. A missing world is an error, not an empty backup.
 mv "$server/world" "$server/world.moved"
 if run "$tmp/missing" 20261031-080000; then fail "missing world: should fail"; fi

@@ -108,13 +108,14 @@ rcon.port=25575
 rcon.password=<long random letters and digits>
 ```
 
-Settings such as retention and an off-Pi copy go in `~/.config/mc-backup.env`;
-the script's header lists them all. For example:
+Settings such as retention and an off-Pi copy go in `~/.config/minecraft/host.env`,
+the same file that sets `SERVER_DIR`; the script's header lists them all. For
+example:
 
 ```bash
-MC_BACKUP_KEEP_DAILY=7
-MC_BACKUP_KEEP_WEEKLY=8
-MC_BACKUP_COPY_TO=user@nas:backups/minecraft/
+BACKUP_KEEP_DAILY=7
+BACKUP_KEEP_WEEKLY=8
+BACKUP_COPY_TO=user@nas:backups/minecraft/
 ```
 
 Run one now with `systemctl --user start mc-backup` and read its log with

@@ -8,39 +8,43 @@
 #   - Paper awake, RCON enabled in server.properties: "save-off" and
 #     "save-all flush" over RCON, copy, then "save-on" (always, even on
 #     failure).
-#   - Paper awake, no RCON: wait up to MC_BACKUP_WAIT seconds for it to
+#   - Paper awake, no RCON: wait up to BACKUP_WAIT seconds for it to
 #     sleep, then give up. A copy of region files Paper is writing can hold
 #     torn chunks, and pruning would count it as a good backup.
 #
 # The world is copied to a staging folder first, so saving is paused only
 # for the copy, not for the compression.
 #
-# Settings (environment, or ~/.config/mc-backup.env for the systemd unit):
-#   MC_SERVER_DIR          server folder (default ~/minecraft_server)
-#   MC_BACKUP_DIR          where archives go (default ~/backups/minecraft)
-#   MC_BACKUP_KEEP_DAILY   newest backup of each of the last N days (default 7)
-#   MC_BACKUP_KEEP_WEEKLY  newest backup of each of the last M weeks (default 4)
-#   MC_BACKUP_WAIT         seconds to wait for Paper to sleep without RCON (default 1800)
-#   MC_BACKUP_COPY_TO      optional rsync destination for an off-Pi copy, e.g.
+# Settings come from the environment; the systemd unit loads
+# ~/.config/minecraft/host.env, the host settings file shared with the other
+# services. Each BACKUP_* name also works with an MC_ prefix, which wins:
+#   SERVER_DIR             server folder (default ~/minecraft_server; MC_SERVER_DIR wins)
+#   BACKUP_DIR             where archives go (default ~/backups/minecraft)
+#   BACKUP_KEEP_DAILY      newest backup of each of the last N days (default 7)
+#   BACKUP_KEEP_WEEKLY     newest backup of each of the last M weeks (default 4)
+#   BACKUP_WAIT            seconds to wait for Paper to sleep without RCON (default 1800)
+#   BACKUP_COPY_TO         optional rsync destination for an off-Pi copy, e.g.
 #                          user@nas:backups/minecraft/ (new archives only; it is
 #                          never pruned by this script)
+#   BACKUP_MIN_FREE_KB     spare space to leave on top of two copies of the world (default 1048576, 1 GiB)
+# Other (environment only):
 #   MC_RCON                mc-rcon binary (default: bin/mc-rcon of this release)
-#   MC_BACKUP_MIN_FREE_KB  spare space to leave on top of two copies of the world (default 1048576, 1 GiB)
 #   MC_PAPER_PATTERN       pgrep -f pattern that means Paper is running
 #   MC_BACKUP_TIME         timestamp to use, YYYYmmdd-HHMMSS (for tests)
+# The RCON password is read from server.properties, not from a secrets file.
 #
 # Archives are named <level-name>-YYYYmmdd-HHMMSS.tar.gz, with a .sha256 file
 # next to each. Restore: see README.md.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-server_dir=${MC_SERVER_DIR:-$HOME/minecraft_server}
-backup_dir=${MC_BACKUP_DIR:-$HOME/backups/minecraft}
-keep_daily=${MC_BACKUP_KEEP_DAILY:-7}
-keep_weekly=${MC_BACKUP_KEEP_WEEKLY:-4}
-wait_secs=${MC_BACKUP_WAIT:-1800}
-margin_kb=${MC_BACKUP_MIN_FREE_KB:-1048576}
-copy_to=${MC_BACKUP_COPY_TO:-}
+server_dir=${MC_SERVER_DIR:-${SERVER_DIR:-$HOME/minecraft_server}}
+backup_dir=${MC_BACKUP_DIR:-${BACKUP_DIR:-$HOME/backups/minecraft}}
+keep_daily=${MC_BACKUP_KEEP_DAILY:-${BACKUP_KEEP_DAILY:-7}}
+keep_weekly=${MC_BACKUP_KEEP_WEEKLY:-${BACKUP_KEEP_WEEKLY:-4}}
+wait_secs=${MC_BACKUP_WAIT:-${BACKUP_WAIT:-1800}}
+margin_kb=${MC_BACKUP_MIN_FREE_KB:-${BACKUP_MIN_FREE_KB:-1048576}}
+copy_to=${MC_BACKUP_COPY_TO:-${BACKUP_COPY_TO:-}}
 rcon_bin=${MC_RCON:-$here/../../bin/mc-rcon}
 paper_pattern=${MC_PAPER_PATTERN:-org.bukkit.craftbukkit.Main}
 stamp=${MC_BACKUP_TIME:-$(date +%Y%m%d-%H%M%S)}
@@ -51,11 +55,11 @@ die() { echo "mc-backup: $*" >&2; exit 1; }
 for n in "$keep_daily" "$keep_weekly" "$wait_secs" "$margin_kb"; do
   [[ $n =~ ^[0-9]+$ ]] || die "retention and wait settings must be whole numbers, got '$n'"
 done
-((keep_daily >= 1)) || die "MC_BACKUP_KEEP_DAILY must be at least 1, or the new backup would be pruned"
+((keep_daily >= 1)) || die "BACKUP_KEEP_DAILY must be at least 1, or the new backup would be pruned"
 [[ $stamp =~ ^[0-9]{8}-[0-9]{6}$ ]] || die "timestamp '$stamp' is not YYYYmmdd-HHMMSS"
 
 props=$server_dir/server.properties
-[[ -f $props ]] || die "$props not found; set MC_SERVER_DIR"
+[[ -f $props ]] || die "$props not found; set SERVER_DIR"
 
 # prop KEY prints KEY's value from server.properties (exact key match).
 prop() { awk -v k="$1=" 'index($0, k) == 1 { v = substr($0, length(k) + 1) } END { print v }' "$props"; }
