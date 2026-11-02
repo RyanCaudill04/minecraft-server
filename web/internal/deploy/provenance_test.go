@@ -29,10 +29,13 @@ type fakeProvenance struct {
 	digests []string // digests Verify was asked about
 }
 
-func (p *fakeProvenance) Verify(_ context.Context, bundle []byte, digest []byte) error {
+func (p *fakeProvenance) Verify(_ context.Context, bundle []byte, digest []byte, name string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	d := hex.EncodeToString(digest)
+	if name != TarballName {
+		return errors.New("provenance: wrong subject name " + name)
+	}
 	p.digests = append(p.digests, d)
 	if string(bundle) != "attests "+d {
 		return errors.New("provenance: signed by the wrong workflow")

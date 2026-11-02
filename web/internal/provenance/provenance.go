@@ -56,9 +56,11 @@ type Verifier struct {
 }
 
 // Verify checks that bundleJSON, a Sigstore bundle, is valid, was signed
-// by v's workflow, and attests to an artifact whose SHA-256 is digest.
+// by v's workflow, and attests to an artifact called name whose SHA-256
+// is digest. The name matters because one bundle covers every tarball of a
+// release, and a digest alone would accept any of them.
 // It gives up when ctx is done.
-func (v *Verifier) Verify(ctx context.Context, bundleJSON []byte, digest []byte) error {
+func (v *Verifier) Verify(ctx context.Context, bundleJSON []byte, digest []byte, name string) error {
 	if v.Repo == "" || v.Workflow == "" || v.Ref == "" {
 		return errors.New("provenance: Repo, Workflow and Ref must be set")
 	}
@@ -103,7 +105,12 @@ func (v *Verifier) Verify(ctx context.Context, bundleJSON []byte, digest []byte)
 		}
 		return fmt.Errorf("provenance: statement is %s, want %s", got, SLSAProvenance)
 	}
-	return nil
+	for _, sub := range res.Statement.Subject {
+		if sub.Name == name && sub.Digest["sha256"] == hex.EncodeToString(digest) {
+			return nil
+		}
+	}
+	return fmt.Errorf("provenance: the attestation has no subject %q with sha256:%s", name, hex.EncodeToString(digest))
 }
 
 // fetchTrustedRoot gets the public-good root through TUF. go-tuf retries

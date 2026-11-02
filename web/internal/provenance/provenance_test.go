@@ -24,6 +24,7 @@ import (
 //     .github/workflows/deployment.yml on refs/heads/trunk of cli/cli.
 //   - trusted_root.json is the Sigstore public-good trusted root, from
 //     "gh attestation trusted-root".
+const ghName = "gh_2.103.3_linux_arm64.tar.gz"
 const ghArm64 = "ee32df2323c8847f5fac6cb6b4b69ca75828e9329a8f22f677021f7b3306ce63"
 
 func load(t *testing.T) ([]byte, root.TrustedMaterial) {
@@ -120,7 +121,7 @@ func TestVerify(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.v.Verify(context.Background(), bytes.Clone(tt.bundle), digest(t, tt.digest))
+			err := tt.v.Verify(context.Background(), bytes.Clone(tt.bundle), digest(t, tt.digest), ghName)
 			switch {
 			case tt.wantErr == "" && err != nil:
 				t.Fatalf("Verify: %v", err)
@@ -151,11 +152,21 @@ func TestVerifyGivesUpWhenTUFStalls(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	err := v.Verify(ctx, b, digest(t, ghArm64))
+	err := v.Verify(ctx, b, digest(t, ghArm64), ghName)
 	if err == nil || !strings.Contains(err.Error(), "trusted root") {
 		t.Fatalf("Verify = %v, want a trusted root error", err)
 	}
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("Verify took %v after its context ended", took)
+	}
+}
+
+// One bundle covers every tarball of a release, so the digest has to be
+// attested under the name of the asset being installed.
+func TestVerifyChecksSubjectName(t *testing.T) {
+	b, tr := load(t)
+	err := ghVerifier(tr).Verify(context.Background(), b, digest(t, ghArm64), "release.tar.gz")
+	if err == nil || !strings.Contains(err.Error(), "no subject") {
+		t.Fatalf("Verify = %v, want a missing subject error", err)
 	}
 }
