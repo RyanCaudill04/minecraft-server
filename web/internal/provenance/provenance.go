@@ -111,6 +111,10 @@ func (v *Verifier) Verify(ctx context.Context, bundleJSON []byte, digest []byte)
 // and is abandoned when ctx is done.
 func (v *Verifier) fetchTrustedRoot(ctx context.Context) (root.TrustedMaterial, error) {
 	opts := tuf.DefaultOptions()
+	// Skip the network refresh while the cached metadata is under a day
+	// old, so a deploy doesn't depend on the TUF CDN being up. TUF expiry
+	// still forces a refresh once the cache is stale.
+	opts.CacheValidity = 1
 	if v.CacheDir != "" {
 		opts = opts.WithCachePath(v.CacheDir)
 	}
