@@ -14,12 +14,20 @@
 #   --dry-run  print the API calls instead of making them
 set -euo pipefail
 
+usage="usage: scripts/apply-rulesets.sh [--dry-run] [owner/repo]"
 dry=false
-if [ "${1:-}" = --dry-run ]; then
-  dry=true
-  shift
-fi
-repo=${1:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}
+repo=
+for arg in "$@"; do
+  case $arg in
+    --dry-run) dry=true ;;
+    -*) echo "$usage" >&2; exit 2 ;;
+    *)
+      [ -z "$repo" ] || { echo "$usage" >&2; exit 2; }
+      repo=$arg
+      ;;
+  esac
+done
+repo=${repo:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}
 root=$(cd "$(dirname "$0")/.." && pwd)
 
 # api runs gh api, or prints it with --dry-run. Reads always run.
