@@ -246,6 +246,7 @@ jobs:
           cp server.properties.example "$server/server.properties"
           # Don't report CI runs as the Pi's server to bStats.
           sed -i 's/^enabled: true$/enabled: false/' "$server/plugins/bStats/config.yml"
+          grep -qx 'enabled: false' "$server/plugins/bStats/config.yml"
       # Paperclip downloads the Mojang server jar into cache/ and patches it.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -276,7 +277,7 @@ jobs:
 
           # Every plugin jar in plugins/ must have been enabled.
           for jar in plugins/*.jar; do
-            name=$(unzip -p "$jar" paper-plugin.yml plugin.yml 2>/dev/null | sed -n 's/^name: *//p' | head -1 | tr -d "\"'\r")
+            name=$({ unzip -p "$jar" paper-plugin.yml plugin.yml 2>/dev/null || true; } | sed -n 's/^name: *//p' | head -1 | tr -d "\"'\r")
             test -n "$name" || { echo "::error::$jar has no plugin name"; exit 1; }
             grep -q "\[$name\] Enabling $name" server.log || { echo "::error::plugin $name ($jar) was not enabled"; exit 1; }
             echo "$name enabled"
