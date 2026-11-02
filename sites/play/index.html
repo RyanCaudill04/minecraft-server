@@ -34,7 +34,7 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 17V11M10 17V4M16 17V8"/></svg>
           Leaderboards
         </a>
-        <a href="/map/">
+        <a href="#map">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
           Map
         </a>
@@ -106,6 +106,27 @@
         <div class="segmented" role="tablist" id="board-tabs"></div>
         <article class="card board-card">
           <ol class="board" id="board"></ol>
+        </article>
+      </section>
+
+      <section id="map" class="section">
+        <header class="section-head">
+          <h2>Map</h2>
+          <p class="muted">A look at the world from above.</p>
+        </header>
+        <article class="card map-card" id="map-card" data-ready="false">
+          <div class="map-stage">
+            <div class="map-placeholder">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
+              <p>The map isn't ready yet.</p>
+              <p class="muted">It appears once the server has rendered the world.</p>
+            </div>
+            <iframe id="map-frame" title="Preview of the world map" tabindex="-1" aria-hidden="true" loading="lazy"></iframe>
+          </div>
+          <div class="map-foot">
+            <p class="muted">Live preview of the overworld.</p>
+            <a class="btn btn-primary" id="map-open" href="/map/">Open the full map</a>
+          </div>
         </article>
       </section>
     </main>
