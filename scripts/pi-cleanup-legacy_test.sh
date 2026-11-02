@@ -70,6 +70,10 @@ gone() {
 run --bogus
 check "unknown option" 2
 
+status=0
+out=$(bash -s -- --help <"$dir/pi-cleanup-legacy.sh" 2>&1) || status=$?
+check "help via bash -s" 0 "^usage:"
+
 run
 check "dry run" 0 '^Dry run' "check +$units/serve.service" "keep +$server/bin: still used by serve.service" \
   "keep +$server/world.backup-2026-01-01 \(add --backups"

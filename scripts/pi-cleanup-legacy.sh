@@ -20,11 +20,22 @@ server=${MC_SERVER_DIR:-$HOME/minecraft_server}
 units=${MC_UNIT_DIR:-$HOME/.config/systemd/user}
 apply=false backups=false
 
+usage() {
+  cat <<'EOF'
+usage: pi-cleanup-legacy.sh [--apply] [--backups]
+
+Lists leftovers from the old manual deploy; with --apply, removes the old
+binaries in ~/minecraft_server/bin (kept while anything uses them). With
+--backups as well, removes world.backup-* folders. Stray user units are
+listed, never removed.
+EOF
+}
+
 for arg in "$@"; do
   case $arg in
     --apply) apply=true ;;
     --backups) backups=true ;;
-    -h | --help) sed -n '2,16s/^# \{0,1\}//p' "$0"; exit 0 ;;
+    -h | --help) usage; exit 0 ;;
     *) echo "pi-cleanup-legacy: unknown option $arg" >&2; exit 2 ;;
   esac
 done
