@@ -12,6 +12,9 @@ Description=Back up the Minecraft world
 [Service]
 Type=oneshot
 EnvironmentFile=-%h/.config/mc-backup.env
+# Type=oneshot has no start timeout by default, and a stuck run would block
+# every later night. Covers the wait for Paper to sleep plus the copy.
+TimeoutStartSec=2h
 ExecStart=%h/apps/current/deploy/backup/mc-backup.sh
 # Stay out of Paper's way on the Pi.
 Nice=19

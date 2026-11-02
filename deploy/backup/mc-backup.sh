@@ -256,6 +256,6 @@ log "kept $daily daily and $weekly weekly backups, pruned $pruned"
 
 if [[ -n $copy_to ]]; then
   # Failing here still leaves the local backup in place.
-  rsync -a "$archive" "$archive.sha256" "$copy_to" || die "copy to $copy_to failed; the local backup is fine"
+  rsync -a --timeout=300 -e 'ssh -o BatchMode=yes -o ConnectTimeout=30' "$archive" "$archive.sha256" "$copy_to" || die "copy to $copy_to failed; the local backup is fine"
   log "copied to $copy_to"
 fi
