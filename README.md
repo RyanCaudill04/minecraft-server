@@ -25,6 +25,10 @@ recreates on start.
 
 Before enabling services such as RCON or the Paper management server, keep their passwords and secrets out of Git. Use a local, ignored override or an environment-specific secret store instead.
 
+## RCON
+
+RCON replaces the console now that Paper runs under systemd. It listens on `127.0.0.1:25575` only, because RCON binds to `server-ip` (`127.0.0.1`); never forward that port. Set `enable-rcon=true` and a long random `rcon.password` in the ignored `server.properties` on the Pi, and the same password as `RCON_PASSWORD` in `~/.config/minecraft/secrets.env` (mode `0600`), which `admin.service` loads. Then run commands over SSH with `~/apps/current/bin/mc-rcon list`, or from the admin page's Console. RCON only answers while Paper is awake; LazyMC keeps it asleep until someone joins.
+
 ## Paper server files
 
 `start.sh` needs `versions/26.2/paper-26.2.jar` and `libraries/`. Neither is
@@ -70,6 +74,46 @@ On the Pi, LazyMC runs as the systemd user unit
 unit is installed by hand from the git checkout in `~/minecraft_server` (the
 steps are in the file), not by mc-agent.
 
+## World map (squaremap)
+
+[squaremap](https://github.com/jpenilla/squaremap) renders a top-down map
+of the world to PNG tiles on disk while Paper is awake, and play serves
+them read-only at `https://play.ryancaudill.dev/map/`. The map keeps
+working while Paper sleeps, because play only reads files. squaremap's own
+web server is off ([`plugins/squaremap/config.yml`](plugins/squaremap/config.yml)),
+so nothing new listens on the Pi.
+
+- **CPU:** one render thread. Changed chunks are re-rendered in batches of
+  at most 256 every 30 seconds. A first full render runs only when you ask
+  for it (`squaremap fullrender world` in the console) and keeps one of the
+  Pi's four cores busy until it finishes: minutes for a few thousand blocks
+  across, longer for a pre-generated world.
+- **Disk:** about one 512×512 PNG per region (512×512 blocks) at full zoom,
+  plus a third more for the zoomed-out levels. Rough estimate: 100–250 KB
+  per region, so a 5,000-block-wide explored area (~100 regions) is about
+  15–35 MB and a 20,000-block-wide one (~1,600 regions) is about 200–550 MB.
+  `du -sh plugins/squaremap/web/tiles` shows the real number.
+- **Area:** `visibility-limits` in the config renders only a circle of
+  radius 5,000 blocks around 0,0 (~300 regions, at most about 40–100 MB).
+  Without it, a full render covers every generated chunk, including a whole
+  Chunky pregen. Move the center to spawn, and widen it as people build
+  farther out.
+- **Privacy:** every build inside the limit is visible to anyone with the
+  URL. Live player positions are off in squaremap's config, and play always
+  answers `tiles/players.json` with an empty list. Showing positions would
+  first need a filter for players who hide from the server list (#113) and
+  a CSP that allows squaremap's player heads.
+- To reset the map, stop Paper and delete `plugins/squaremap/web/tiles`.
+
+## Plugins
+
+[`plugins/manifest.json`](plugins/manifest.json) pins each plugin jar by
+file name and SHA-256, with the URL it was downloaded from. Admin's
+Plugins section shows each installed jar as pinned, changed, unpinned,
+missing or invalid. When you update a plugin, update its manifest entry in
+the same PR; `go test ./internal/plugins` checks the checked-in jars
+against it.
+
 ## Web apps
 
 Each app is a small Go server in `web/cmd/<name>`. It listens on loopback
@@ -78,11 +122,12 @@ only. Cloudflare Tunnel carries public traffic to it (see
 
 | App | Command | Site | Address | What it serves |
 | --- | --- | --- | --- | --- |
-| play | [`web/cmd/play`](web/cmd/play) | play.ryancaudill.dev | `127.0.0.1:8082` | The player dashboard ([`sites/play`](sites/play)) and `GET /api/status`, `/api/world`, `/api/players` |
-| admin | [`web/cmd/admin`](web/cmd/admin) | admin.ryancaudill.dev | `127.0.0.1:8081` | The admin page ([`sites/admin`](sites/admin)) and `GET /api/status`, `/api/deploy`. Read-only, behind Cloudflare Access |
+| play | [`web/cmd/play`](web/cmd/play) | play.ryancaudill.dev | `127.0.0.1:8082` | The player dashboard ([`sites/play`](sites/play)) and `GET /api/status`, `/api/world`, `/api/players`, plus squaremap's tiles at `/map/` |
+| admin | [`web/cmd/admin`](web/cmd/admin) | admin.ryancaudill.dev | `127.0.0.1:8081` | The admin page ([`sites/admin`](sites/admin)) and `GET /api/status`, `/api/deploy`, `/api/plugins`, `/api/me`, `/api/logs`, plus `POST /api/console` (RCON) and `POST /api/server/{action}` (start, stop, restart, wake). Behind Cloudflare Access |
 | portfolio | [`web/cmd/serve`](web/cmd/serve) | ryancaudill.dev | `127.0.0.1:8080` | The static [`sites/portfolio`](sites/portfolio) folder |
 | mc-agent | [`web/cmd/mc-agent`](web/cmd/mc-agent) | none | none | Installs releases on the Pi (see [Releases](#releases-and-deploys)) |
 | mc-players | [`web/cmd/mc-players`](web/cmd/mc-players) | none | none | A command-line tool that prints who is online. It isn't part of a release |
+| mc-rcon | [`web/cmd/mc-rcon`](web/cmd/mc-rcon) | none | none | A command-line RCON client (see [RCON](#rcon)) |
 
 - **Server status** comes from status pings, so checking it never wakes the
   server. The apps ping Paper on `127.0.0.1:25566` first, then LazyMC on
