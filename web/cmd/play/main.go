@@ -34,6 +34,13 @@ import (
 // shared files from sharedDir. World and player data are read from
 // serverDir.
 func newHandler(dir, sharedDir, serverDir string, c *mcstatus.Checker) http.Handler {
+	h, _ := newApp(dir, sharedDir, serverDir, c)
+	return h
+}
+
+// newApp is newHandler and also returns poll, which keeps the activity
+// feed current when nobody is requesting it (see watch).
+func newApp(dir, sharedDir, serverDir string, c *mcstatus.Checker) (h http.Handler, poll func(context.Context)) {
 	worldDir := filepath.Join(serverDir, "world")
 	status := &site.Cache[mcstatus.Status]{MaxAge: 5 * time.Second, Load: c.Check}
 	worldInfo := &site.Cache[*world.Info]{MaxAge: 30 * time.Second, Load: func(context.Context) (*world.Info, error) {
@@ -47,9 +54,9 @@ func newHandler(dir, sharedDir, serverDir string, c *mcstatus.Checker) http.Hand
 	mux.HandleFunc("GET /api/status", site.JSON("play: status", status))
 	mux.HandleFunc("GET /api/world", site.JSON("play: world", worldInfo))
 	mux.HandleFunc("GET /api/players", site.JSON("play: players", players))
-	addLive(mux, serverDir, status)
+	poll = addLive(mux, serverDir, status)
 	mux.Handle("GET /", site.Static(dir, sharedDir))
-	return mux
+	return mux, poll
 }
 
 func main() {
@@ -76,9 +83,11 @@ func main() {
 		}
 	}
 	c := &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status}
+	handler, poll := newApp(*dir, *sharedDir, *serverDir, c)
+	go watch(context.Background(), 5*time.Second, poll)
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandler(*dir, *sharedDir, *serverDir, c),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("serving %s and the API on http://%s", *dir, *addr)

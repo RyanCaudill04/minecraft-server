@@ -35,7 +35,12 @@ type Activity struct {
 // The visits the server list named players during are kept in visible.json
 // under $STATE_DIRECTORY (set by systemd's StateDirectory=) when it's set,
 // so the feed's history survives restarts.
-func addLive(mux *http.ServeMux, serverDir string, status *site.Cache[mcstatus.Status]) {
+//
+// It returns poll, which reads the log and the server list the way a
+// request does. Run it on a timer (see watch): a visit is only shown once
+// the server list has named the player during it, and nobody may have the
+// page open while they play.
+func addLive(mux *http.ServeMux, serverDir string, status *site.Cache[mcstatus.Status]) (poll func(context.Context)) {
 	feed := &activity.Feed{Dir: filepath.Join(serverDir, "logs")}
 	if dir, _, _ := strings.Cut(os.Getenv("STATE_DIRECTORY"), ":"); dir != "" {
 		feed.StatePath = filepath.Join(dir, "visible.json")
@@ -81,4 +86,19 @@ func addLive(mux *http.ServeMux, serverDir string, status *site.Cache[mcstatus.S
 
 	mux.HandleFunc("GET /api/time", site.JSON("play: time", sky))
 	mux.HandleFunc("GET /api/activity", site.JSON("play: activity", feedCache))
+	return func(ctx context.Context) { update(ctx) }
+}
+
+// watch calls poll every interval until ctx is done.
+func watch(ctx context.Context, interval time.Duration, poll func(context.Context)) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		poll(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/ryancaudill04/minecraft-server/web/internal/ping"
 	"github.com/ryancaudill04/minecraft-server/web/internal/world"
+	"github.com/ryancaudill04/minecraft-server/web/internal/world/worldtest"
 )
 
 // writeLatestLog writes a made-up session to the server's logs/latest.log,
@@ -73,6 +76,30 @@ func TestAPIActivity(t *testing.T) {
 	}
 	if data, err := os.ReadFile(filepath.Join(state, "visible.json")); err != nil || !regexp.MustCompile(`^\["Alice@\d+"\]$`).Match(data) {
 		t.Errorf("visible.json = %q, %v", data, err)
+	}
+}
+
+// Nobody requests the feed while the player is on; watch still confirms
+// the visit from the server list.
+func TestWatchConfirmsVisits(t *testing.T) {
+	server := worldtest.Build(t)
+	dir, shared := t.TempDir(), t.TempDir()
+	h, poll := newApp(dir, shared, server, fakeChecker(active("Alice", "Anonymous Player"), nil))
+	writeLatestLog(t, server, "Alice joined the game", "Bob joined the game", "Bob was slain by Zombie")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { watch(ctx, time.Millisecond, poll); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+	var got Activity
+	getJSON(t, ts.URL+"/api/activity", &got)
+	if len(got.Events) != 1 || got.Events[0].Player != "Alice" {
+		t.Errorf("/api/activity = %+v; want only Alice's join", got)
 	}
 }
 
