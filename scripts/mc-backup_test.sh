@@ -158,6 +158,16 @@ fi
 [[ ! -e $out/world-20261031-072000.tar.gz ]] || fail "save-on failure: wrote an archive"
 stop_paper
 
+# 5d. Not enough free space fails before anything is copied; a leftover
+# .partial from a killed run is removed.
+out=$tmp/space
+mkdir -p "$out"
+touch "$out/world-20250101-000000.tar.gz.partial"
+if run "$out" 20261031-073000 MC_BACKUP_MIN_FREE_KB=999999999999; then fail "space: should fail"; fi
+grep -q "not enough free space" "$tmp/log" || fail "space: no clear message"
+[[ ! -e $out/world-20261031-073000.tar.gz && ! -e $out/.staging ]] || fail "space: copied anyway"
+[[ ! -e $out/world-20250101-000000.tar.gz.partial ]] || fail "partial: leftover wasn't removed"
+
 # 6. A missing world is an error, not an empty backup.
 mv "$server/world" "$server/world.moved"
 if run "$tmp/missing" 20261031-080000; then fail "missing world: should fail"; fi

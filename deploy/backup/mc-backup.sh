@@ -25,6 +25,7 @@
 #                          user@nas:backups/minecraft/ (new archives only; it is
 #                          never pruned by this script)
 #   MC_RCON                mc-rcon binary (default: bin/mc-rcon of this release)
+#   MC_BACKUP_MIN_FREE_KB  spare space to leave on top of two copies of the world (default 1048576, 1 GiB)
 #   MC_PAPER_PATTERN       pgrep -f pattern that means Paper is running
 #   MC_BACKUP_TIME         timestamp to use, YYYYmmdd-HHMMSS (for tests)
 #
@@ -38,6 +39,7 @@ backup_dir=${MC_BACKUP_DIR:-$HOME/backups/minecraft}
 keep_daily=${MC_BACKUP_KEEP_DAILY:-7}
 keep_weekly=${MC_BACKUP_KEEP_WEEKLY:-4}
 wait_secs=${MC_BACKUP_WAIT:-1800}
+margin_kb=${MC_BACKUP_MIN_FREE_KB:-1048576}
 copy_to=${MC_BACKUP_COPY_TO:-}
 rcon_bin=${MC_RCON:-$here/../../bin/mc-rcon}
 paper_pattern=${MC_PAPER_PATTERN:-org.bukkit.craftbukkit.Main}
@@ -46,7 +48,7 @@ stamp=${MC_BACKUP_TIME:-$(date +%Y%m%d-%H%M%S)}
 log() { echo "mc-backup: $*"; }
 die() { echo "mc-backup: $*" >&2; exit 1; }
 
-for n in "$keep_daily" "$keep_weekly" "$wait_secs"; do
+for n in "$keep_daily" "$keep_weekly" "$wait_secs" "$margin_kb"; do
   [[ $n =~ ^[0-9]+$ ]] || die "retention and wait settings must be whole numbers, got '$n'"
 done
 ((keep_daily >= 1)) || die "MC_BACKUP_KEEP_DAILY must be at least 1, or the new backup would be pruned"
@@ -85,12 +87,24 @@ if command -v flock >/dev/null; then
   flock -n 9 || die "another backup is running"
 fi
 
+# A run killed outright (SIGKILL, power loss) skips its exit trap and leaves
+# a full-size .partial that nothing else would ever remove. The lock means
+# no other run is writing one.
+find "$backup_dir" -maxdepth 1 -type f -name "$level-*.tar.gz.partial" -delete
+
 name=$level-$stamp.tar.gz
 archive=$backup_dir/$name
 [[ ! -e $archive ]] || die "$archive already exists"
 staging=$backup_dir/.staging
 partial=$archive.partial
 saving_off=false
+
+# The backup needs the world again in staging plus the archive, on the same
+# disk Paper writes to. Refuse early rather than fill it.
+need_kb=$(cd "$server_dir" && du -sk "${sources[@]}" | awk '{ n += $1 } END { print n + 0 }')
+free_kb=$(df -Pk "$backup_dir" | awk 'NR == 2 { print $4 }')
+((free_kb >= 2 * need_kb + margin_kb)) ||
+  die "not enough free space in $backup_dir: ${free_kb} KB free, need about $((2 * need_kb + margin_kb)) KB (2x the world plus a margin)"
 
 rcon() { MC_RCON_PASSWORD=$rcon_password "$rcon_bin" -addr "$rcon_addr" "$@"; }
 
@@ -104,8 +118,9 @@ resume_saving() {
 }
 
 cleanup() {
-  resume_saving || log "warning: save-on failed (fine if Paper has since stopped)"
+  # Free the disk first: save-on lets Paper write again.
   rm -rf "$staging" "$partial"
+  resume_saving || log "warning: save-on failed (fine if Paper has since stopped)"
 }
 trap cleanup EXIT
 
