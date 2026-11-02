@@ -33,8 +33,8 @@ scripts/check.sh
 ```
 
 They check that every page has a `<title>`, that local links and `src`s
-point at files that exist, and that `site/` has no dotfiles, which the
-server would refuse to serve anyway.
+point at files that exist, and that `site/` has no dotfiles, which should
+not be published.
 
 ## Deploys
 
