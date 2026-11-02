@@ -682,7 +682,8 @@ func (d *Deployer) Rollback(ctx context.Context) error {
 	return nil
 }
 
-// Unpin lets the timer deploy the latest release again after a Rollback.
+// Unpin lets the timer deploy the latest release again after a Rollback or
+// a pin: it sets the update policy to auto, as "mc-agent policy auto" does.
 func (d *Deployer) Unpin() error {
 	unlock, err := d.lock()
 	if err != nil {
@@ -691,6 +692,11 @@ func (d *Deployer) Unpin() error {
 	defer unlock()
 	if readTag(d.pinnedFile()) == "" {
 		d.Log.Printf("nothing is pinned")
+	}
+	// The pin is only the pinned file; without this, removing it would
+	// fall back to a stored notify mode and the message below would lie.
+	if err := d.storeMode(ModeAuto); err != nil {
+		return err
 	}
 	return d.unpin()
 }

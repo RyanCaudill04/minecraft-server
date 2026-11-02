@@ -534,3 +534,25 @@ func TestPausedRunFinishesAnInterruptedPin(t *testing.T) {
 		t.Errorf("current = %q, want the pin to r1 finished", got)
 	}
 }
+
+func TestUnpinFollowsLatest(t *testing.T) {
+	h := newHarness(t)
+	h.deployAll(t, "r1", "r2")
+	if err := h.d.SetMode(ModeNotify); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.d.Pin(context.Background(), "r1"); err != nil {
+		t.Fatal(err)
+	}
+	h.publish(t, "r3", "/ok")
+	if err := h.d.Unpin(); err != nil {
+		t.Fatal(err)
+	}
+	h.run(t)
+	if got := h.current(t); got != "r3" {
+		t.Errorf("current = %q after unpin, want r3", got)
+	}
+	if got := h.mode(t).Mode; got != ModeAuto {
+		t.Errorf("mode = %q, want auto", got)
+	}
+}
