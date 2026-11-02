@@ -210,6 +210,11 @@ if [ -n "$rcon_password" ]; then
   ok "RCON_PASSWORD is set"
 elif $dry_run; then
   echo "  would generate RCON_PASSWORD"
+elif [ -n "$(get_key "$server_dir/server.properties" rcon.password)" ]; then
+  # Keep the password Paper already uses; a new one would lock out admin.
+  rcon_password=$(get_key "$server_dir/server.properties" rcon.password)
+  set_key "$secrets_env" RCON_PASSWORD "$rcon_password"
+  echo "  copied the existing rcon.password from server.properties into RCON_PASSWORD"
 else
   rcon_password=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
   set_key "$secrets_env" RCON_PASSWORD "$rcon_password"
@@ -258,7 +263,14 @@ properties=$server_dir/server.properties
 if [ -f "$properties" ]; then
   ok "server.properties"
 else
-  run cp "$root/server.properties.example" "$properties"
+  if $dry_run; then echo "  would create $properties with mode 0600"; else
+    (umask 077 && cp "$root/server.properties.example" "$properties")
+    echo "  created $properties with mode 0600"
+  fi
+fi
+# It holds the RCON password, like secrets.env.
+if [ -f "$properties" ] && [ -n "$(find "$properties" -perm /077)" ]; then
+  run chmod 600 "$properties"
 fi
 # The RCON password lives in secrets.env; server.properties gets a copy.
 if [ -z "$rcon_password" ]; then
@@ -270,6 +282,8 @@ elif [ -z "$(get_key "$properties" rcon.password)" ] || confirm "replace rcon.pa
     set_key "$properties" rcon.password "$rcon_password"
     echo "  copied RCON_PASSWORD into server.properties (takes effect when Paper next starts)"
   fi
+else
+  note "rcon.password in server.properties differs from RCON_PASSWORD in $secrets_env; make them match or admin can't reach the console"
 fi
 
 # ---------------------------------------------------------------------------
