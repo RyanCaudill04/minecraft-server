@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -70,7 +71,7 @@ func TestAPIActivity(t *testing.T) {
 	if len(got.Events) != 2 || got.Events[0].Title != "Stone Age" || got.Events[1].Kind != "join" || got.Events[1].Player != "Alice" {
 		t.Errorf("/api/activity = %+v", got)
 	}
-	if data, err := os.ReadFile(filepath.Join(state, "visible.json")); err != nil || string(data) != `["Alice"]` {
+	if data, err := os.ReadFile(filepath.Join(state, "visible.json")); err != nil || !regexp.MustCompile(`^\["Alice@\d+"\]$`).Match(data) {
 		t.Errorf("visible.json = %q, %v", data, err)
 	}
 }

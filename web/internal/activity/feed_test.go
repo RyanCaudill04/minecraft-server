@@ -83,10 +83,20 @@ func update(t *testing.T, f *Feed) {
 	}
 }
 
-func observe(t *testing.T, f *Feed, anonymous bool, names ...string) {
+func observe(t *testing.T, f *Feed, names ...string) {
 	t.Helper()
-	if err := f.Observe(names, anonymous); err != nil {
+	if err := f.Observe(names); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// confirmAll marks every visit in the feed as confirmed, for tests of
+// parsing and dating that don't care how visits get confirmed.
+func confirmAll(f *Feed) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range f.events {
+		e.visit.confirmed = true
 	}
 }
 
@@ -123,14 +133,14 @@ func TestFeedReadsASession(t *testing.T) {
 		logLine("10:05:00", "Alice has made the advancement [Stone Age]"),
 		logLine("10:10:00", "Alice was slain by Zombie"),
 		logLine("10:10:01", "Rex was slain by Zombie"), // a named pet, not a player
-		logLine("10:20:00", "Alice lost connection: Disconnected"),
-		logLine("10:20:00", "Alice left the game"),
-	), at(t, "10:20:00"))
+	), at(t, "10:10:01"))
 
 	f := newFeed(t, dir)
 	update(t, f)
-	checkEvents(t, f) // nobody is known to be visible yet
-	observe(t, f, false, "Alice")
+	checkEvents(t, f) // nobody has been listed yet
+	observe(t, f, "Alice")
+	appendLog(t, dir, logLine("10:20:00", "Alice lost connection: Disconnected")+logLine("10:20:00", "Alice left the game"), at(t, "10:20:00"))
+	update(t, f)
 	checkEvents(t, f,
 		"10-30 10:20:00 leave Alice",
 		"10-30 10:10:00 death Alice (Alice was slain by Zombie)",
@@ -154,25 +164,54 @@ func TestFeedHidesHiddenPlayers(t *testing.T) {
 
 	f := newFeed(t, dir)
 	update(t, f)
-	// Paper lists Bob as anonymous: he's hidden, and so is the death that
-	// names him.
-	observe(t, f, true, "Alice")
+	// Paper names Alice and lists Bob as anonymous: Bob is hidden, and so
+	// is the death that names him.
+	observe(t, f, "Alice")
 	checkEvents(t, f,
 		"10-30 10:03:30 death Alice (Alice was slain by Bobby)",
 		"10-30 10:00:00 join Alice",
 	)
 
-	// A player who turns listing back on shows up by name.
-	observe(t, f, false, "Alice", "Bob")
+	// A player who turns listing on shows up by name, with what they did
+	// earlier in the visit.
+	observe(t, f, "Alice", "Bob")
 	if got := len(f.Events(100)); got != 5 {
 		t.Errorf("got %d events after Bob is listed; want 5", got)
 	}
+}
 
-	// And one who turns it off again is hidden again.
-	observe(t, f, true, "Alice")
-	if got := len(f.Events(100)); got != 2 {
-		t.Errorf("got %d events after Bob hides; want 2", got)
-	}
+// A player who was listed in an earlier session and then hides stays out of
+// the feed, even when nobody observed the server during the new session.
+func TestFeedHidesAHiddenReturn(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(t.TempDir(), "visible.json")
+	writeLog(t, dir, session(logLine("10:00:00", "Alice joined the game"), logLine("10:30:00", "Alice left the game")), at(t, "10:30:00"))
+	f := &Feed{Dir: dir, StatePath: state}
+	defer f.Close()
+	update(t, f)
+	observe(t, f, "Alice") // not online: no effect
+	checkEvents(t, f)
+
+	appendLog(t, dir, logLine("11:00:00", "Alice joined the game"), at(t, "11:00:00"))
+	update(t, f)
+	observe(t, f, "Alice")
+	appendLog(t, dir, logLine("11:10:00", "Alice left the game")+logLine("14:00:00", "Alice joined the game")+
+		logLine("14:05:00", "Alice was slain by Zombie")+logLine("14:06:00", "Alice left the game"), at(t, "14:06:00"))
+	update(t, f)
+	// The 14:00 visit was never listed, so only the 11:00 one shows.
+	checkEvents(t, f,
+		"10-30 11:10:00 leave Alice",
+		"10-30 11:00:00 join Alice",
+	)
+
+	// The same after a restart.
+	g := &Feed{Dir: dir, StatePath: state}
+	defer g.Close()
+	update(t, g)
+	checkEvents(t, g,
+		"10-30 11:10:00 leave Alice",
+		"10-30 11:00:00 join Alice",
+	)
 }
 
 func TestFeedFollowsAppends(t *testing.T) {
@@ -180,7 +219,7 @@ func TestFeedFollowsAppends(t *testing.T) {
 	writeLog(t, dir, session(logLine("10:00:00", "Alice joined the game")), at(t, "10:00:00"))
 	f := newFeed(t, dir)
 	update(t, f)
-	observe(t, f, false, "Alice")
+	observe(t, f, "Alice")
 
 	// A half-written last line waits for the rest.
 	appendLog(t, dir, "[10:05:00] [Server thread/INFO]: Alice has made the adv", at(t, "10:05:00"))
@@ -207,7 +246,7 @@ func TestFeedFollowsRollover(t *testing.T) {
 	writeLog(t, dir, session(logLine("23:50:00", "Alice joined the game")), at(t, "23:50:00"))
 	f := newFeed(t, dir)
 	update(t, f)
-	observe(t, f, false, "Alice")
+	observe(t, f, "Alice")
 
 	// Paper writes a last line, then rolls the log over at midnight. The
 	// feed still reads that line from the old file.
@@ -232,7 +271,6 @@ func TestFeedRereadsATruncatedLog(t *testing.T) {
 	writeLog(t, dir, session(logLine("10:00:00", "Alice joined the game"), logLine("10:30:00", "Alice left the game")), at(t, "10:30:00"))
 	f := newFeed(t, dir)
 	update(t, f)
-	observe(t, f, false, "Alice")
 
 	// Rewritten in place, shorter than before.
 	path := filepath.Join(dir, "latest.log")
@@ -241,6 +279,7 @@ func TestFeedRereadsATruncatedLog(t *testing.T) {
 	}
 	appendLog(t, dir, logLine("11:00:00", "Alice joined the game"), at(t, "11:00:00"))
 	update(t, f)
+	confirmAll(f)
 	checkEvents(t, f,
 		"10-30 11:00:00 join Alice",
 		"10-30 10:30:00 leave Alice",
@@ -257,7 +296,7 @@ func TestFeedDatesAcrossMidnight(t *testing.T) {
 	), next.Add(2*time.Minute))
 	f := newFeed(t, dir)
 	update(t, f)
-	observe(t, f, false, "Alice")
+	confirmAll(f)
 	checkEvents(t, f,
 		"10-31 00:02:00 leave Alice",
 		"10-30 23:58:00 join Alice",
@@ -270,7 +309,7 @@ func TestFeedSkipsOverlongLines(t *testing.T) {
 	writeLog(t, dir, session(logLine("10:00:00", "Alice joined the game"), long, logLine("10:02:00", "Alice drowned")), at(t, "10:02:00"))
 	f := newFeed(t, dir)
 	update(t, f)
-	observe(t, f, false, "Alice")
+	observe(t, f, "Alice")
 	checkEvents(t, f,
 		"10-30 10:02:00 death Alice (Alice drowned)",
 		"10-30 10:00:00 join Alice",
@@ -287,7 +326,7 @@ func TestFeedKeepsMaxEvents(t *testing.T) {
 	f := &Feed{Dir: dir, Max: 5}
 	defer f.Close()
 	update(t, f)
-	observe(t, f, false, "Alice")
+	confirmAll(f)
 	events := f.Events(100)
 	if len(events) != 5 || !events[0].Time.Equal(at(t, "10:19:00")) || !events[4].Time.Equal(at(t, "10:15:00")) {
 		t.Errorf("events:\n%s\nwant the last 5 joins", summary(events))
@@ -322,7 +361,7 @@ func TestFeedBackfillsFromRolledLogs(t *testing.T) {
 
 	f := newFeed(t, dir) // no latest.log: the server hasn't started since
 	update(t, f)
-	observe(t, f, false, "Alice")
+	confirmAll(f)
 	// The newest three rolled logs, in order; the damaged one is skipped.
 	checkEvents(t, f,
 		"10-29 08:00:00 join Alice",
@@ -331,24 +370,24 @@ func TestFeedBackfillsFromRolledLogs(t *testing.T) {
 	)
 }
 
-func TestFeedRemembersVisibleNames(t *testing.T) {
+func TestFeedRemembersConfirmedVisits(t *testing.T) {
 	dir := t.TempDir()
 	state := filepath.Join(t.TempDir(), "visible.json")
 	writeLog(t, dir, session(logLine("10:00:00", "Alice joined the game"), logLine("10:01:00", "Bob joined the game")), at(t, "10:01:00"))
 
 	f := &Feed{Dir: dir, StatePath: state}
 	update(t, f)
-	observe(t, f, true, "Alice")
+	observe(t, f, "Alice")
 	f.Close()
 
-	// After a restart, with the server asleep, Alice's history still shows.
+	// After a restart, with the server asleep, Alice's visit still shows.
 	g := &Feed{Dir: dir, StatePath: state}
 	defer g.Close()
 	update(t, g)
 	checkEvents(t, g, "10-30 10:00:00 join Alice")
 
 	data, err := os.ReadFile(state)
-	if err != nil || string(data) != `["Alice"]` {
+	if err != nil || string(data) != fmt.Sprintf(`["Alice@%d"]`, at(t, "10:00:00").Unix()) {
 		t.Errorf("state file = %q, %v", data, err)
 	}
 }
@@ -356,7 +395,7 @@ func TestFeedRemembersVisibleNames(t *testing.T) {
 func TestFeedWithoutLogs(t *testing.T) {
 	f := newFeed(t, filepath.Join(t.TempDir(), "missing"))
 	update(t, f)
-	observe(t, f, false, "Alice")
+	observe(t, f, "Alice")
 	if got := f.Events(10); got == nil || len(got) != 0 {
 		t.Errorf("Events = %#v; want an empty list", got)
 	}

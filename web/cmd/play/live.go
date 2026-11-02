@@ -32,7 +32,7 @@ type Activity struct {
 // joins, leaves, deaths and advancements from the server's log
 // (GET /api/activity).
 //
-// The names of players seen in the server list are kept in visible.json
+// The visits the server list named players during are kept in visible.json
 // under $STATE_DIRECTORY (set by systemd's StateDirectory=) when it's set,
 // so the feed's history survives restarts.
 func addLive(mux *http.ServeMux, serverDir string, status *site.Cache[mcstatus.Status]) {
@@ -49,15 +49,12 @@ func addLive(mux *http.ServeMux, serverDir string, status *site.Cache[mcstatus.S
 		s, _ := status.Get(ctx)
 		if s.State == mcstatus.StateActive {
 			var names []string
-			anonymous := false
 			for _, p := range s.Players {
-				if p.ID == anonymousID {
-					anonymous = true
-				} else {
+				if p.ID != anonymousID {
 					names = append(names, p.Name)
 				}
 			}
-			if err := feed.Observe(names, anonymous); err != nil {
+			if err := feed.Observe(names); err != nil {
 				log.Printf("play: activity: %v", err)
 			}
 		}

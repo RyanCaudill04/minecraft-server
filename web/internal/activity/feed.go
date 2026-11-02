@@ -7,11 +7,11 @@
 // rollovers. Memory stays bounded: it keeps the last Max events and never
 // holds more than one line of unparsed text.
 //
-// The feed only shows players who are visible in the server list. Players
-// who hide themselves (the "Allow Server Listings" option) show up there as
-// anonymous, so a Feed learns who is visible from status pings (Observe)
-// and leaves everyone else out, including from other players' death
-// messages.
+// The feed only shows a player's visit (from joining to leaving) once the
+// server list has named them during it. Players who hide themselves (the
+// "Allow Server Listings" option) show up there as anonymous and are never
+// named, so a Feed learns who is visible from status pings (Observe) and
+// leaves everyone else out, including from other players' death messages.
 package activity
 
 import (
@@ -39,6 +39,21 @@ type Event struct {
 	Player string    `json:"player"`
 	Text   string    `json:"text,omitempty"`  // the death message
 	Title  string    `json:"title,omitempty"` // the advancement's title
+
+	visit *visit // the visit it belongs to
+}
+
+// visit is one stay of a player on the server, from joining to leaving (or
+// the server stopping). It's confirmed once the server list names the
+// player during it.
+type visit struct {
+	name      string
+	start     time.Time
+	confirmed bool
+}
+
+func (v *visit) key() string {
+	return v.name + "@" + strconv.FormatInt(v.start.Unix(), 10)
 }
 
 // Limits on what a Feed reads and keeps.
@@ -53,7 +68,7 @@ const (
 // Feed follows a server's logs. The zero value isn't usable; set Dir.
 type Feed struct {
 	Dir       string // the server's logs folder
-	StatePath string // where to keep the visible names; "" keeps them in memory
+	StatePath string // where to keep the confirmed visits; "" keeps them in memory
 	Max       int    // events kept; 0 means 100
 
 	mu      sync.Mutex
@@ -62,23 +77,23 @@ type Feed struct {
 	partial []byte   // the start of a line not yet ended
 	skip    bool     // inside a line longer than maxLine
 	events  []Event
-	online  map[string]bool // who the log says is on
-	seen    map[string]bool // everyone who joined, to keep hidden names out of messages
-	visible map[string]bool // names seen in the server list
-	since   time.Time       // when the running server started
+	online  map[string]*visit // who the log says is on
+	last    map[string]*visit // each player's latest visit, to keep hidden names out of messages
+	saved   map[string]bool   // keys of the visits confirmed before a restart
+	since   time.Time         // when the running server started
 	running bool
 }
 
 // Update reads what the server logged since the last call. The first call
-// also reads the newest rolled logs and the saved visible names.
+// also reads the newest rolled logs and the saved confirmed visits.
 func (f *Feed) Update() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if !f.loaded {
 		f.loaded = true
-		f.online, f.seen, f.visible = map[string]bool{}, map[string]bool{}, map[string]bool{}
-		if err := f.loadVisible(); err != nil {
+		f.online, f.last, f.saved = map[string]*visit{}, map[string]*visit{}, map[string]bool{}
+		if err := f.loadSaved(); err != nil {
 			return err
 		}
 		f.backfill()
@@ -236,7 +251,8 @@ type batch struct {
 
 type pending struct {
 	line
-	day int // midnights crossed before this line
+	day   int    // midnights crossed before this line
+	visit *visit // the player's visit, for their events
 }
 
 // read parses lines from r. With whole set, r is a complete file, so text
@@ -306,6 +322,7 @@ func (b *batch) add(s string) {
 	b.last = l.clock
 
 	f := b.feed
+	var v *visit
 	switch l.kind {
 	case "":
 		return
@@ -317,23 +334,24 @@ func (b *batch) add(s string) {
 		f.running = false
 		return
 	case Join:
-		f.online[l.name] = true
-		if len(f.seen) < maxNames {
-			f.seen[l.name] = true
+		v = &visit{name: l.name}
+		f.online[l.name] = v
+		if _, known := f.last[l.name]; known || len(f.last) < maxNames {
+			f.last[l.name] = v
 		}
 	case Leave:
-		if !f.online[l.name] {
+		if v = f.online[l.name]; v == nil {
 			return
 		}
 		delete(f.online, l.name)
 	case Death, Advancement:
 		// Only players the log has seen join. Paper logs named pets'
 		// deaths and other look-alikes, which this leaves out.
-		if !f.online[l.name] {
+		if v = f.online[l.name]; v == nil {
 			return
 		}
 	}
-	b.pending = append(b.pending, pending{l, b.days})
+	b.pending = append(b.pending, pending{l, b.days, v})
 }
 
 // finish dates the pending lines, given that the last stamped line was
@@ -355,7 +373,11 @@ func (b *batch) finish(end time.Time) {
 			f.since = t
 			continue
 		}
-		f.events = append(f.events, Event{Time: t.UTC(), Kind: p.kind, Player: p.name, Text: p.text, Title: p.title})
+		if p.kind == Join {
+			p.visit.start = t
+			p.visit.confirmed = f.saved[p.visit.key()]
+		}
+		f.events = append(f.events, Event{Time: t.UTC(), Kind: p.kind, Player: p.name, Text: p.text, Title: p.title, visit: p.visit})
 	}
 	if limit := f.max(); len(f.events) > limit {
 		f.events = slices.Clone(f.events[len(f.events)-limit:])
@@ -374,43 +396,31 @@ func (f *Feed) max() int {
 	return defaultMax
 }
 
-// Observe records who the server list shows by name. With anonymous set,
-// the list also had hidden players, so anyone the log says is online but
-// the list doesn't name is treated as hidden from then on.
-func (f *Feed) Observe(names []string, anonymous bool) error {
+// Observe records who the server list names. A player named while the log
+// says they're online has their current visit confirmed, and only
+// confirmed visits show in the feed. Hidden players are never named, so a
+// visit can't be confirmed by listing them in an earlier session.
+func (f *Feed) Observe(names []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.loaded {
 		return nil // Update hasn't run, so there's nothing to compare with
 	}
 
-	listed := map[string]bool{}
 	changed := false
 	for _, n := range names {
-		if !playerName.MatchString(n) {
-			continue
-		}
-		listed[n] = true
-		if !f.visible[n] && len(f.visible) < maxNames {
-			f.visible[n] = true
+		if v := f.online[n]; v != nil && !v.confirmed && !v.start.IsZero() {
+			v.confirmed = true
 			changed = true
 		}
 	}
-	if anonymous {
-		for n := range f.online {
-			if !listed[n] && f.visible[n] {
-				delete(f.visible, n)
-				changed = true
-			}
-		}
-	}
 	if changed {
-		return f.saveVisible()
+		return f.save()
 	}
 	return nil
 }
 
-// Events returns up to n events by visible players, newest first.
+// Events returns up to n events from confirmed visits, newest first.
 func (f *Feed) Events(n int) []Event {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -418,7 +428,7 @@ func (f *Feed) Events(n int) []Event {
 	out := []Event{}
 	for i := len(f.events) - 1; i >= 0 && len(out) < n; i-- {
 		e := f.events[i]
-		if !f.visible[e.Player] || f.mentionsHidden(e.Text) {
+		if !e.visit.confirmed || f.mentionsHidden(e.Text) {
 			continue
 		}
 		out = append(out, e)
@@ -426,14 +436,14 @@ func (f *Feed) Events(n int) []Event {
 	return out
 }
 
-// mentionsHidden reports whether text names a player who isn't visible,
-// such as a hidden player who killed a visible one.
+// mentionsHidden reports whether text names a player whose latest visit
+// isn't confirmed, such as a hidden player who killed a visible one.
 func (f *Feed) mentionsHidden(text string) bool {
 	for _, word := range strings.FieldsFunc(text, func(r rune) bool {
 		return !(r == '_' || r == '.' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
 	}) {
 		for _, w := range []string{word, strings.Trim(word, ".")} {
-			if f.seen[w] && !f.visible[w] {
+			if v := f.last[w]; v != nil && !v.confirmed {
 				return true
 			}
 		}
@@ -448,9 +458,11 @@ func (f *Feed) Running() (since time.Time, ok bool) {
 	return f.since, f.running && !f.since.IsZero()
 }
 
-// loadVisible reads the names saved by saveVisible, so visible players'
-// history shows after a restart without waiting for them to log in.
-func (f *Feed) loadVisible() error {
+// loadSaved reads the visits saved by save, so confirmed history shows
+// after a restart without waiting for anyone to log in. Entries are
+// "name@time"; anything else (such as the plain names an older version
+// saved) can't be tied to a visit and is ignored.
+func (f *Feed) loadSaved() error {
 	if f.StatePath == "" {
 		return nil
 	}
@@ -461,29 +473,41 @@ func (f *Feed) loadVisible() error {
 	if err != nil {
 		return fmt.Errorf("activity: %w", err)
 	}
-	var names []string
-	if err := json.Unmarshal(data, &names); err != nil {
+	var keys []string
+	if err := json.Unmarshal(data, &keys); err != nil {
 		return nil // a damaged file only costs the history until they're seen again
 	}
-	for _, n := range names {
-		if playerName.MatchString(n) && len(f.visible) < maxNames {
-			f.visible[n] = true
+	for _, k := range keys {
+		if name, _, ok := strings.Cut(k, "@"); ok && playerName.MatchString(name) && len(f.saved) < 2*defaultMax+maxNames {
+			f.saved[k] = true
 		}
 	}
 	return nil
 }
 
-// saveVisible writes the visible names, replacing the file atomically.
-func (f *Feed) saveVisible() error {
+// save writes the keys of the confirmed visits the feed still holds,
+// replacing the file atomically.
+func (f *Feed) save() error {
 	if f.StatePath == "" {
 		return nil
 	}
-	names := make([]string, 0, len(f.visible))
-	for n := range f.visible {
-		names = append(names, n)
+	set := map[string]bool{}
+	for _, e := range f.events {
+		if e.visit.confirmed {
+			set[e.visit.key()] = true
+		}
 	}
-	slices.Sort(names)
-	data, err := json.Marshal(names)
+	for _, v := range f.online {
+		if v.confirmed {
+			set[v.key()] = true
+		}
+	}
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	data, err := json.Marshal(keys)
 	if err != nil {
 		return err
 	}
