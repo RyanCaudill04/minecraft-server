@@ -1406,3 +1406,27 @@ func TestInterruptedRollbackIsFinished(t *testing.T) {
 	}
 }
 
+// Releases from before the history was kept are not in it, and the
+// history's releases are newer than they are.
+func TestRollbackFromReleaseWithoutHistoryGoesBack(t *testing.T) {
+	h := newHarness(t)
+	h.d.Keep = 5
+	h.deployAll(t, "r0", "r1")
+	if err := os.Remove(h.d.historyFile()); err != nil {
+		t.Fatal(err)
+	}
+	h.deployAll(t, "r2")
+	h.age(t, "r0", 30*time.Minute)
+	h.age(t, "r1", 20*time.Minute)
+	h.age(t, "r2", 10*time.Minute)
+
+	for _, want := range []string{"r1", "r0"} {
+		if err := h.d.Rollback(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.current(t); got != want {
+			t.Errorf("current = %q, want %s", got, want)
+		}
+	}
+}
+

@@ -808,10 +808,10 @@ func (d *Deployer) hasFailed(tag string) bool {
 }
 
 // fallback returns the installed release to go back to from tag, or "" if
-// there is none: the newest one deployed before tag (or the newest deployed
-// one, if tag never was), else the newest installed release the history
-// doesn't know, from an agent before the history was kept. Releases that
-// failed are skipped.
+// there is none: the newest one deployed before tag, else the newest
+// installed release the history doesn't know, from an agent before the
+// history was kept. If tag isn't in the history either, it is the newest
+// installed release older than tag. Releases that failed are skipped.
 func (d *Deployer) fallback(tag string) string {
 	installed, err := d.installed()
 	if err != nil {
@@ -821,20 +821,29 @@ func (d *Deployer) fallback(tag string) string {
 		return ""
 	}
 	h := d.history()
-	older := h
-	if i := slices.IndexFunc(h, func(o outcome) bool { return o.tag == tag }); i >= 0 {
-		older = h[i+1:]
-	}
 	var candidates []string
-	for _, o := range older {
-		if o.ok {
-			candidates = append(candidates, o.tag)
+	if i := slices.IndexFunc(h, func(o outcome) bool { return o.tag == tag }); i >= 0 {
+		for _, o := range h[i+1:] {
+			if o.ok {
+				candidates = append(candidates, o.tag)
+			}
 		}
-	}
-	for _, t := range installed {
-		if !slices.ContainsFunc(h, func(o outcome) bool { return o.tag == t }) {
-			candidates = append(candidates, t)
+		for _, t := range installed {
+			if !slices.ContainsFunc(h, func(o outcome) bool { return o.tag == t }) {
+				candidates = append(candidates, t)
+			}
 		}
+	} else if i := slices.Index(installed, tag); i >= 0 {
+		// tag has no history, so the history's releases may be newer than
+		// it. Go by install time: only older releases are "back".
+		candidates = installed[i+1:]
+	} else {
+		for _, o := range h {
+			if o.ok {
+				candidates = append(candidates, o.tag)
+			}
+		}
+		candidates = append(candidates, installed...)
 	}
 	for _, t := range candidates {
 		if t != tag && slices.Contains(installed, t) && !d.hasFailed(t) {
