@@ -104,6 +104,10 @@ fi
 
 # Clone without hardlinks or tags (release tags belong to this repo), and
 # only the one branch, so filter-repo sees a fresh clone it may rewrite.
+# Until the setup commit exists, a failure removes the half-made folder
+# (it was absent or empty), so a rerun isn't blocked by it.
+finished=false
+trap '$finished || rm -rf "$out"' EXIT
 git clone -q --no-local --no-tags --single-branch --branch "$branch" "$source" "$out"
 cd "$out"
 [ "$branch" = main ] || git branch -q -m "$branch" main
@@ -133,6 +137,7 @@ cp -R "$templates/." .
 git add -A
 git commit -q -m "Set up the portfolio repo" \
   -m "Adds the README, CI checks and release build. The site's history comes from RyanCaudill04/minecraft-server (#29)."
+finished=true
 
 echo "Created $out:"
 git log --format='  %h %an <%ae> %ad %s' --date=short
@@ -144,5 +149,5 @@ if [ -n "$push" ]; then
   git push -u origin main
 else
   echo
-  echo "Not pushed. To push: git -C $out remote add origin <url> && git -C $out push -u origin main"
+  echo "Not pushed. To push: git -C $(printf '%q' "$out") remote add origin <url> && git -C $(printf '%q' "$out") push -u origin main"
 fi
