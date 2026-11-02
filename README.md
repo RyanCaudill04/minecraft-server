@@ -251,7 +251,7 @@ Other commands, run on the Pi:
 ~/apps/current/bin/mc-agent status     # the agent's version and the active release
 ~/apps/current/bin/mc-agent rollback   # activate the newest other installed release
 ~/apps/current/bin/mc-agent version
-journalctl --user -u mc-agent          # deploy logs
+journalctl --user-unit mc-agent        # deploy logs
 ```
 
 A manual rollback only lasts until the timer's next run. That run sees the
