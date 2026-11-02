@@ -74,6 +74,40 @@ On the Pi, LazyMC runs as the systemd user unit
 unit is installed by hand from the git checkout in `~/minecraft_server` (the
 steps are in the file), not by mc-agent.
 
+## Pinned server versions
+
+[`deploy/server.json`](deploy/server.json) pins the Minecraft version, the
+Paper build (Paperclip `server.jar`) and LazyMC, each with its download URL
+and SHA-256. Plugins are pinned in
+[`plugins/manifest.json`](plugins/manifest.json) (see [Plugins](#plugins)).
+To fill a server folder from both:
+
+```bash
+scripts/fetch-server.sh [--patch] <server folder>
+```
+
+It downloads what's missing, checks every SHA-256, and stops on a file that
+doesn't match a manifest. `--patch` also runs Paperclip to make
+`versions/` and `libraries/` (needs Java 25). To upgrade, change the
+manifest in a PR, then run the script with `--replace --patch` on the
+server. CI checks that the tracked jars match the manifests and that every
+pinned URL still serves the pinned file.
+
+## Server folder
+
+`scripts/migrate-server-dir.sh` moves the world and other runtime files out
+of the checkout into their own server folder (#73). It's a dry run unless
+given `--apply`, and refuses to run while the server is up. On the Pi, the
+plan is to keep the server folder at `~/minecraft_server` and move the
+checkout:
+
+```bash
+scripts/migrate-server-dir.sh --move-checkout-to ~/src/minecraft-server
+```
+
+If it stops partway through, it prints the commands that are left, and
+running it again with `--checkout ~/src/minecraft-server` finishes the job.
+
 ## World map (squaremap)
 
 [squaremap](https://github.com/jpenilla/squaremap) renders a top-down map
