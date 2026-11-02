@@ -11,17 +11,27 @@
 package provenance
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/tuf"
 	"github.com/sigstore/sigstore-go/pkg/verify"
+	"github.com/sigstore/sigstore/pkg/httpretry"
+	"github.com/theupdateframework/go-tuf/v2/metadata/fetcher"
 )
+
+// tufTimeout bounds each request for TUF metadata. The default client has
+// no timeout, so a server that accepts the connection and then goes quiet
+// would block forever.
+const tufTimeout = 30 * time.Second
 
 // Issuer is the OIDC issuer of GitHub Actions' workflow tokens.
 const Issuer = "https://token.actions.githubusercontent.com"
@@ -40,11 +50,15 @@ type Verifier struct {
 	// (or ~/.sigstore/root if that is empty).
 	Trusted  root.TrustedMaterial
 	CacheDir string
+
+	// TUFMirror replaces the public-good TUF mirror. For tests.
+	TUFMirror string
 }
 
 // Verify checks that bundleJSON, a Sigstore bundle, is valid, was signed
 // by v's workflow, and attests to an artifact whose SHA-256 is digest.
-func (v *Verifier) Verify(bundleJSON []byte, digest []byte) error {
+// It gives up when ctx is done.
+func (v *Verifier) Verify(ctx context.Context, bundleJSON []byte, digest []byte) error {
 	if v.Repo == "" || v.Workflow == "" || v.Ref == "" {
 		return errors.New("provenance: Repo, Workflow and Ref must be set")
 	}
@@ -55,11 +69,7 @@ func (v *Verifier) Verify(bundleJSON []byte, digest []byte) error {
 
 	trusted := v.Trusted
 	if trusted == nil {
-		opts := tuf.DefaultOptions()
-		if v.CacheDir != "" {
-			opts = opts.WithCachePath(v.CacheDir)
-		}
-		tr, err := root.FetchTrustedRootWithOptions(opts)
+		tr, err := v.fetchTrustedRoot(ctx)
 		if err != nil {
 			return fmt.Errorf("provenance: fetching the Sigstore trusted root: %w", err)
 		}
@@ -94,6 +104,41 @@ func (v *Verifier) Verify(bundleJSON []byte, digest []byte) error {
 		return fmt.Errorf("provenance: statement is %s, want %s", got, SLSAProvenance)
 	}
 	return nil
+}
+
+// fetchTrustedRoot gets the public-good root through TUF. go-tuf retries
+// with a context it doesn't expose, so the fetch runs in its own goroutine
+// and is abandoned when ctx is done.
+func (v *Verifier) fetchTrustedRoot(ctx context.Context) (root.TrustedMaterial, error) {
+	opts := tuf.DefaultOptions()
+	if v.CacheDir != "" {
+		opts = opts.WithCachePath(v.CacheDir)
+	}
+	if v.TUFMirror != "" {
+		opts.RepositoryBaseURL = v.TUFMirror
+	}
+	f := fetcher.NewDefaultFetcher()
+	f.SetHTTPClient(&http.Client{
+		Timeout:   tufTimeout,
+		Transport: httpretry.NewTransport(nil),
+	})
+	opts.Fetcher = f
+
+	type result struct {
+		tr  *root.TrustedRoot
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		tr, err := root.FetchTrustedRootWithOptions(opts)
+		done <- result{tr, err}
+	}()
+	select {
+	case r := <-done:
+		return r.tr, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // identity is the certificate v's workflow gets: its SAN is the workflow

@@ -2,7 +2,11 @@ module github.com/ryancaudill04/minecraft-server/web
 
 go 1.27.3
 
-require github.com/sigstore/sigstore-go v1.4.0
+require (
+	github.com/sigstore/sigstore v1.11.1
+	github.com/sigstore/sigstore-go v1.4.0
+	github.com/theupdateframework/go-tuf/v2 v2.4.2
+)
 
 require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
@@ -47,9 +51,7 @@ require (
 	github.com/sigstore/protobuf-specs v0.5.2 // indirect
 	github.com/sigstore/rekor v1.5.5 // indirect
 	github.com/sigstore/rekor-tiles/v2 v2.4.0 // indirect
-	github.com/sigstore/sigstore v1.11.1 // indirect
 	github.com/sigstore/timestamp-authority/v2 v2.2.0 // indirect
-	github.com/theupdateframework/go-tuf/v2 v2.4.2 // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect

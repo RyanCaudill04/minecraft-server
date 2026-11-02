@@ -2,12 +2,16 @@ package provenance
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/root"
 )
@@ -116,7 +120,7 @@ func TestVerify(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.v.Verify(bytes.Clone(tt.bundle), digest(t, tt.digest))
+			err := tt.v.Verify(context.Background(), bytes.Clone(tt.bundle), digest(t, tt.digest))
 			switch {
 			case tt.wantErr == "" && err != nil:
 				t.Fatalf("Verify: %v", err)
@@ -126,5 +130,32 @@ func TestVerify(t *testing.T) {
 				t.Fatalf("Verify error %q doesn't mention %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// A TUF server that accepts the connection and never answers must not
+// hang Verify past its context.
+func TestVerifyGivesUpWhenTUFStalls(t *testing.T) {
+	stall := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-stall
+	}))
+	defer srv.Close()
+	defer close(stall)
+
+	b, _ := load(t)
+	v := ghVerifier(nil)
+	v.CacheDir = t.TempDir()
+	v.TUFMirror = srv.URL
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := v.Verify(ctx, b, digest(t, ghArm64))
+	if err == nil || !strings.Contains(err.Error(), "trusted root") {
+		t.Fatalf("Verify = %v, want a trusted root error", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("Verify took %v after its context ended", took)
 	}
 }

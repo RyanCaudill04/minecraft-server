@@ -5,4 +5,7 @@ Description=Deploy the latest web app release
 
 [Service]
 Type=oneshot
+# systemd does not time out oneshot starts on its own; a hung run would stop
+# the timer firing again.
+TimeoutStartSec=15min
 ExecStart=%h/apps/current/bin/mc-agent deploy

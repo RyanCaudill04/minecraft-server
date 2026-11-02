@@ -26,7 +26,7 @@ const maxProvenanceSize = 1 << 20
 type Provenance interface {
 	// Verify checks that bundle, a Sigstore bundle, attests to an artifact
 	// whose SHA-256 is digest.
-	Verify(bundle []byte, digest []byte) error
+	Verify(ctx context.Context, bundle []byte, digest []byte) error
 }
 
 var releaseNumber = regexp.MustCompile(`^r([0-9]{1,9})$`)
@@ -58,7 +58,7 @@ func (d *Deployer) checkProvenance(ctx context.Context, rel *Release, wantHex st
 	if err := d.download(ctx, bundleURL, &b, maxProvenanceSize); err != nil {
 		return err
 	}
-	if err := d.Provenance.Verify(b.Bytes(), digest); err != nil {
+	if err := d.Provenance.Verify(ctx, b.Bytes(), digest); err != nil {
 		return fmt.Errorf("deploy: refusing to install %s: %w", rel.Tag, err)
 	}
 	d.Log.Printf("%s provenance verified", rel.Tag)
