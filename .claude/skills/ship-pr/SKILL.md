@@ -133,8 +133,8 @@ and push.
 
 ## 6. After review
 
-- Address review comments with new commits; don't rewrite pushed history
-  unless the user asks.
+- Address review comments with new commits (the `pr-comment-fixer` skill
+  has the steps); don't rewrite pushed history unless the user asks.
 - A stacked PR needs a rebase onto `main` after its base merges. PRs are
   squash-merged, so a plain `git rebase origin/main` replays the base
   branch's commits again and conflicts. Replay only this branch's own

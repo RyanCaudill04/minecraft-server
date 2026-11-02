@@ -143,7 +143,7 @@ Part of #60.
   public like everything else here, so the rules above apply to them.
 - **How they relate:** `AGENTS.md` holds the rules and facts that apply to
   every task; a skill holds the steps for one recurring workflow (preview
-  play, Pi operations, shipping a PR, review). Skills point here instead of
+  play, Pi operations, shipping a PR, review, resolving PR review comments). Skills point here instead of
   repeating the rules, and this file wins when they disagree.
 - The CI review (#58) reads `.claude/skills/repo-review/SKILL.md` as its
   checklist when it exists, so the local and CI reviews stay the same.
