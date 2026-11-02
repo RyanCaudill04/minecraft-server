@@ -22,6 +22,10 @@
 // failed ones, and pins it in <apps>/pinned so the timer doesn't deploy the
 // newer release again. Unpin follows the latest release again.
 //
+// The update policy in <apps>/policy.json can hold back new releases or
+// pause updates, and admin asks for changes through <apps>/request.json;
+// see policy.go.
+//
 // Units a release no longer lists are stopped, disabled and unlinked before
 // current switches. The agent records what it manages in
 // <apps>/managed.json, so this also works after a rollback, for template
@@ -85,6 +89,11 @@ type Manifest struct {
 	Services []string `json:"services"` // enabled and restarted on every deploy
 	Timers   []string `json:"timers"`   // enabled and started
 	Health   []string `json:"health"`   // URLs that must answer 200 after a deploy
+	// Policy is the update policy version the release's mc-agent follows
+	// (PolicyVersion), or 0 for a release from before policies. Only a
+	// release that follows them can be pinned: the timer runs the active
+	// release's agent, and an older one would ignore the pin.
+	Policy int `json:"policy,omitzero"`
 }
 
 // Applied records which release current was last switched to, and when.
@@ -112,8 +121,12 @@ type Change struct {
 
 // Release is one GitHub Release.
 type Release struct {
-	Tag    string `json:"tag_name"`
-	Assets []struct {
+	Tag         string    `json:"tag_name"`
+	PublishedAt time.Time `json:"published_at"`
+	URL         string    `json:"html_url"` // the release's page, with its notes
+	Draft       bool      `json:"draft"`
+	Prerelease  bool      `json:"prerelease"`
+	Assets      []struct {
 		Name string `json:"name"`
 		URL  string `json:"browser_download_url"`
 	} `json:"assets"`
@@ -219,23 +232,9 @@ func (d *Deployer) LastApplied() (*Applied, error) {
 
 // Latest asks GitHub for the newest published release.
 func (d *Deployer) Latest(ctx context.Context) (*Release, error) {
-	url := fmt.Sprintf("%s/repos/%s/releases/latest", d.API, d.Repo)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := d.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("deploy: fetching latest release: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("deploy: fetching latest release: %s", resp.Status)
-	}
 	var rel Release
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil {
-		return nil, fmt.Errorf("deploy: decoding latest release: %w", err)
+	if err := d.getJSON(ctx, "/releases/latest", "latest release", &rel); err != nil {
+		return nil, err
 	}
 	if !validTag.MatchString(rel.Tag) {
 		return nil, fmt.Errorf("deploy: invalid release tag %q", rel.Tag)
@@ -243,9 +242,65 @@ func (d *Deployer) Latest(ctx context.Context) (*Release, error) {
 	return &rel, nil
 }
 
-// Run deploys the latest release unless it is already active or has
-// failed before, or the pinned release while one is pinned. It first
-// finishes an activation that was interrupted. It is what the systemd timer
+// Release asks GitHub for the release tagged tag.
+func (d *Deployer) Release(ctx context.Context, tag string) (*Release, error) {
+	if !validTag.MatchString(tag) {
+		return nil, fmt.Errorf("deploy: invalid release tag %q", tag)
+	}
+	var rel Release
+	if err := d.getJSON(ctx, "/releases/tags/"+url.PathEscape(tag), "release "+tag, &rel); err != nil {
+		return nil, err
+	}
+	if rel.Tag != tag {
+		return nil, fmt.Errorf("deploy: asked GitHub for %s and got %q", tag, rel.Tag)
+	}
+	return &rel, nil
+}
+
+// Releases asks GitHub for the newest published releases, newest first,
+// leaving out drafts, prereleases and tags the agent wouldn't accept.
+func (d *Deployer) Releases(ctx context.Context) ([]Release, error) {
+	var all []Release
+	if err := d.getJSON(ctx, "/releases?per_page=30", "releases", &all); err != nil {
+		return nil, err
+	}
+	var out []Release
+	for _, r := range all {
+		if !r.Draft && !r.Prerelease && validTag.MatchString(r.Tag) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// getJSON decodes the GitHub API's answer for path, under the repo, into
+// v. what names it in errors.
+func (d *Deployer) getJSON(ctx context.Context, path, what string, v any) error {
+	u := fmt.Sprintf("%s/repos/%s%s", d.API, d.Repo, path)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := d.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("deploy: fetching %s: %w", what, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("deploy: fetching %s: %s", what, resp.Status)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(v); err != nil {
+		return fmt.Errorf("deploy: decoding %s: %w", what, err)
+	}
+	return nil
+}
+
+// Run follows the update policy (see policy.go). It first finishes an
+// activation that was interrupted, then carries out a change admin asked
+// for. Then, unless updates are paused, it deploys the pinned release while
+// one is pinned, or else the latest release unless it is already active,
+// has failed before, or the policy is notify. It is what the systemd timer
 // calls.
 func (d *Deployer) Run(ctx context.Context) error {
 	unlock, err := d.lock()
@@ -257,17 +312,28 @@ func (d *Deployer) Run(ctx context.Context) error {
 	if err := d.resume(ctx); err != nil {
 		return err
 	}
+	if err := d.handleRequest(ctx); err != nil {
+		return err
+	}
+	policy := d.policy()
 	current, err := d.Current()
 	if err != nil {
 		return err
 	}
+	pinned := readTag(d.pinnedFile())
+	// A pin that was cut short is finished even while paused, like the
+	// activation resume finishes: the owner asked for it.
+	if policy.Paused && (pinned == "" || pinned == current) {
+		d.Log.Printf("updates are paused; run \"mc-agent resume\" to deploy again")
+		return nil
+	}
 
-	if pinned := readTag(d.pinnedFile()); pinned != "" {
-		d.Log.Printf("pinned to %s by a rollback, so newer releases aren't deployed; run \"mc-agent unpin\" to follow the latest release", pinned)
+	if pinned != "" {
+		d.Log.Printf("pinned to %s, so newer releases aren't deployed; run \"mc-agent unpin\" to follow the latest release", pinned)
 		if pinned == current {
 			return nil
 		}
-		if err := d.activate(ctx, pinned, false); err != nil {
+		if err := d.activate(ctx, pinned, !d.deployed(pinned)); err != nil {
 			return fmt.Errorf("deploy: pinned release %s: %w", pinned, err)
 		}
 		return nil
@@ -277,12 +343,17 @@ func (d *Deployer) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	d.recordLatest(rel.Tag)
 	if rel.Tag == current {
 		if current == readTag(d.failedFile()) {
 			// Exit non-zero, so the unit shows the Pi runs a broken release.
 			return fmt.Errorf("deploy: the active release %s failed and there is nothing to roll back to; publish a new release to replace it", current)
 		}
 		d.Log.Printf("%s is already active", current)
+		return nil
+	}
+	if policy.Mode(Track) == ModeNotify {
+		d.Log.Printf("%s is available; the update policy is notify, so it isn't installed", rel.Tag)
 		return nil
 	}
 	if d.hasFailed(rel.Tag) {
@@ -325,8 +396,9 @@ func (d *Deployer) resume(ctx context.Context) error {
 	}
 
 	// A release activated by a rollback ran here before, and may be older
-	// than "mc-agent selfcheck", so only a new release's agent is checked.
-	forward := current == pending && !d.deployed(current) && current != readTag(d.pinnedFile())
+	// than "mc-agent selfcheck", so only a release that never passed a
+	// deploy here (a new one, pinned or not) has its agent checked.
+	forward := current == pending && !d.deployed(current)
 	d.Log.Printf("activating %s was interrupted; applying %s again", pending, current)
 	if err := d.apply(ctx, forward); err != nil {
 		if current != pending {
@@ -610,7 +682,8 @@ func (d *Deployer) Rollback(ctx context.Context) error {
 	return nil
 }
 
-// Unpin lets the timer deploy the latest release again after a Rollback.
+// Unpin lets the timer deploy the latest release again after a Rollback or
+// a pin: it sets the update policy to auto, as "mc-agent policy auto" does.
 func (d *Deployer) Unpin() error {
 	unlock, err := d.lock()
 	if err != nil {
@@ -619,6 +692,11 @@ func (d *Deployer) Unpin() error {
 	defer unlock()
 	if readTag(d.pinnedFile()) == "" {
 		d.Log.Printf("nothing is pinned")
+	}
+	// The pin is only the pinned file; without this, removing it would
+	// fall back to a stored notify mode and the message below would lie.
+	if err := d.storeMode(ModeAuto); err != nil {
+		return err
 	}
 	return d.unpin()
 }
@@ -705,14 +783,19 @@ func (d *Deployer) clearPending() {
 	}
 }
 
-// markFailed records that tag failed, so it isn't retried, and unpins it.
+// markFailed records that tag failed, so it isn't retried. If tag was
+// pinned, it unpins it and switches the update policy to notify: following
+// the latest release instead could install something nobody chose.
 func (d *Deployer) markFailed(tag string) {
 	if err := d.writeFile(d.failedFile(), []byte(tag+"\n")); err != nil {
 		d.Log.Printf("recording %s as failed: %v", tag, err)
 	}
 	d.record(tag, false)
 	if readTag(d.pinnedFile()) == tag {
-		d.Log.Printf("unpinning %s: it failed", tag)
+		d.Log.Printf("unpinning %s: it failed; the update policy is now notify", tag)
+		if err := d.storeMode(ModeNotify); err != nil {
+			d.Log.Printf("switching the update policy to notify: %v", err)
+		}
 		if err := d.unpin(); err != nil {
 			d.Log.Printf("unpinning %s: %v", tag, err)
 		}

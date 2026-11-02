@@ -1,14 +1,21 @@
 // Command mc-agent runs on the Raspberry Pi and keeps the web apps deployed.
 // A systemd timer runs "mc-agent deploy" every few minutes: it installs the
 // newest GitHub Release of this repo, health-checks it, and rolls back if
-// it fails. Later the admin page will trigger the same actions.
+// it fails.
 //
 // "rollback" goes back to the release deployed before the current one and
 // pins it, so the timer doesn't deploy the newer release again until
 // "unpin". The agent deploying a release runs that release's own agent with
 // "selfcheck", to make sure it can run the next deploy.
 //
-// Usage: mc-agent [flags] deploy|rollback|unpin|status|selfcheck|version
+// The update policy decides what the timer does with a new release:
+// "policy auto" deploys it, "policy notify" only records it for admin, and
+// "pin <tag>" applies that release and stays on it ("unpin" or "policy
+// auto" follows the latest again). "pause" holds every update until
+// "resume". admin asks for the same changes through a request file that
+// "deploy" carries out.
+//
+// Usage: mc-agent [flags] deploy|rollback|pin <tag>|unpin|policy auto|notify|pause|resume|status|selfcheck|version
 package main
 
 import (
@@ -39,11 +46,12 @@ func main() {
 	units := flag.String("units", filepath.Join(home, ".config", "systemd", "user"), "systemd user unit folder")
 	api := flag.String("api", "https://api.github.com", "GitHub API base URL")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: mc-agent [flags] deploy|rollback|unpin|status|selfcheck|version")
+		fmt.Fprintln(os.Stderr, "usage: mc-agent [flags] deploy|rollback|pin <tag>|unpin|policy auto|notify|pause|resume|status|selfcheck|version")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	if flag.NArg() != 1 {
+	args := map[string]int{"pin": 2, "policy": 2}
+	if flag.NArg() == 0 || flag.NArg() != max(args[flag.Arg(0)], 1) {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -82,8 +90,16 @@ func main() {
 		err = d.Run(ctx)
 	case "rollback":
 		err = d.Rollback(ctx)
+	case "pin":
+		err = d.Pin(ctx, flag.Arg(1))
 	case "unpin":
 		err = d.Unpin()
+	case "policy":
+		err = d.SetMode(deploy.Mode(flag.Arg(1)))
+	case "pause":
+		err = d.SetPaused(true)
+	case "resume":
+		err = d.SetPaused(false)
 	case "selfcheck":
 		err = d.SelfCheck(ctx, version)
 	case "status":
@@ -91,6 +107,18 @@ func main() {
 		current, err = d.Current()
 		if err == nil {
 			fmt.Printf("agent %s, active release %q\n", version, current)
+			p, perr := d.ReadPolicy()
+			switch {
+			case perr != nil:
+				fmt.Printf("update policy: unreadable: %v\n", perr)
+			case p.Tracks[deploy.Track].Mode == deploy.ModePinned:
+				fmt.Printf("update policy: pinned to %s\n", p.Tracks[deploy.Track].Tag)
+			default:
+				fmt.Printf("update policy: %s\n", p.Mode(deploy.Track))
+			}
+			if perr == nil && p.Paused {
+				fmt.Println("updates are paused")
+			}
 		}
 	case "version":
 		fmt.Println(version)
