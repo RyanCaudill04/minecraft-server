@@ -24,7 +24,7 @@ mkdir -p "$stage/bin" "$out"
 
 cp -R "$root/sites" "$stage/sites"
 mkdir -p "$stage/deploy/systemd"
-cp -R "$root/deploy/sites" "$root/deploy/release.json" "$stage/deploy/"
+cp -R "$root/deploy/sites" "$root/deploy/backup" "$root/deploy/release.json" "$stage/deploy/"
 # Only the units the manifest links. The others in deploy/systemd, like
 # minecraft.service, are linked from the server checkout instead.
 jq -r '.units[]' "$root/deploy/release.json" | while read -r unit; do

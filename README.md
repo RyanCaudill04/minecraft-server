@@ -93,6 +93,23 @@ manifest in a PR, then run the script with `--replace --patch` on the
 server. CI checks that the tracked jars match the manifests and that every
 pinned URL still serves the pinned file.
 
+### Applying a server update on the Pi
+
+Server files don't deploy automatically yet (#15). After a change to
+`deploy/server.json` or `plugins/manifest.json` is merged, from the checkout
+on the Pi:
+
+```bash
+systemctl --user start mc-backup   # back up first; check journalctl --user -u mc-backup
+systemctl --user stop minecraft
+git pull && scripts/fetch-server.sh --replace --patch ~/minecraft_server
+systemctl --user start minecraft
+```
+
+Because `start.sh` puts every JAR under `libraries/` on the classpath, delete
+the folder of any library version Paper no longer lists (for example an old
+`libraries/io/papermc/paper/paper-api/<build>/`) before starting.
+
 ## Server folder
 
 `scripts/migrate-server-dir.sh` moves the world and other runtime files out
@@ -107,6 +124,58 @@ scripts/migrate-server-dir.sh --move-checkout-to ~/src/minecraft-server
 
 If it stops partway through, it prints the commands that are left, and
 running it again with `--checkout ~/src/minecraft-server` finishes the job.
+
+## Backups
+
+`mc-backup.timer` runs [`deploy/backup/mc-backup.sh`](deploy/backup/mc-backup.sh)
+every night at about 04:30. It ships in the release, so mc-agent installs and
+updates it like the web apps. It never starts, stops or waits on
+`minecraft.service`. Each run writes
+`~/backups/minecraft/world-YYYYmmdd-HHMMSS.tar.gz` with a `.sha256` file next
+to it, checks the archive, and keeps the newest backup of each of the last 7
+days and of each of the last 4 weeks. An archive holds `world`,
+`world_nether`, `world_the_end` and the runtime files git doesn't track
+(`server.properties`, `ops.json`, `whitelist.json`, the ban lists and
+`usercache.json`).
+
+- **Paper asleep** (the usual case at night): the world is copied as-is.
+- **Paper awake, RCON on:** saving is paused with `save-off` and
+  `save-all flush` during the copy, then turned back on with `save-on`.
+- **Paper awake, RCON off:** the backup waits up to 30 minutes for Paper to
+  sleep, then fails rather than copy files Paper is writing.
+
+To let backups run while people are playing, turn on RCON as described in
+[RCON](#rcon). The backup reads the password from `rcon.password` in the
+server folder's `server.properties`.
+
+Settings such as retention and an off-Pi copy go in `~/.config/minecraft/host.env`,
+the same file that sets `SERVER_DIR`; the script's header lists them all. For
+example:
+
+```bash
+BACKUP_KEEP_DAILY=7
+BACKUP_KEEP_WEEKLY=8
+BACKUP_COPY_TO=user@nas:backups/minecraft/
+```
+
+Run one now with `systemctl --user start mc-backup` and read its log with
+`journalctl --user -u mc-backup`.
+
+### Restoring
+
+```bash
+systemctl --user stop minecraft
+cd ~/backups/minecraft && sha256sum -c world-YYYYmmdd-HHMMSS.tar.gz.sha256
+mkdir ~/restore && tar -xzf world-YYYYmmdd-HHMMSS.tar.gz -C ~/restore
+cd ~/minecraft_server
+mkdir ~/world-before-restore && mv world world_nether world_the_end ~/world-before-restore/
+mv ~/restore/world ~/restore/world_nether ~/restore/world_the_end .
+systemctl --user start minecraft
+```
+
+Only move back what you need: `~/restore` also has the backed-up
+`server.properties` and player lists. Delete `~/world-before-restore` once the
+restored world looks right.
 
 ## World map (squaremap)
 
@@ -251,7 +320,7 @@ scripts/build-release.sh <tag> <output folder> [notes.json]
 ```
 
 The tarball holds the arm64 binaries in `bin/` (play, admin, serve,
-mc-agent), `sites/`, `deploy/systemd/`, `deploy/sites/`,
+mc-agent, mc-rcon), `sites/`, `deploy/systemd/`, `deploy/sites/`, `deploy/backup/`,
 `deploy/release.json`, `deploy/notes.json` when notes were given, and
 `VERSION`.
 

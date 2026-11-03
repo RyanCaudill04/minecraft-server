@@ -2,13 +2,13 @@
   "minecraft": "26.2",
   "java": 25,
   "paper": {
-    "build": 132,
+    "build": 135,
     "path": "server.jar",
-    "url": "https://fill-data.papermc.io/v1/objects/5ab560a769c1ab413cb7f637dd0dc697974571f2db0a667cfbac511422e51b26/paper-26.2-132.jar",
-    "sha256": "5ab560a769c1ab413cb7f637dd0dc697974571f2db0a667cfbac511422e51b26",
+    "url": "https://fill-data.papermc.io/v1/objects/ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1/paper-26.2-135.jar",
+    "sha256": "ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1",
     "patched": {
       "path": "versions/26.2/paper-26.2.jar",
-      "sha256": "0ce49f92d9dfb22d1a08b063cc383d48f5fbf07ff93fa28d92d16b93efe4a197"
+      "sha256": "7c391444fd5f5fb77d193414924e7a16dbfd1cac87a2a6c858a8ea8dd041f44e"
     }
   },
   "lazymc": {

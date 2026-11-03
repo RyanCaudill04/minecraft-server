@@ -16,10 +16,10 @@
     },
     {
       "name": "ViaVersion",
-      "version": "5.12.0",
-      "file": "ViaVersion-5.12.0.jar",
-      "sha256": "c4d512fa9760fa41d17abaedde12aa1f4c9bde920d0a992fe0fc016962f126be",
-      "source": "https://cdn.modrinth.com/data/P1OZGk5p/versions/FaishMnD/ViaVersion-5.12.0.jar"
+      "version": "5.12.2",
+      "file": "ViaVersion-5.12.2.jar",
+      "sha256": "c0b63badcb0f7d38f4443e06820f2b8142dd4f0d3b0511f9330ff1050430e6b2",
+      "source": "https://cdn.modrinth.com/data/P1OZGk5p/versions/Fkfcr89K/ViaVersion-5.12.2.jar"
     }
   ]
 }
