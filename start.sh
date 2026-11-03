@@ -2,6 +2,14 @@
 
 set -euo pipefail
 
+# HEAP comes from host.env through minecraft.service and LazyMC (see
+# deploy/host.example.env).
+heap=${HEAP:-10G}
+if [[ ! "$heap" =~ ^[1-9][0-9]*[MG]$ ]]; then
+  echo "HEAP=$heap is not a size like 4G or 4096M; fix it in ~/.config/minecraft/host.env." >&2
+  exit 1
+fi
+
 server_jar="versions/26.2/paper-26.2.jar"
 libraries_dir="libraries"
 
@@ -15,4 +23,4 @@ while IFS= read -r -d '' library; do
   classpath="$classpath:$library"
 done < <(find "$libraries_dir" -type f -name '*.jar' -print0)
 
-exec java -Xms10G -Xmx10G -cp "$classpath" org.bukkit.craftbukkit.Main --nogui
+exec java "-Xms$heap" "-Xmx$heap" -cp "$classpath" org.bukkit.craftbukkit.Main --nogui

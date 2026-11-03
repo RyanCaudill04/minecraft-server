@@ -23,7 +23,17 @@ Files the server generates are not tracked either. That includes the Paper
 jar under `versions/` and spark's `plugins/spark/tmp/` folder, which spark
 recreates on start.
 
-Before enabling services such as RCON or the Paper management server, keep their passwords and secrets out of Git. Use a local, ignored override or an environment-specific secret store instead.
+Before enabling services such as RCON or the Paper management server, keep their passwords and secrets out of Git. Secrets go in `~/.config/minecraft/secrets.env` (mode `0600`); [`deploy/secrets.example.env`](deploy/secrets.example.env) lists every key.
+
+## Setting up a machine
+
+On a Linux machine with systemd, from a clone of this repo (which is also the server folder for now):
+
+```bash
+scripts/install.sh --repo <owner/name> --domain <domain> [--heap 4G] [--dry-run]
+```
+
+It checks the prerequisites, writes the host config to `~/.config/minecraft/host.env` (every key is described in [`deploy/host.example.env`](deploy/host.example.env); without the file, today's Pi values are used), creates `secrets.env`, installs the newest web-app release and starts the Minecraft service. It never runs `sudo`; it prints the command instead. Running it again only fixes what's missing and asks before changing anything. At the end it lists what's left: LazyMC, the EULA, the Cloudflare and router setup.
 
 ## RCON
 

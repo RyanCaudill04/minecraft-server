@@ -1,8 +1,11 @@
 # Deploys the newest GitHub Release of this repo. Run by mc-agent.timer.
+# REPO in host.env (see deploy/host.example.env) picks the repo; without
+# it, mc-agent uses the repo that built it.
 
 [Unit]
 Description=Deploy the latest web app release
 
 [Service]
 Type=oneshot
+EnvironmentFile=-%h/.config/minecraft/host.env
 ExecStart=%h/apps/current/bin/mc-agent deploy
