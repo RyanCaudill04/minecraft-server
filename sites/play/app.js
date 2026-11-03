@@ -1,6 +1,6 @@
 // play.ryancaudill.dev: polls the play API and renders the dashboard.
 
-import { $, ANONYMOUS_ID, fmtAgo, getJSON, scrollSpy } from "../shared/common.js";
+import { $, ANONYMOUS_ID, el, fmtAgo, getJSON, scrollSpy } from "../shared/common.js";
 import { accentHue, capitalize, fmtDate, fmtDistance, fmtHours, fmtNum, fmtPlaytime, fmtWhen, mcClock, phase, weather } from "./format.js";
 
 const STATUS_MS = 10_000; // server state and who's online
@@ -373,13 +373,6 @@ function placeSky(tod) {
 scrollSpy();
 
 // ---------- Helpers ----------
-
-function el(tag, className = "", text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
 
 // A front view of the player's whole skin, size pixels wide and 2.4 times
 // as tall.

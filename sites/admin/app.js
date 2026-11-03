@@ -4,7 +4,7 @@
 // and Console sections POST actions and commands; their output is only
 // ever set as text.
 
-import { $, ANONYMOUS_ID, fmtAgo, getJSON, scrollSpy } from "../shared/common.js";
+import { $, ANONYMOUS_ID, el, fmtAgo, getJSON, scrollSpy } from "../shared/common.js";
 
 const STATUS_MS = 10_000; // server state and who's online
 const DEPLOY_MS = 60_000; // the active release (changes a few times a day)
@@ -147,25 +147,18 @@ function renderInstalled(d) {
 
   const tags = d?.installed ?? [];
   const items = tags.map((tag) => {
-    const li = document.createElement("li");
-    const code = document.createElement("code");
-    code.textContent = tag;
-    li.append(code);
+    const li = el("li");
+    li.append(el("code", "", tag));
     const mark = tag === d.active ? "active" : tag === d.failed ? "failed" : "";
     if (mark) {
-      const badge = document.createElement("span");
-      badge.className = "kind";
+      const badge = el("span", "kind", mark === "active" ? "Active" : "Failed");
       badge.dataset.kind = mark;
-      badge.textContent = mark === "active" ? "Active" : "Failed";
       li.append(badge);
     }
     return li;
   });
   if (!items.length) {
-    const li = document.createElement("li");
-    li.className = "muted";
-    li.textContent = d ? "None" : "Unknown";
-    items.push(li);
+    items.push(el("li", "muted", d ? "None" : "Unknown"));
   }
   $("deploy-installed").replaceChildren(...items);
 }
@@ -202,18 +195,13 @@ function renderChanges(d) {
   const list = $("deploy-changes");
   list.replaceChildren(
     ...(d?.changes ?? []).map((c) => {
-      const li = document.createElement("li");
-      const kind = document.createElement("span");
-      kind.className = "kind";
+      const li = el("li");
+      const kind = el("span", "kind");
       setKind(kind, c.kind);
-      const title = document.createElement("span");
-      title.className = "title";
-      title.textContent = c.title;
-      li.append(kind, title);
+      li.append(kind, el("span", "title", c.title));
       if (c.pr) {
-        const a = document.createElement("a");
+        const a = el("a", "", `#${c.pr}`);
         a.href = `${REPO}/pull/${c.pr}`;
-        a.textContent = `#${c.pr}`;
         li.append(a);
       }
       return li;
@@ -237,23 +225,15 @@ function renderPlugins() {
 
   $("plugin-list").replaceChildren(
     ...(d?.plugins ?? []).map((p) => {
-      const li = document.createElement("li");
-      const who = document.createElement("span");
-      who.className = "who";
-      const name = document.createElement("span");
-      name.className = "title";
-      name.textContent = p.meta ? `${p.meta.name} ${p.meta.version}` : p.file;
-      const file = document.createElement("span");
-      file.className = "file";
+      const li = el("li");
+      const who = el("span", "who");
       const info = PLUGIN_STATUS[p.status] ?? { label: p.status, note: "" };
       const hash = p.sha256 ? ` · sha256 ${p.sha256.slice(0, 12)}…` : "";
-      file.textContent = `${p.file}${hash} · ${p.problem || info.note}`;
+      const file = el("span", "file", `${p.file}${hash} · ${p.problem || info.note}`);
       file.title = p.sha256 ?? "";
-      who.append(name, file);
-      const kind = document.createElement("span");
-      kind.className = "kind";
+      who.append(el("span", "title", p.meta ? `${p.meta.name} ${p.meta.version}` : p.file), file);
+      const kind = el("span", "kind", info.label);
       kind.dataset.kind = p.status;
-      kind.textContent = info.label;
       li.append(who, kind);
       return li;
     }),
@@ -489,14 +469,8 @@ function renderConsole() {
 // Adds one command and its output (or error) to the transcript, newest
 // first. Everything goes in as text.
 function addTranscript(cmd, text, isError) {
-  const li = document.createElement("li");
-  const head = document.createElement("div");
-  head.className = "cmd";
-  head.textContent = `/${cmd}`;
-  const out = document.createElement("pre");
-  out.className = isError ? "out error" : "out";
-  out.textContent = text || "(no output)";
-  li.append(head, out);
+  const li = el("li");
+  li.append(el("div", "cmd", `/${cmd}`), el("pre", isError ? "out error" : "out", text || "(no output)"));
   const list = $("transcript");
   list.prepend(li);
   while (list.children.length > TRANSCRIPT_MAX) list.lastChild.remove();

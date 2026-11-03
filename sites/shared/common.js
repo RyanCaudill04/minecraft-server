@@ -5,6 +5,14 @@ export const ANONYMOUS_ID = "00000000-0000-0000-0000-000000000000";
 
 export const $ = (id) => document.getElementById(id);
 
+// A new element with an optional class and text.
+export function el(tag, className = "", text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
 export async function getJSON(path) {
   const res = await fetch(path, { cache: "no-store" });
   if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
