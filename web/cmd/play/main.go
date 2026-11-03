@@ -4,6 +4,8 @@
 //	GET /api/status   active, sleeping, starting or offline, and who is online
 //	GET /api/world    world facts from the saved world files
 //	GET /api/players  every known player's saved stats
+//	GET /api/time     the in-game clock and weather, run forward while active
+//	GET /api/activity recent joins, leaves, deaths and advancements (see live.go)
 //	GET /map/         the world map squaremap renders (see mapHandler)
 //
 // The status comes from status pings (see package mcstatus), so checking
@@ -32,8 +34,15 @@ import (
 
 // newHandler routes the API and serves the static page from dir and the
 // shared files from sharedDir. World and player data are read from
-// serverDir, and the map from m.
+// serverDir, and the map from mapDir.
 func newHandler(dir, sharedDir, serverDir, mapDir string, c *mcstatus.Checker) http.Handler {
+	h, _ := newApp(dir, sharedDir, serverDir, mapDir, c)
+	return h
+}
+
+// newApp is newHandler and also returns poll, which keeps the activity
+// feed current when nobody is requesting it (see watch).
+func newApp(dir, sharedDir, serverDir, mapDir string, c *mcstatus.Checker) (h http.Handler, poll func(context.Context)) {
 	worldDir := filepath.Join(serverDir, "world")
 	status := &site.Cache[mcstatus.Status]{MaxAge: 5 * time.Second, Load: c.Check}
 	worldInfo := &site.Cache[*world.Info]{MaxAge: 30 * time.Second, Load: func(context.Context) (*world.Info, error) {
@@ -47,10 +56,11 @@ func newHandler(dir, sharedDir, serverDir, mapDir string, c *mcstatus.Checker) h
 	mux.HandleFunc("GET /api/status", site.JSON("play: status", status))
 	mux.HandleFunc("GET /api/world", site.JSON("play: world", worldInfo))
 	mux.HandleFunc("GET /api/players", site.JSON("play: players", players))
+	poll = addLive(mux, serverDir, status)
 	mux.Handle("GET /map/", http.StripPrefix("/map", mapHandler(mapDir)))
 	mux.Handle("GET /map", http.RedirectHandler("/map/", http.StatusMovedPermanently))
 	mux.Handle("GET /", site.Static(dir, sharedDir))
-	return mux
+	return mux, poll
 }
 
 func main() {
@@ -81,9 +91,11 @@ func main() {
 		*mapDir = filepath.Join(*serverDir, "plugins", "squaremap", "web")
 	}
 	c := &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status}
+	handler, poll := newApp(*dir, *sharedDir, *serverDir, *mapDir, c)
+	go watch(context.Background(), 5*time.Second, poll)
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandler(*dir, *sharedDir, *serverDir, *mapDir, c),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("serving %s and the API on http://%s", *dir, *addr)

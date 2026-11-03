@@ -1,5 +1,6 @@
 // play.ryancaudill.dev: polls the play API and renders the dashboard.
 
+import { liveWorld, startLive, stopLive } from "./live.js";
 import { accentHue, capitalize, fmtAgo, fmtDate, fmtDistance, fmtHours, fmtNum, fmtPlaytime, fmtWhen, mcClock, phase, weather } from "./format.js";
 
 const STATUS_MS = 10_000; // server state and who's online
@@ -59,7 +60,7 @@ const FIRSTS = {
   "minecraft:end/elytra": { icon: "🪽", label: "First wings" },
 };
 
-const data = {
+export const data = {
   status: null,
   world: null,
   players: [],
@@ -71,11 +72,11 @@ const data = {
   sheetId: null, // player in the open sheet
 };
 
-const $ = (id) => document.getElementById(id);
+export const $ = (id) => document.getElementById(id);
 
 // ---------- Fetching ----------
 
-async function getJSON(path) {
+export async function getJSON(path) {
   const res = await fetch(path, { cache: "no-store" });
   if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
   return res.json();
@@ -147,8 +148,9 @@ function onlineNames(count, visible) {
   return hidden > 0 ? `${names} and ${hidden} ${hidden === 1 ? "other" : "others"}` : names;
 }
 
-function renderWorld() {
-  const w = data.world;
+export function renderWorld() {
+  // live.js runs the clock and weather on from the last save while active.
+  const w = liveWorld(data.world);
   if (!w) return;
 
   // The browser animates --accent-h as a plain number, so 350 to 10 would
@@ -163,7 +165,7 @@ function renderWorld() {
 
   const facts = [
     ["Day", fmtNum(w.day), phase(w.timeOfDay)],
-    ["Time", mcClock(w.timeOfDay), "As of the last save"],
+    ["Time", mcClock(w.timeOfDay), w.live ? "Live" : "As of the last save"],
     ["Weather", weather(w), w.raining ? "Bring a roof" : "Clear skies"],
     ["World age", fmtHours(w.ageTicks), "Real time the world has run"],
     ["Difficulty", capitalize(w.difficulty) + (w.hardcore ? " · Hardcore" : ""), w.hardcore ? "One life" : "Respawns on"],
@@ -352,7 +354,7 @@ updateNav();
 
 // ---------- Helpers ----------
 
-function el(tag, className = "", text) {
+export function el(tag, className = "", text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
@@ -370,7 +372,7 @@ function headURL(id, size) {
 }
 
 // A player's skin head, or a blank tile if it's hidden or fails to load.
-function head(player, size) {
+export function head(player, size) {
   if (!player.id || player.id === ANONYMOUS_ID) return el("span", "head-fallback");
   const img = el("img");
   img.src = headURL(player.id, size * 2);
@@ -475,10 +477,12 @@ function start() {
   refreshStatus();
   refreshData();
   timers = [setInterval(refreshStatus, STATUS_MS), setInterval(refreshData, DATA_MS), setInterval(tick, 1000)];
+  startLive();
 }
 function stop() {
   timers.forEach(clearInterval);
   timers = [];
+  stopLive();
 }
 
 // Don't poll while the tab is in the background.

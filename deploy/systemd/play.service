@@ -1,12 +1,15 @@
 # User unit for play.ryancaudill.dev: the dashboard and its JSON API.
 # Installed by mc-agent from the active release (~/apps/current); world and
-# player data are read from the Minecraft server folder.
+# player data are read from the Minecraft server folder. StateDirectory
+# gives play ~/.local/state/play (as $STATE_DIRECTORY) for the activity
+# feed's list of players visible in the server list.
 
 [Unit]
 Description=play.ryancaudill.dev dashboard
 
 [Service]
 ExecStart=%h/apps/current/bin/play -dir %h/apps/current/sites/play -shared %h/apps/current/sites/shared -server %h/minecraft_server -addr 127.0.0.1:8082
+StateDirectory=play
 Restart=on-failure
 RestartSec=10
 
