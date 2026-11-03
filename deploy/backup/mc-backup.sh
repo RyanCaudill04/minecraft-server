@@ -110,7 +110,10 @@ free_kb=$(df -Pk "$backup_dir" | awk 'NR == 2 { print $4 }')
 ((free_kb >= 2 * need_kb + margin_kb)) ||
   die "not enough free space in $backup_dir: ${free_kb} KB free, need about $((2 * need_kb + margin_kb)) KB (2x the world plus a margin)"
 
-rcon() { MC_RCON_PASSWORD=$rcon_password "$rcon_bin" -addr "$rcon_addr" "$@"; }
+# rcon runs one command. mc-rcon reads the password from RCON_PASSWORD, so
+# it never shows up in ps; -timeout leaves room for "save-all flush" on a
+# large world.
+rcon() { RCON_PASSWORD=$rcon_password "$rcon_bin" -addr "$rcon_addr" -timeout 120s "$@"; }
 
 # resume_saving sends save-on if saving is off. It fails if save-on does,
 # and then saving stays marked off so the exit trap tries again.
@@ -150,7 +153,7 @@ copy_world() {
       # still turns saving back on.
       pids=$(paper_pids)
       saving_off=true
-      if ! rcon save-off "save-all flush" >/dev/null; then
+      if ! { rcon save-off >/dev/null && rcon save-all flush >/dev/null; }; then
         paper_running && die "RCON failed while Paper is running; check enable-rcon, rcon.port and rcon.password"
         saving_off=false
         log "Paper stopped before RCON answered; retrying"

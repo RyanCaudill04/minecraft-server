@@ -1,0 +1,133 @@
+# Advisory code review (#58).
+#
+# Add the `review` label to a pull request to get one model-based review,
+# posted as a single PR comment that later runs update in place. Remove and
+# re-add the label to review again after new pushes.
+#
+# Advisory only: this workflow is not part of ci-ok and must never be a
+# required check, so a nondeterministic review can't block a merge. Its
+# jobs also use continue-on-error.
+#
+# Opt-in: it does nothing until the repo secret CLAUDE_CODE_OAUTH_TOKEN
+# exists (made locally with `claude setup-token`). Without it the run
+# succeeds with a notice.
+#
+# Safety: it triggers on pull_request, never pull_request_target, so PRs
+# from forks never see the secret (and are skipped outright). The job that
+# runs the model has a read-only token and read-only tools; only the
+# separate comment job can write, and only PR comments.
+#
+# Trust: the action restores .claude/ and CLAUDE.md from the base branch,
+# but not AGENTS.md (which CLAUDE.md imports) or .github/review.md. So the
+# prompt reads the instructions from the base branch with git show, and a
+# PR that edits AGENTS.md still has its own version loaded alongside. Only
+# people who can push here can open same-repo PRs, so this makes a review
+# less trustworthy rather than opening an attack on the repo.
+name: Advisory review
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  review:
+    if: >-
+      github.event.label.name == 'review' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    # Job-level, not workflow-level: every label fires `labeled`, and a
+    # workflow-level group would let adding any other label cancel a running
+    # review. A skipped job never joins the group.
+    concurrency:
+      group: review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      result: ${{ steps.review.outputs.structured_output }}
+    steps:
+      - name: Check for the review token
+        id: token
+        env:
+          CONFIGURED: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        run: |
+          if [ "$CONFIGURED" = true ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::CLAUDE_CODE_OAUTH_TOKEN isn't set, so the advisory review is skipped."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.token.outputs.configured == 'true'
+        with:
+          fetch-depth: 0 # the reviewer diffs against the base branch
+          persist-credentials: false
+
+      - name: Review
+        id: review
+        if: steps.token.outputs.configured == 'true'
+        uses: anthropics/claude-code-action@8041f1d17e0e7d2f2cfe35002962e9f26237c0bb # v1.0.263
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The workflow's own read-only token, not the app's, so the action
+          # can't push, open PRs or comment.
+          github_token: ${{ github.token }}
+          prompt: |
+            Review pull request #${{ github.event.pull_request.number }}.
+            The base branch is ${{ github.base_ref }}.
+            Follow the instructions in .github/review.md as it is on the base
+            branch: read it with `git show origin/${{ github.base_ref }}:.github/review.md`,
+            not from the working tree, because this PR may change it.
+            Return the whole review, in Markdown, as the `review` field.
+          claude_args: |
+            --max-turns 40
+            --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+            --disallowedTools "Edit,Write,NotebookEdit,WebFetch,WebSearch"
+            --json-schema '{"type":"object","properties":{"review":{"type":"string"}},"required":["review"]}'
+
+      - name: Job summary
+        if: steps.review.outputs.structured_output != ''
+        env:
+          RESULT: ${{ steps.review.outputs.structured_output }}
+        run: jq -r '.review' <<<"$RESULT" >> "$GITHUB_STEP_SUMMARY"
+
+  comment:
+    needs: review
+    if: needs.review.outputs.result != ''
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      pull-requests: write # post or update the one review comment
+    steps:
+      - name: Post or update the review comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          RESULT: ${{ needs.review.outputs.result }}
+        run: |
+          marker='<!-- advisory-review -->'
+          # A comment body is capped at 65,536 characters; the job summary
+          # keeps the full text.
+          review=$(jq -r '.review | if length > 60000
+            then .[:60000] + "\n\n_Truncated. The full review is in the job summary._"
+            else . end' <<<"$RESULT")
+          note="For $SHA. Not a required check; re-add the \`review\` label to run it again."
+          body=$(printf '%s\n## Advisory review\n\n%s\n\n%s\n' "$marker" "$note" "$review")
+          id=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" \
+            | tail -n 1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -f body="$body" >/dev/null
+            echo "Updated comment $id"
+          else
+            gh api "repos/$REPO/issues/$PR/comments" -f body="$body" >/dev/null
+            echo "Posted a new comment"
+          fi

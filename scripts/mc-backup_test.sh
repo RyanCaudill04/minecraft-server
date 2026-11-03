@@ -110,7 +110,7 @@ if run "$out" 20261031-050000 MC_BACKUP_WAIT=0; then fail "no rcon: should fail 
 fake_rcon=$tmp/fake-rcon
 cat >"$fake_rcon" <<'EOF'
 #!/usr/bin/env bash
-[[ $MC_RCON_PASSWORD == hunter2 ]] || exit 3
+[[ $RCON_PASSWORD == hunter2 ]] || exit 3
 echo "$*" >>"$RCON_LOG"
 [[ " $* " != *" save-off "* || -z ${RCON_FAIL:-} ]] || exit 1
 [[ " $* " != *" save-on "* || -z ${SAVEON_FAIL:-} ]] || exit 1
@@ -128,8 +128,9 @@ printf 'level-name=world\nenable-rcon=true\nrcon.port=25575\nrcon.password=hunte
 out=$tmp/rcon
 run "$out" 20261031-060000 MC_RCON="$fake_rcon" RCON_LOG="$tmp/rcon.log" || fail "rcon: backup failed"
 [[ -f $out/world-20261031-060000.tar.gz ]] || fail "rcon: no archive"
-want="-addr 127.0.0.1:25575 save-off save-all flush
--addr 127.0.0.1:25575 save-on"
+want="-addr 127.0.0.1:25575 -timeout 120s save-off
+-addr 127.0.0.1:25575 -timeout 120s save-all flush
+-addr 127.0.0.1:25575 -timeout 120s save-on"
 [[ $(cat "$tmp/rcon.log") == "$want" ]] || fail "rcon: commands were $(tr '\n' '|' <"$tmp/rcon.log")"
 
 # 5. RCON failing while Paper runs: no archive, and save-on is still sent.
@@ -138,7 +139,7 @@ if run "$out" 20261031-070000 MC_RCON="$fake_rcon" RCON_LOG="$tmp/rcon.log" RCON
   fail "rcon failure: should fail"
 fi
 [[ ! -e $out/world-20261031-070000.tar.gz ]] || fail "rcon failure: wrote an archive"
-[[ $(tail -1 "$tmp/rcon.log") == "-addr 127.0.0.1:25575 save-on" ]] || fail "rcon failure: save-on wasn't sent"
+[[ $(tail -1 "$tmp/rcon.log") == "-addr 127.0.0.1:25575 -timeout 120s save-on" ]] || fail "rcon failure: save-on wasn't sent"
 
 # 5b. Paper replaced during the copy (LazyMC slept and woke it): the copy is
 # thrown away and redone, so the archive comes from one steady Paper.
