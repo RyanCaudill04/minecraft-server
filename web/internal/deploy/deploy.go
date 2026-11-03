@@ -128,6 +128,14 @@ type Deployer struct {
 	HealthTimeout time.Duration // how long each health URL may take to answer 200
 	Keep          int           // installed releases to keep, at least 2
 	Log           *log.Logger
+
+	// Provenance checks each release's attestation before its tarball is
+	// downloaded. Nil skips the check; mc-agent always sets it.
+	Provenance Provenance
+	// UnattestedBefore, a tag like r12, lets releases numbered below it
+	// that have no attestation install with a warning. Empty refuses every
+	// release without one. A release that has one is always checked.
+	UnattestedBefore string
 }
 
 func (d *Deployer) releasesDir() string { return filepath.Join(d.Apps, "releases") }
@@ -232,12 +240,23 @@ func (d *Deployer) Run(ctx context.Context) error {
 		d.Log.Printf("%s is already active", current)
 		return nil
 	}
+	if olderThan(rel.Tag, current) {
+		// An old release published again, or an old tarball under a new
+		// release object. Going back is what rollback is for.
+		d.Log.Printf("skipping %s: it is older than the active %s; use rollback to go back", rel.Tag, current)
+		return nil
+	}
 	if failed, _ := os.ReadFile(d.failedFile()); strings.TrimSpace(string(failed)) == rel.Tag {
 		d.Log.Printf("skipping %s: it failed before; publish a new release to retry", rel.Tag)
 		return nil
 	}
 
 	if err := d.Install(ctx, rel); err != nil {
+		var r refused
+		if errors.As(err, &r) {
+			// Retrying can't change the answer; stop until a new release.
+			os.WriteFile(d.failedFile(), []byte(rel.Tag+"\n"), 0o644)
+		}
 		return err
 	}
 	return d.Activate(ctx, rel.Tag)
@@ -264,6 +283,10 @@ func (d *Deployer) Install(ctx context.Context, rel *Release) error {
 		return err
 	}
 	want, err := d.fetchChecksum(ctx, sumURL)
+	if err != nil {
+		return err
+	}
+	attested, err := d.checkProvenance(ctx, rel, want)
 	if err != nil {
 		return err
 	}
@@ -297,6 +320,12 @@ func (d *Deployer) Install(ctx context.Context, rel *Release) error {
 	if _, err := readManifest(staging); err != nil {
 		os.RemoveAll(staging)
 		return fmt.Errorf("deploy: %s: %w", rel.Tag, err)
+	}
+	if attested {
+		if err := checkVersion(staging, rel.Tag); err != nil {
+			os.RemoveAll(staging)
+			return err
+		}
 	}
 	return os.Rename(staging, dest)
 }
