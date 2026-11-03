@@ -217,7 +217,7 @@ func (a *app) console(w http.ResponseWriter, r *http.Request, user string) {
 		log.Printf("admin: console: %v", err)
 		writeError(w, http.StatusBadGateway, "RCON failed: see admin's log.")
 	default:
-		site.WriteJSON(w, http.StatusOK, Output{Output: stripFormatting(out)})
+		site.WriteJSON(w, http.StatusOK, Output{Output: rcon.StripFormatting(out)})
 	}
 }
 
@@ -236,11 +236,6 @@ func cleanCommand(s string) (string, string) {
 	}
 	return s, ""
 }
-
-// formatting matches Minecraft's § color and style codes.
-var formatting = regexp.MustCompile("§.")
-
-func stripFormatting(s string) string { return formatting.ReplaceAllString(s, "") }
 
 // Logs is the JSON body of GET /api/logs.
 type Logs struct {

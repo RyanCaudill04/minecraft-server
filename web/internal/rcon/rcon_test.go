@@ -222,3 +222,9 @@ func TestConcurrentCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestStripFormatting(t *testing.T) {
+	if got := rcon.StripFormatting("§aThere are §l2§r players"); got != "There are 2 players" {
+		t.Errorf("StripFormatting = %q", got)
+	}
+}

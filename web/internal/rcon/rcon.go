@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -299,3 +300,10 @@ func withDefaultTimeout(ctx context.Context) (context.Context, context.CancelFun
 	}
 	return context.WithTimeout(ctx, DefaultTimeout)
 }
+
+// formatting matches Minecraft's § color and style codes.
+var formatting = regexp.MustCompile("§.")
+
+// StripFormatting removes Minecraft's § color and style codes from command
+// output.
+func StripFormatting(s string) string { return formatting.ReplaceAllString(s, "") }
