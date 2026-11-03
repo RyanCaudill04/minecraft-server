@@ -60,6 +60,9 @@ commit README.md
 git tag play-r3 && git tag admin-r2 && git tag agent-r2
 check "readme only" ''
 
+commit tests/play/e2e/play.spec.js
+check "play tests only" ''
+
 # Tag numbers sort as numbers, not text.
 git tag sites-r9 && git tag sites-r10 && git tag sites-r10x
 commit sites/portfolio/index.html

@@ -4,17 +4,22 @@
 #
 #   go         always true: Go vet and unit tests are cheap and cached
 #   play       the play track: its command, its site, the shared
-#              stylesheet, its unit, or Go code it imports
-#   admin      the admin track, likewise
+#              stylesheet, its unit, Go code it imports, or its tests
+#              in tests/play
+#   admin      the admin track (admin and mc-rcon), likewise
 #   sites      the sites track: serve, the portfolio, deploy/sites and
 #              site@.service
 #   agent      the agent track: mc-agent, its units, or Go code it imports
-#   mc_server  the Minecraft server's own files (configs, jars, start.sh)
+#   mc_server  the Minecraft server's own files (configs, jars, start.sh),
+#              plus fetch-server.sh and mc-players, which its checks run
 #   infra      deploy files, scripts and workflows
-#   deploy     anything that ships in a release, so main publishes one
+#   deploy     anything that ships in a release, so main publishes one.
+#              mc-players (a dev tool, #32) and deploy/server.json (read
+#              on the server, not shipped) don't count.
 #
 # Each track output means the track's release would change, so main
-# publishes a new release of it. Files every release is built from
+# publishes a new release of it. The exception is tests/, which turns its
+# track's checks on but ships in no release; release-tracks.sh leaves it out. Files every release is built from
 # (deploy/tracks.json, build-release.sh, go.mod) turn on every track, and
 # a change to .github/ turns every scope on.
 #
@@ -34,11 +39,13 @@ if grep -q '^"' <<<"$files"; then
 fi
 
 touched() { grep -qE "$1" <<<"$files"; }
+# Files under web/ or deploy/ that never go into a release.
+shipped=$(grep -vE '^web/cmd/mc-players/|^deploy/server\.json$' <<<"$files" || true)
 
 # The web/internal packages each track's binary imports (go list -deps).
 # ci-changes_test.sh checks these against the code.
 play_pkgs='mcstatus|nbt|ping|site|world'
-admin_pkgs='deploy|mcstatus|ping|site'
+admin_pkgs='access|control|deploy|mcstatus|ping|plugins|rcon|site'
 sites_pkgs=''
 agent_pkgs='deploy'
 
@@ -47,17 +54,17 @@ pkgs() { [ -n "$1" ] && echo "|^web/internal/($1)/" || true; }
 
 play=false admin=false sites=false agent=false mc_server=false infra=false deploy=false
 
-touched "$every$(pkgs "$play_pkgs")|^web/cmd/play/|^sites/(play|shared)/|^deploy/systemd/play\.service$" && play=true
-touched "$every$(pkgs "$admin_pkgs")|^web/cmd/admin/|^sites/(admin|shared)/|^deploy/systemd/admin\.service$" && admin=true
+touched "$every$(pkgs "$play_pkgs")|^web/cmd/play/|^sites/(play|shared)/|^tests/play/|^deploy/systemd/play\.service$" && play=true
+touched "$every$(pkgs "$admin_pkgs")|^web/cmd/(admin|mc-rcon)/|^sites/(admin|shared)/|^deploy/systemd/admin\.service$" && admin=true
 touched "$every$(pkgs "$sites_pkgs")|^web/cmd/serve/|^sites/portfolio/|^deploy/sites/|^deploy/systemd/site@\.service$" && sites=true
 touched "$every$(pkgs "$agent_pkgs")|^web/cmd/mc-agent/|^deploy/systemd/mc-agent\.(service|timer)$" && agent=true
-touched '^(lazymc\.toml|start\.sh|server\.properties\.example|server\.jar|eula\.txt|bukkit\.yml|spigot\.yml|commands\.yml|ops\.json|whitelist\.json|banned-[a-z]+\.json)$|^(config|plugins|versions)/' && mc_server=true
+touched '^(lazymc\.toml|start\.sh|server\.properties\.example|server\.jar|eula\.txt|bukkit\.yml|spigot\.yml|commands\.yml|ops\.json|whitelist\.json|banned-[a-z]+\.json)$|^(config|plugins|versions)/|^deploy/server\.json$|^scripts/fetch-server\.sh$|^web/cmd/mc-players/' && mc_server=true
 touched '^(deploy|scripts|\.github)/' && infra=true
-touched '^(web|sites|deploy)/|^scripts/build-release\.sh$|^\.github/workflows/' && deploy=true
+grep -qE '^(web|sites|deploy)/|^scripts/build-release\.sh$|^\.github/workflows/' <<<"$shipped" && deploy=true
 
 if touched '^\.github/'; then
   play=true admin=true sites=true agent=true mc_server=true infra=true
 fi
 
-printf 'go=true\nplay=%s\nadmin=%s\nsites=%s\nagent=%s\nmc_server=%s\ninfra=%s\ndeploy=%s\n' \
+printf 'play=%s\nadmin=%s\nsites=%s\nagent=%s\nmc_server=%s\ninfra=%s\ndeploy=%s\n' \
   "$play" "$admin" "$sites" "$agent" "$mc_server" "$infra" "$deploy"

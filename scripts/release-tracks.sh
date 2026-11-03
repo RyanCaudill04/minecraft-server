@@ -36,7 +36,8 @@ for track in $(jq -r 'keys_unsorted[]' "$dir/../deploy/tracks.json"); do
   fi
   # Captured first: grep -q in the pipe could exit before ci-changes.sh
   # is done writing, and pipefail would count the broken pipe as a no.
-  scopes=$(git -c core.quotePath=false diff --name-only "$base" "$head" | "$dir/ci-changes.sh")
+  # tests/ turns a track's checks on in CI, but ships in no release.
+  scopes=$(git -c core.quotePath=false diff --name-only "$base" "$head" | sed '/^tests\//d' | "$dir/ci-changes.sh")
   if grep -qx "$track=true" <<<"$scopes"; then
     echo "$track $next $base"
   fi

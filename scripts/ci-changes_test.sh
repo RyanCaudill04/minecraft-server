@@ -23,10 +23,10 @@ check() {
       failures=$((failures + 1))
     fi
   done
-  grep -qx 'go=true' <<<"$got" || { echo "FAIL $name: go must always run"; failures=$((failures + 1)); }
 }
 
 check "play site"         'sites/play/app.js\n'                    'play deploy'
+check "play tests"        'tests/play/e2e/play.spec.js\n'         'play'
 check "play command"      'web/cmd/play/main.go\n'                 'play deploy'
 check "play-only package" 'web/internal/world/world.go\n'          'play deploy'
 check "site package"      'web/internal/site/site.go\n'            'play admin deploy'
@@ -45,6 +45,12 @@ check "lazymc config"     'lazymc.toml\n'                          'mc_server'
 check "paper config"      'config/paper-global.yml\n'              'mc_server'
 check "plugin config"     'plugins/Chunky/config.yml\n'            'mc_server'
 check "start script"      'start.sh\n'                             'mc_server'
+check "server manifest"   'deploy/server.json\n'                   'mc_server infra'
+check "mc-players"        'web/cmd/mc-players/main.go\n'           'mc_server'
+check "mc-players + play" 'web/cmd/mc-players/main.go\nweb/cmd/play/main.go\n' 'play mc_server deploy'
+check "mc-rcon"           'web/cmd/mc-rcon/main.go\n'              'admin deploy'
+check "rcon package"      'web/internal/rcon/rcon.go\n'            'admin deploy'
+check "fetch script"      'scripts/fetch-server.sh\n'              'mc_server infra'
 check "unit file"         'deploy/systemd/play.service\n'          'play infra deploy'
 check "hand-run unit"     'deploy/systemd/minecraft.service\n'     'infra deploy'
 check "track list"        'deploy/tracks.json\n'                   "$all infra deploy"

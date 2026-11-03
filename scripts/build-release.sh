@@ -80,6 +80,8 @@ if [ -n "$notes" ]; then
   jq -e . "$notes" >/dev/null || { echo "build-release: $notes is not valid JSON" >&2; exit 1; }
   cp "$notes" "$stage/deploy/notes.json"
 fi
+# Nothing reads VERSION (mc-agent takes the tag from the current
+# symlink); it's there for a human looking inside an unpacked release.
 echo "$tag" > "$stage/VERSION"
 
 # Sorted names and fixed owners and times make the tarball reproducible.

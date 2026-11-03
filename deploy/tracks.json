@@ -8,12 +8,12 @@
     "health": ["http://127.0.0.1:8082/api/status"]
   },
   "admin": {
-    "bins": ["admin"],
+    "bins": ["admin", "mc-rcon"],
     "sites": ["admin", "shared"],
     "units": ["admin.service"],
     "services": ["admin.service"],
     "timers": [],
-    "health": ["http://127.0.0.1:8081/api/status"]
+    "health": ["http://127.0.0.1:8081/healthz"]
   },
   "sites": {
     "bins": ["serve"],
