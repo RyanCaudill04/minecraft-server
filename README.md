@@ -74,6 +74,45 @@ On the Pi, LazyMC runs as the systemd user unit
 unit is installed by hand from the git checkout in `~/minecraft_server` (the
 steps are in the file), not by mc-agent.
 
+## Day-to-day control from the Mac
+
+[`scripts/mc`](scripts/mc) wraps `ssh mc-pi` (set `MC_HOST` for another
+host). Commands that only look run right away; anything that changes the
+Pi asks first, or takes `--yes`.
+
+```bash
+scripts/mc status            # services, timers, active release, server state
+scripts/mc logs play -f      # follow a unit's journal (default: minecraft)
+scripts/mc restart           # restart LazyMC and Paper
+scripts/mc deploy            # install the newest release now
+scripts/mc pause && scripts/mc rollback   # roll back and keep it
+scripts/mc preview           # run play locally against a copy of the world
+```
+
+`scripts/mc --help` lists everything.
+
+## Dynamic DNS
+
+`ddns.timer` (shipped in every release) checks the public IP every five
+minutes and updates the Minecraft address's Cloudflare A record when it
+changes. It does nothing until these are set in
+`~/.config/minecraft/secrets.env` (mode `0600`) on the Pi:
+
+```bash
+# API token with Zone > DNS > Edit on this zone only
+CLOUDFLARE_DNS_TOKEN=
+# From the zone's overview page in Cloudflare
+CLOUDFLARE_ZONE_ID=
+# The existing A record, e.g. mc.example.com
+DDNS_RECORD=
+```
+
+systemd doesn't strip comments at the end of a line, so keep them on their
+own lines.
+
+Check it with `scripts/mc logs ddns`, or try it without changing anything:
+`( set -a; . ~/.config/minecraft/secrets.env; exec ~/apps/current/bin/ddns -dry-run )`.
+
 ## Pinned server versions
 
 [`deploy/server.json`](deploy/server.json) pins the Minecraft version, the
@@ -251,7 +290,7 @@ scripts/build-release.sh <tag> <output folder> [notes.json]
 ```
 
 The tarball holds the arm64 binaries in `bin/` (play, admin, serve,
-mc-agent), `sites/`, `deploy/systemd/`, `deploy/sites/`,
+mc-agent, mc-rcon, ddns), `sites/`, `deploy/systemd/`, `deploy/sites/`,
 `deploy/release.json`, `deploy/notes.json` when notes were given, and
 `VERSION`.
 
@@ -370,12 +409,11 @@ TODO (owner):
 - The website hostnames are routed by the tunnel.
 - Minecraft can't go through the tunnel, because it's raw TCP on `25565`, not
   HTTP. It needs a **DNS-only** (grey cloud) `A` record pointing at the home
-  connection's public IP, `<mc-hostname>.<your-domain>`.
+  connection's public IP, `<mc-hostname>.<your-domain>`. `ddns.timer` keeps
+  it on the current IP (see [Dynamic DNS](#dynamic-dns)).
 
 TODO (owner):
 - The Minecraft hostname.
-- Dynamic DNS (#19): how the `A` record follows a changing home IP, if it
-  does.
 
 ### Router
 
