@@ -1,0 +1,41 @@
+# Checks for the portfolio site. Releases aren't published yet: that
+# comes with the portfolio track in minecraft-server's mc-agent (#79 there).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The one check to require on main.
+  ci-ok:
+    name: ci-ok
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck scripts
+        run: shellcheck scripts/*.sh
+      - name: Site checks
+        run: scripts/check.sh
+      - name: Serve the site
+        run: |
+          python3 -m http.server -b 127.0.0.1 -d site 8080 &
+          for _ in $(seq 50); do curl -fs http://127.0.0.1:8080/ >/dev/null && break; sleep 0.1; done
+          curl -fsS http://127.0.0.1:8080/ | grep -q '<title>'
+      - name: Build a release
+        run: |
+          scripts/build-release.sh ci-check "$RUNNER_TEMP/dist"
+          (cd "$RUNNER_TEMP/dist" && sha256sum -c portfolio.tar.gz.sha256)
+          tar -tzf "$RUNNER_TEMP/dist/portfolio.tar.gz" | grep -qx './site/index.html'
+          tar -tzf "$RUNNER_TEMP/dist/portfolio.tar.gz" | grep -qx './VERSION'
