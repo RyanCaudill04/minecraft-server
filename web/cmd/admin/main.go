@@ -336,11 +336,6 @@ func main() {
 		log.Printf("admin: RCON_PASSWORD isn't set, so the console is off; see deploy/secrets.example.env")
 	}
 
-	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           protect(newHandler(a), auth),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
 	log.Printf("serving %s and the API on http://%s", *dir, *addr)
-	log.Fatal(srv.ListenAndServe())
+	log.Fatal(site.Server(*addr, protect(newHandler(a), auth)).ListenAndServe())
 }
