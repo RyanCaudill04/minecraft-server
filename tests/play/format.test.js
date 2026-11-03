@@ -11,6 +11,7 @@ import {
   accentHue,
   capitalize,
   fmtAgo,
+  fmtDate,
   fmtDistance,
   fmtHours,
   fmtNum,
@@ -188,6 +189,12 @@ describe("fmtAgo", () => {
       assert.equal(fmtAgo(iso), want);
     });
   }
+});
+
+describe("fmtDate", () => {
+  test("shows the date without the time", () => {
+    assert.equal(fmtDate("2026-10-02T01:00:00Z"), "Oct 2, 2026");
+  });
 });
 
 describe("fmtWhen", () => {

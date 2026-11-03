@@ -1,6 +1,6 @@
 // play.ryancaudill.dev: polls the play API and renders the dashboard.
 
-import { accentHue, capitalize, fmtAgo, fmtDistance, fmtHours, fmtNum, fmtPlaytime, fmtWhen, mcClock, phase, weather } from "./format.js";
+import { accentHue, capitalize, fmtAgo, fmtDate, fmtDistance, fmtHours, fmtNum, fmtPlaytime, fmtWhen, mcClock, phase, weather } from "./format.js";
 
 const STATUS_MS = 10_000; // server state and who's online
 const DATA_MS = 60_000; // world facts and player stats (change only on save)
@@ -47,6 +47,17 @@ const SHEET_STATS = [
   { key: "animalsBred", label: "Animals bred", fmt: fmtNum },
   { key: "playerKills", label: "Player kills", fmt: fmtNum },
 ];
+
+// Badges for the milestones the server tracks (world.Firsts in Go), in the
+// order the sheet shows them.
+const FIRSTS = {
+  "minecraft:story/enter_the_nether": { icon: "🔥", label: "First into the Nether" },
+  "minecraft:story/mine_diamond": { icon: "💎", label: "First diamonds" },
+  "minecraft:story/enter_the_end": { icon: "🌌", label: "First into the End" },
+  "minecraft:end/kill_dragon": { icon: "🐉", label: "Slew the dragon first" },
+  "minecraft:nether/summon_wither": { icon: "💀", label: "First to summon the Wither" },
+  "minecraft:end/elytra": { icon: "🪽", label: "First wings" },
+};
 
 const data = {
   status: null,
@@ -265,10 +276,24 @@ function fillSheet(id) {
   if (!p) return false;
   data.sheetId = id;
 
-  $("sheet-head").src = headURL(p.id, 144);
+  $("sheet-skin").src = bodyURL(p.id, 120);
   $("sheet-name").textContent = p.name;
   const online = visibleOnline().some((x) => x.id === id);
   $("sheet-seen").textContent = online ? "Online now" : p.lastSeen ? `Last seen ${fmtAgo(p.lastSeen)}` : "Never seen";
+
+  const badges = (p.firsts ?? []).filter((f) => FIRSTS[f.advancement]);
+  $("sheet-firsts").hidden = badges.length === 0;
+  $("sheet-badges").replaceChildren(
+    ...badges.map((f) => {
+      const { icon, label } = FIRSTS[f.advancement];
+      const li = el("li", "badge");
+      const text = el("span", "badge-text");
+      text.append(el("span", "badge-label", label), el("span", "badge-date", fmtDate(f.at)));
+      li.append(el("span", "badge-icon", icon), text);
+      li.firstChild.setAttribute("aria-hidden", "true");
+      return li;
+    }),
+  );
 
   $("sheet-stats").replaceChildren(
     ...SHEET_STATS.map((s) => {
@@ -332,6 +357,12 @@ function el(tag, className = "", text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+// A front view of the player's whole skin, size pixels wide and 2.4 times
+// as tall.
+function bodyURL(id, size) {
+  return `https://mc-heads.net/body/${encodeURIComponent(id)}/${size}`;
 }
 
 function headURL(id, size) {

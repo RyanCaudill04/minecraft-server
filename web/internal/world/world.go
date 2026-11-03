@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -54,7 +55,28 @@ type Player struct {
 	FishCaught   int64     `json:"fishCaught"`
 	AnimalsBred  int64     `json:"animalsBred"`
 	Advancements int       `json:"advancements"` // completed, not counting recipes
+	Firsts       []First   `json:"firsts,omitempty"`
 }
+
+// Firsts are the milestones play shows as badges, in display order. Whoever
+// completed one earliest holds its badge.
+var Firsts = []string{
+	"minecraft:story/enter_the_nether",
+	"minecraft:story/mine_diamond",
+	"minecraft:story/enter_the_end",
+	"minecraft:end/kill_dragon",
+	"minecraft:nether/summon_wither",
+	"minecraft:end/elytra",
+}
+
+// First is a milestone from Firsts that a player reached before anyone else.
+type First struct {
+	Advancement string    `json:"advancement"`
+	At          time.Time `json:"at"`
+}
+
+// advancementTime is how advancement files write criteria times.
+const advancementTime = "2006-01-02 15:04:05 -0700"
 
 // ReadInfo reads the world summary from worldDir (e.g. ~/minecraft_server/world).
 func ReadInfo(worldDir string) (*Info, error) {
@@ -115,6 +137,7 @@ func ReadPlayers(serverDir, worldDir string) ([]Player, error) {
 	}
 
 	players := make([]Player, 0, len(statFiles))
+	earned := make(map[string]map[string]time.Time, len(statFiles)) // ID -> advancement -> when
 	for _, path := range statFiles {
 		id := strings.TrimSuffix(filepath.Base(path), ".json")
 		p := Player{ID: id, Name: names[id]}
@@ -129,12 +152,13 @@ func ReadPlayers(serverDir, worldDir string) ([]Player, error) {
 		if fi, err := os.Stat(filepath.Join(playersDir, "data", id+".dat")); err == nil {
 			p.LastSeen = fi.ModTime().UTC()
 		}
-		p.Advancements, err = countAdvancements(filepath.Join(playersDir, "advancements", id+".json"))
+		p.Advancements, earned[id], err = readAdvancements(filepath.Join(playersDir, "advancements", id+".json"))
 		if err != nil {
 			return nil, fmt.Errorf("world: %s: %w", id, err)
 		}
 		players = append(players, p)
 	}
+	markFirsts(players, earned)
 
 	sort.Slice(players, func(i, j int) bool { return players[i].LastSeen.After(players[j].LastSeen) })
 	return players, nil
@@ -195,32 +219,75 @@ func readStats(path string, p *Player) error {
 	return nil
 }
 
-// countAdvancements counts completed advancements, skipping recipe unlocks
-// (which the game also tracks as advancements). A missing file counts as 0.
-func countAdvancements(path string) (int, error) {
+// readAdvancements counts completed advancements, skipping recipe unlocks
+// (which the game also tracks as advancements), and returns when each
+// completed one in Firsts was done: the time of its last criterion. A done
+// advancement without a readable time is counted but has no time. A missing
+// file counts as 0.
+func readAdvancements(path string) (int, map[string]time.Time, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return 0, nil
+		return 0, nil, nil
 	}
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	// Values are objects, except DataVersion, which is a number.
 	var file map[string]json.RawMessage
 	if err := json.Unmarshal(data, &file); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	n := 0
+	done := map[string]time.Time{}
 	for key, raw := range file {
 		if strings.Contains(key, ":recipes/") {
 			continue
 		}
+		// Criteria are read loosely, so an odd one costs only the time.
 		var adv struct {
-			Done bool `json:"done"`
+			Done     bool           `json:"done"`
+			Criteria map[string]any `json:"criteria"`
 		}
-		if json.Unmarshal(raw, &adv) == nil && adv.Done {
-			n++
+		if json.Unmarshal(raw, &adv) != nil || !adv.Done {
+			continue
+		}
+		n++
+		if !slices.Contains(Firsts, key) {
+			continue
+		}
+		var last time.Time
+		for _, v := range adv.Criteria {
+			s, _ := v.(string)
+			if t, err := time.Parse(advancementTime, s); err == nil && t.After(last) {
+				last = t
+			}
+		}
+		if !last.IsZero() {
+			done[key] = last.UTC()
 		}
 	}
-	return n, nil
+	return n, done, nil
+}
+
+// markFirsts sets each player's Firsts. earned maps a player's ID to when
+// they completed each advancement in Firsts. For each advancement, the player
+// who completed it earliest gets it; on a tie, the lower ID wins. A player's
+// Firsts follow the order of the Firsts list.
+func markFirsts(players []Player, earned map[string]map[string]time.Time) {
+	for _, adv := range Firsts {
+		winner := -1
+		var best time.Time
+		for i, p := range players {
+			at, ok := earned[p.ID][adv]
+			if !ok {
+				continue
+			}
+			if winner < 0 || at.Before(best) || at.Equal(best) && p.ID < players[winner].ID {
+				winner, best = i, at
+			}
+		}
+		if winner >= 0 {
+			players[winner].Firsts = append(players[winner].Firsts, First{Advancement: adv, At: best})
+		}
+	}
 }
