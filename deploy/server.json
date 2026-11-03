@@ -1,0 +1,28 @@
+{
+  "minecraft": "26.2",
+  "java": 25,
+  "paper": {
+    "build": 132,
+    "path": "server.jar",
+    "url": "https://fill-data.papermc.io/v1/objects/5ab560a769c1ab413cb7f637dd0dc697974571f2db0a667cfbac511422e51b26/paper-26.2-132.jar",
+    "sha256": "5ab560a769c1ab413cb7f637dd0dc697974571f2db0a667cfbac511422e51b26",
+    "patched": {
+      "path": "versions/26.2/paper-26.2.jar",
+      "sha256": "0ce49f92d9dfb22d1a08b063cc383d48f5fbf07ff93fa28d92d16b93efe4a197"
+    }
+  },
+  "lazymc": {
+    "version": "0.2.11",
+    "path": "lazymc",
+    "builds": {
+      "arm64": {
+        "url": "https://github.com/timvisee/lazymc/releases/download/v0.2.11/lazymc-v0.2.11-linux-aarch64",
+        "sha256": "a2b80b32e0b2825a44a1bf79cf1c0f01fba2bf3e12af09e426379091e2945202"
+      },
+      "amd64": {
+        "url": "https://github.com/timvisee/lazymc/releases/download/v0.2.11/lazymc-v0.2.11-linux-x64-static",
+        "sha256": "5a4149570efe224c3d06ce9d1468b7bfd43eb569f1275fa5028ca32e43555758"
+      }
+    }
+  }
+}

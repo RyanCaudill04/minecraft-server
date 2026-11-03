@@ -1,0 +1,21 @@
+# Dependabot keeps the pinned actions current. The workflow pins each
+# action to a commit SHA with its version in a comment; Dependabot bumps
+# both. Its PRs go through ci-ok like any other.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [ci-cd]
+    commit-message:
+      prefix: ci
+
+  # web/ has no dependencies today, but this keeps the go directive in
+  # view.
+  - package-ecosystem: gomod
+    directory: /web
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: web
