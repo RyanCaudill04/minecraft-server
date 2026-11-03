@@ -84,22 +84,24 @@ test("world facts and the in-game clock", async ({ page }) => {
   await expect(fact("Players")).toHaveText("3");
 });
 
-test("leaderboard tabs", async ({ page }) => {
+test("leaderboard picker", async ({ page }) => {
   await open(page);
-  const tabs = page.locator("#board-tabs [role=tab]");
+  const tabs = page.locator("#board-tabs button");
   await expect(tabs).toHaveText(["Playtime", "Mob kills", "Blocks mined", "Distance", "Advancements", "Fish caught", "Deaths"]);
-  await expect(tabs.first()).toHaveAttribute("aria-selected", "true");
+  await expect(tabs.first()).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#board")).toHaveAttribute("aria-label", "Playtime leaderboard");
 
   const rows = page.locator("#board li");
   await expect(rows.locator(".name")).toHaveText(["Alice", "Bob", "33333333"]);
   await expect(rows.first().locator(".score")).toHaveText("1h 0m");
 
-  await page.getByRole("tab", { name: "Mob kills" }).click();
-  await expect(page.getByRole("tab", { name: "Mob kills" })).toHaveAttribute("aria-selected", "true");
-  await expect(tabs.first()).toHaveAttribute("aria-selected", "false");
+  const mobKills = page.locator("#board-tabs").getByRole("button", { name: "Mob kills" });
+  await mobKills.click();
+  await expect(mobKills).toHaveAttribute("aria-pressed", "true");
+  await expect(tabs.first()).toHaveAttribute("aria-pressed", "false");
   await expect(rows.locator(".score")).toHaveText(["40", "5", "0"]);
 
-  await page.getByRole("tab", { name: "Distance" }).click();
+  await page.locator("#board-tabs").getByRole("button", { name: "Distance" }).click();
   await expect(rows.first().locator(".score")).toHaveText("750 m");
 });
 
@@ -110,7 +112,7 @@ test.describe("player sheet", () => {
     await card.click();
     const sheet = page.getByRole("dialog");
     await expect(sheet).toBeVisible();
-    await expect(page.locator("#backdrop")).toBeVisible();
+    expect(await sheet.evaluate((d) => d.matches(":modal"))).toBe(true);
     return { card, sheet };
   }
 
@@ -145,7 +147,6 @@ test.describe("player sheet", () => {
     const { card, sheet } = await openAlice(page);
     await page.keyboard.press("Escape");
     await expect(sheet).toBeHidden();
-    await expect(page.locator("#backdrop")).toBeHidden();
     await expect(card).toBeFocused();
   });
 
@@ -158,7 +159,8 @@ test.describe("player sheet", () => {
 
   test("clicking the backdrop closes it", async ({ page }) => {
     const { sheet } = await openAlice(page);
-    await page.locator("#backdrop").click({ position: { x: 10, y: 10 } });
+    // The page behind is inert, so click the backdrop by position.
+    await page.mouse.click(5, 5);
     await expect(sheet).toBeHidden();
   });
 
@@ -167,6 +169,23 @@ test.describe("player sheet", () => {
     await page.locator("#board li").filter({ hasText: "Bob" }).click();
     await expect(page.locator("#sheet-name")).toHaveText("Bob");
     await expect(page.locator("#sheet-seen")).toHaveText("Last seen 15h ago");
+  });
+
+  test("leaderboard rows open from the keyboard and get focus back", async ({ page }) => {
+    await open(page, "sleeping");
+    const row = page.locator("#board li button").filter({ hasText: "Bob" });
+    await row.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator("#sheet-name")).toHaveText("Bob");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toBeHidden();
+    await expect(row).toBeFocused();
+  });
+
+  test("a click inside it keeps it open", async ({ page }) => {
+    const { sheet } = await openAlice(page);
+    await page.locator("#sheet-name").click();
+    await expect(sheet).toBeVisible();
   });
 });
 
