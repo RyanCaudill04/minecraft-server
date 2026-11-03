@@ -4,16 +4,18 @@
 //	GET /api/status   active, sleeping, starting or offline, and who is online
 //	GET /api/world    world facts from the saved world files
 //	GET /api/players  saved stats of the players who are public
+//	GET /map/         the world map squaremap renders (see mapHandler)
 //
 // The status comes from status pings (see package mcstatus), so checking
 // never wakes the server. World and player data come from files on disk, so
-// they work while the server sleeps.
+// they work while the server sleeps, and so does the map: squaremap writes
+// its tiles while Paper is awake and play serves them from disk.
 //
 // Players are shown by name only if the server list shows them by name
 // ("Allow Server Listings" on); see package listing and the Privacy section
 // of the README. Hidden players count in totals and nowhere else.
 //
-// Usage: play -dir folder -shared folder -server folder [-addr host:port] [-paper host:port] [-lazymc host:port]
+// Usage: play -dir folder -shared folder -server folder [-map folder] [-addr host:port] [-paper host:port] [-lazymc host:port]
 //
 // With $STATE_DIRECTORY set (systemd's StateDirectory=), the listed players
 // are kept in listed.json there, so a restart doesn't forget them.
@@ -42,8 +44,8 @@ const watchEvery = 15 * time.Second
 
 // newHandler routes the API and serves the static page from dir and the
 // shared files from sharedDir. World and player data are read from
-// serverDir. reg decides which players are public.
-func newHandler(dir, sharedDir, serverDir string, c *mcstatus.Checker, reg *listing.Registry) http.Handler {
+// serverDir, and the map from mapDir. reg decides which players are public.
+func newHandler(dir, sharedDir, serverDir, mapDir string, c *mcstatus.Checker, reg *listing.Registry) http.Handler {
 	worldDir := filepath.Join(serverDir, "world")
 	status := &site.Cache[mcstatus.Status]{MaxAge: 5 * time.Second, Load: func(ctx context.Context) (mcstatus.Status, error) {
 		return check(ctx, c, reg)
@@ -68,6 +70,8 @@ func newHandler(dir, sharedDir, serverDir string, c *mcstatus.Checker, reg *list
 		// Filtered per request, not cached: reg changes as pings come in.
 		site.WriteJSON(w, "play: players", publicPlayers(all, reg))
 	})
+	mux.Handle("GET /map/", http.StripPrefix("/map", mapHandler(mapDir)))
+	mux.Handle("GET /map", http.RedirectHandler("/map/", http.StatusMovedPermanently))
 	mux.Handle("GET /", site.Static(dir, sharedDir))
 	return mux
 }
@@ -117,6 +121,7 @@ func main() {
 	paper := flag.String("paper", "127.0.0.1:25566", "Paper's address (answers only while awake)")
 	lazymc := flag.String("lazymc", "127.0.0.1:25565", "LazyMC's address (answers while Paper sleeps)")
 	timeout := flag.Duration("timeout", 2*time.Second, "how long to wait for each ping")
+	mapDir := flag.String("map", "", "squaremap's web folder (default <server>/plugins/squaremap/web)")
 	flag.Parse()
 
 	if *dir == "" || *sharedDir == "" || *serverDir == "" {
@@ -132,6 +137,9 @@ func main() {
 			log.Fatalf("play: %s is not a directory", d)
 		}
 	}
+	if *mapDir == "" {
+		*mapDir = filepath.Join(*serverDir, "plugins", "squaremap", "web")
+	}
 	var statePath string
 	if d := os.Getenv("STATE_DIRECTORY"); d != "" {
 		statePath = filepath.Join(d, "listed.json")
@@ -145,7 +153,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandler(*dir, *sharedDir, *serverDir, c, reg),
+		Handler:           newHandler(*dir, *sharedDir, *serverDir, *mapDir, c, reg),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("serving %s and the API on http://%s", *dir, *addr)

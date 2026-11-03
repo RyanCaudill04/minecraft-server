@@ -67,7 +67,7 @@ func newTestServerWith(t *testing.T, responses map[string]*ping.Response, pings 
 		t.Fatal(err)
 	}
 	server := worldtest.Build(t)
-	ts := httptest.NewServer(newHandler(dir, shared, server, fakeChecker(responses, pings), reg))
+	ts := httptest.NewServer(newHandler(dir, shared, server, filepath.Join(server, "plugins", "squaremap", "web"), fakeChecker(responses, pings), reg))
 	t.Cleanup(ts.Close)
 	return ts, server
 }
@@ -152,7 +152,7 @@ var (
 	anonymous   = ping.Player{Name: "Anonymous Player", ID: mcstatus.AnonymousID}
 )
 
-func get(t *testing.T, url string) string {
+func getBody(t *testing.T, url string) string {
 	t.Helper()
 	resp, err := http.Get(url)
 	if err != nil {
@@ -188,7 +188,7 @@ func TestHiddenPlayersNeverAppear(t *testing.T) {
 
 	hidden := []string{"Bob", worldtest.BobID, "Carol", worldtest.CarolID, worldtest.CarolID[:8], mcstatus.AnonymousID, "Anonymous"}
 	for _, path := range []string{"/api/status", "/api/world", "/api/players", "/"} {
-		body := get(t, ts.URL+path)
+		body := getBody(t, ts.URL+path)
 		for _, h := range hidden {
 			if strings.Contains(body, h) {
 				t.Errorf("GET %s contains %q:\n%s", path, h, body)
@@ -210,7 +210,7 @@ func TestPlayerWhoHidesLaterDropsOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	ts, _ := newTestServerWith(t, nil, nil, reg)
-	if body := get(t, ts.URL+"/api/players"); strings.Contains(body, worldtest.BobID) || strings.Contains(body, "Bob") {
+	if body := getBody(t, ts.URL+"/api/players"); strings.Contains(body, worldtest.BobID) || strings.Contains(body, "Bob") {
 		t.Errorf("/api/players shows Bob after he played hidden: %s", body)
 	}
 
@@ -230,8 +230,8 @@ func TestPlayerWhoHidesLaterDropsOut(t *testing.T) {
 func TestOnlyPaperListsPlayers(t *testing.T) {
 	sleeping := map[string]*ping.Response{lazymcAddr: {Players: ping.Players{Max: 20, Sample: []ping.Player{listedAlice}}}}
 	ts, _ := newTestServer(t, sleeping, nil)
-	get(t, ts.URL+"/api/status")
-	if body := get(t, ts.URL+"/api/players"); body != "[]\n" {
+	getBody(t, ts.URL+"/api/status")
+	if body := getBody(t, ts.URL+"/api/players"); body != "[]\n" {
 		t.Errorf("/api/players = %s, want []", body)
 	}
 }
@@ -247,6 +247,47 @@ func TestWatch(t *testing.T) {
 	watch(ctx, fakeChecker(activePaper(1, listedAlice), nil), reg, time.Hour)
 	if !reg.Public(worldtest.AliceID, worldtest.AliceSeen) {
 		t.Error("watch didn't record Alice as listed")
+	}
+}
+
+// listedEveryone is a registry where every synthetic player was listed at
+// their last-seen time, so all of them are public.
+func listedEveryone(t testing.TB) *listing.Registry {
+	t.Helper()
+	reg, err := listing.Open("", listing.DefaultGrace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []struct {
+		player mcstatus.Player
+		at     time.Time
+	}{
+		{mcstatus.Player{Name: "Alice", ID: worldtest.AliceID}, worldtest.AliceSeen},
+		{mcstatus.Player{Name: "Bob", ID: worldtest.BobID}, worldtest.BobSeen},
+		{mcstatus.Player{Name: "Carol", ID: worldtest.CarolID}, worldtest.CarolSeen},
+	} {
+		if err := reg.Observe([]mcstatus.Player{p.player}, p.at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return reg
+}
+
+// Every public player has a real last-seen time. An unknown one is left
+// out rather than sent as Go's zero time, which is a truthy date string
+// in JS.
+func TestAPIPlayersLastSeen(t *testing.T) {
+	ts, _ := newTestServerWith(t, nil, nil, listedEveryone(t))
+	var raw []map[string]any
+	getJSON(t, ts.URL+"/api/players", &raw)
+	if len(raw) != 3 {
+		t.Fatalf("/api/players has %d players, want 3", len(raw))
+	}
+	for _, p := range raw {
+		seen, ok := p["lastSeen"].(string)
+		if !ok || strings.HasPrefix(seen, "0001-") {
+			t.Errorf("player %v: lastSeen = %v, want a real time", p["id"], p["lastSeen"])
+		}
 	}
 }
 

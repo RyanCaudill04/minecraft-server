@@ -1,5 +1,7 @@
 // play.ryancaudill.dev: polls the play API and renders the dashboard.
 
+import { accentHue, capitalize, fmtAgo, fmtDate, fmtDistance, fmtHours, fmtNum, fmtPlaytime, fmtWhen, mcClock, phase, weather } from "./format.js";
+
 const STATUS_MS = 10_000; // server state and who's online
 const DATA_MS = 60_000; // world facts and player stats (change only on save)
 
@@ -46,12 +48,27 @@ const SHEET_STATS = [
   { key: "playerKills", label: "Player kills", fmt: fmtNum },
 ];
 
+// Badges for the milestones the server tracks (world.Firsts in Go), in the
+// order the sheet shows them.
+const FIRSTS = {
+  "minecraft:story/enter_the_nether": { icon: "🔥", label: "First into the Nether" },
+  "minecraft:story/mine_diamond": { icon: "💎", label: "First diamonds" },
+  "minecraft:story/enter_the_end": { icon: "🌌", label: "First into the End" },
+  "minecraft:end/kill_dragon": { icon: "🐉", label: "Slew the dragon first" },
+  "minecraft:nether/summon_wither": { icon: "💀", label: "First to summon the Wither" },
+  "minecraft:end/elytra": { icon: "🪽", label: "First wings" },
+};
+
 const data = {
   status: null,
   world: null,
   players: [],
   board: BOARDS[0].key,
   rendered: new Set(), // sections that already played their entrance
+  lastChecked: null, // from the last status that loaded, kept through outages
+  boardShown: null, // board whose bars last grew in
+  hue: 212, // last accent hue set, matching --accent-h's initial value
+  sheetId: null, // player in the open sheet
 };
 
 const $ = (id) => document.getElementById(id);
@@ -68,6 +85,7 @@ async function refreshStatus() {
   const before = data.status?.state;
   try {
     data.status = await getJSON("/api/status");
+    data.lastChecked = data.status.checked;
   } catch (err) {
     console.warn(err);
     data.status = { state: "unknown", online: 0, max: 0, players: [] };
@@ -107,12 +125,9 @@ function renderStatus() {
   $("online-avatars").replaceChildren(...online.slice(0, 8).map((p) => head(p, 28)));
 
   let sub;
-  // Hidden players count in s.online but aren't named anywhere.
-  const others = Math.max(0, s.online - online.length);
   if (s.state === "active") {
-    const names = online.map((p) => p.name);
-    if (others) names.push(`${others} ${online.length ? "more" : others === 1 ? "player" : "players"}`);
-    sub = names.length ? names.join(", ") : "Nobody's on yet. Be the first!";
+    // Hidden players count in s.online but aren't named anywhere.
+    sub = onlineNames(s.online, online);
   } else if (data.players[0]?.lastSeen) {
     // Only public players are listed, so this is the latest public one,
     // not necessarily whoever played last.
@@ -124,11 +139,26 @@ function renderStatus() {
   $("online-sub").textContent = sub;
 }
 
+// The names in the sample, plus a count of the rest. The count comes from
+// `online`: anonymous players, hide-online-players and the sample cap all
+// leave people out of the sample.
+function onlineNames(count, visible) {
+  if (!count) return "Nobody's on yet. Be the first!";
+  const hidden = count - visible.length;
+  if (!visible.length) return `${count} ${count === 1 ? "player" : "players"} online`;
+  const names = visible.map((p) => p.name).join(", ");
+  return hidden > 0 ? `${names} and ${hidden} ${hidden === 1 ? "other" : "others"}` : names;
+}
+
 function renderWorld() {
   const w = data.world;
   if (!w) return;
 
-  document.documentElement.style.setProperty("--accent-h", accentHue(w.timeOfDay));
+  // The browser animates --accent-h as a plain number, so 350 to 10 would
+  // sweep the whole wheel. Pick the equivalent hue nearest the last one.
+  const hue = accentHue(w.timeOfDay);
+  data.hue = hue + 360 * Math.round((data.hue - hue) / 360);
+  document.documentElement.style.setProperty("--accent-h", data.hue);
 
   $("clock").textContent = mcClock(w.timeOfDay);
   $("clock-sub").textContent = `Day ${fmtNum(w.day)} · ${phase(w.timeOfDay)} · ${weather(w)}`;
@@ -142,7 +172,7 @@ function renderWorld() {
     ["Difficulty", capitalize(w.difficulty) + (w.hardcore ? " · Hardcore" : ""), w.hardcore ? "One life" : "Respawns on"],
     ["Spawn", w.spawn ? w.spawn.join(", ") : "Unknown", "X, Y, Z"],
     ["Version", w.version || "Unknown", "Java Edition"],
-    ["Last saved", fmtAgo(w.lastSaved), fmtWhen(w.lastSaved)],
+    ["Last saved", fmtAgo(w.lastSaved), w.lastSaved ? fmtWhen(w.lastSaved) : "Unknown"],
     ["Players", fmtNum(w.players ?? data.players.length), "Have joined so far"],
   ];
   const appear = once("world");
@@ -182,6 +212,9 @@ function renderPlayers() {
       return card;
     }),
   );
+
+  // Both polls end here, so the open sheet follows joins, leaves and saves.
+  if (data.sheetId && !$("sheet").hidden) fillSheet(data.sheetId);
 }
 
 function renderBoard() {
@@ -202,8 +235,11 @@ function renderBoard() {
   for (const tab of tabs.children) tab.setAttribute("aria-selected", tab.dataset.key === data.board);
 
   const board = BOARDS.find((b) => b.key === data.board);
-  const ranked = [...data.players].sort((a, b) => b[board.key] - a[board.key]);
+  const ranked = rankedBy(board.key);
   const top = Math.max(1, ranked[0]?.[board.key] ?? 1);
+  // Bars grow in when a board first shows, not on every minute's refresh.
+  const grow = ranked.length > 0 && data.boardShown !== board.key;
+  if (grow) data.boardShown = board.key;
 
   const rows = ranked.map((p, i) => {
     const li = el("li");
@@ -214,8 +250,11 @@ function renderBoard() {
     bar.append(fill);
     wrap.append(el("span", "name", p.name), bar);
     li.append(el("span", "rank", String(i + 1)), head(p, 32), wrap, el("span", "score", board.fmt(p[board.key])));
-    // Set the width after insertion so the bar animates from zero.
-    requestAnimationFrame(() => requestAnimationFrame(() => (fill.style.width = `${(p[board.key] / top) * 100}%`)));
+    const width = `${(p[board.key] / top) * 100}%`;
+    // Set the width after insertion so the bar animates from zero, or
+    // before it so the bar just appears at its size.
+    if (grow) requestAnimationFrame(() => requestAnimationFrame(() => (fill.style.width = width)));
+    else fill.style.width = width;
     return li;
   });
   $("board").replaceChildren(...rows);
@@ -226,29 +265,50 @@ function renderBoard() {
 let sheetOpener = null;
 
 function openSheet(id, opener) {
-  const p = data.players.find((x) => x.id === id);
-  if (!p) return;
+  if (!fillSheet(id)) return;
   sheetOpener = opener;
 
-  $("sheet-head").src = headURL(p.id, 144);
+  $("backdrop").hidden = false;
+  $("sheet").hidden = false;
+  $("sheet-close").focus();
+}
+
+// Fills the sheet with a player's stats. Returns false if they're unknown.
+function fillSheet(id) {
+  const p = data.players.find((x) => x.id === id);
+  if (!p) return false;
+  data.sheetId = id;
+
+  $("sheet-skin").src = bodyURL(p.id, 120);
   $("sheet-name").textContent = p.name;
   const online = visibleOnline().some((x) => x.id === id);
   $("sheet-seen").textContent = online ? "Online now" : p.lastSeen ? `Last seen ${fmtAgo(p.lastSeen)}` : "Never seen";
+
+  const badges = (p.firsts ?? []).filter((f) => FIRSTS[f.advancement]);
+  $("sheet-firsts").hidden = badges.length === 0;
+  $("sheet-badges").replaceChildren(
+    ...badges.map((f) => {
+      const { icon, label } = FIRSTS[f.advancement];
+      const li = el("li", "badge");
+      const text = el("span", "badge-text");
+      text.append(el("span", "badge-label", label), el("span", "badge-date", fmtDate(f.at)));
+      li.append(el("span", "badge-icon", icon), text);
+      li.firstChild.setAttribute("aria-hidden", "true");
+      return li;
+    }),
+  );
 
   $("sheet-stats").replaceChildren(
     ...SHEET_STATS.map((s) => {
       const div = el("div");
       const dd = el("dd", "", s.fmt(p[s.key]));
-      const rank = [...data.players].sort((a, b) => b[s.key] - a[s.key]).findIndex((x) => x.id === id) + 1;
+      const rank = rankedBy(s.key).findIndex((x) => x.id === id) + 1;
       if (rank === 1 && p[s.key] > 0 && s.key !== "deaths") dd.append(el("span", "rank-note", "#1 on the server"));
       div.append(el("dt", "", s.label), dd);
       return div;
     }),
   );
-
-  $("backdrop").hidden = false;
-  $("sheet").hidden = false;
-  $("sheet-close").focus();
+  return true;
 }
 
 function closeSheet() {
@@ -264,32 +324,6 @@ document.addEventListener("keydown", (e) => e.key === "Escape" && closeSheet());
 
 // ---------- Day/night ----------
 
-// Accent hue at points through the Minecraft day (0 = sunrise). Hues are
-// interpolated between them, the short way round the color wheel.
-const SKY_HUES = [
-  [0, 30], // sunrise orange
-  [1500, 205], // morning blue
-  [10500, 212], // afternoon blue
-  [12000, 18], // sunset
-  [13000, 280], // dusk purple
-  [14500, 238], // night indigo
-  [22000, 238],
-  [23300, 280], // pre-dawn
-  [24000, 30],
-];
-
-function accentHue(tod) {
-  for (let i = 1; i < SKY_HUES.length; i++) {
-    const [t1, h1] = SKY_HUES[i];
-    if (tod > t1) continue;
-    const [t0, h0] = SKY_HUES[i - 1];
-    const f = (tod - t0) / (t1 - t0);
-    const delta = ((h1 - h0 + 540) % 360) - 180;
-    return Math.round((h0 + delta * f + 360) % 360);
-  }
-  return 212;
-}
-
 // Moves the sun (day) or moon (night) along the arc in the time card.
 function placeSky(tod) {
   const f = (tod % 12000) / 12000;
@@ -297,21 +331,6 @@ function placeSky(tod) {
   body.setAttribute("cx", (50 - 42 * Math.cos(Math.PI * f)).toFixed(1));
   body.setAttribute("cy", (30 - 26 * Math.sin(Math.PI * f)).toFixed(1));
   body.setAttribute("r", tod < 12000 ? 4 : 3);
-}
-
-function phase(tod) {
-  if (tod < 1000) return "Sunrise";
-  if (tod < 5000) return "Morning";
-  if (tod < 7000) return "Noon";
-  if (tod < 11000) return "Afternoon";
-  if (tod < 13000) return "Sunset";
-  if (tod < 23000) return "Night";
-  return "Dawn";
-}
-
-function weather(w) {
-  if (w.thundering) return "Thunderstorm";
-  return w.raining ? "Rain" : "Clear";
 }
 
 // ---------- Scroll spy ----------
@@ -343,6 +362,12 @@ function el(tag, className = "", text) {
   return node;
 }
 
+// A front view of the player's whole skin, size pixels wide and 2.4 times
+// as tall.
+function bodyURL(id, size) {
+  return `https://mc-heads.net/body/${encodeURIComponent(id)}/${size}`;
+}
+
 function headURL(id, size) {
   return `https://mc-heads.net/avatar/${encodeURIComponent(id)}/${size}`;
 }
@@ -363,6 +388,12 @@ function head(player, size) {
 function visibleOnline() {
   if (data.status?.state !== "active") return [];
   return data.status.players.filter((p) => p.id !== ANONYMOUS_ID);
+}
+
+// Players sorted by a stat, highest first. The board and the sheet's #1
+// notes both use it, so they always agree.
+function rankedBy(key) {
+  return [...data.players].sort((a, b) => b[key] - a[key]);
 }
 
 // Returns true the first time it's called for a key, so entrance animations
@@ -391,54 +422,35 @@ function countTo(node, to) {
   requestAnimationFrame(step);
 }
 
-const numberFormat = new Intl.NumberFormat();
-const compactFormat = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
+// ---------- Map preview ----------
 
-function fmtNum(n) {
-  return n >= 100_000 ? compactFormat.format(n) : numberFormat.format(n ?? 0);
+// The preview is squaremap's own page in a frame. Before loading it, ask
+// whether the map exists, so an unrendered map shows the placeholder instead
+// of an error page. The frame loads once; the map refreshes its own tiles.
+async function loadMapPreview() {
+  const card = $("map-card");
+  try {
+    const res = await fetch("/map/", { method: "HEAD", cache: "no-store" });
+    if (!res.ok) return false;
+  } catch {
+    return false;
+  }
+  const frame = $("map-frame");
+  frame.addEventListener("load", () => (card.dataset.ready = "true"), { once: true });
+  frame.src = "/map/";
+  return true;
 }
 
-function fmtPlaytime(ticks) {
-  const mins = Math.floor(ticks / 20 / 60);
-  return mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+// Try again every minute until the map shows up.
+async function mapPreviewLoop() {
+  if (!(await loadMapPreview())) setTimeout(mapPreviewLoop, 60_000);
 }
-
-function fmtHours(ticks) {
-  return `${fmtNum(Math.floor(ticks / 20 / 3600))} hours`;
-}
-
-function fmtDistance(cm) {
-  return cm >= 100_000 ? `${(cm / 100_000).toFixed(1)} km` : `${Math.round(cm / 100)} m`;
-}
-
-function fmtAgo(iso) {
-  if (!iso) return "never";
-  const secs = Math.max(0, (Date.now() - new Date(iso)) / 1000);
-  if (secs < 60) return "just now";
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
-}
-
-function fmtWhen(iso) {
-  const d = new Date(iso);
-  const sameDay = d.toDateString() === new Date().toDateString();
-  return d.toLocaleString(undefined, sameDay ? { timeStyle: "short" } : { dateStyle: "medium", timeStyle: "short" });
-}
-
-// Minecraft time to a clock: tick 0 is 6:00 AM.
-function mcClock(tod) {
-  const h = (Math.floor(tod / 1000) + 6) % 24;
-  const m = Math.floor(((tod % 1000) * 60) / 1000);
-  return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
-}
-
-function capitalize(s = "") {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
+mapPreviewLoop();
 
 // ---------- Startup ----------
 
+// Each click restarts the reset, so the label always shows for 2 s.
+let copyReset;
 $("copy").addEventListener("click", async () => {
   const button = $("copy");
   try {
@@ -447,11 +459,17 @@ $("copy").addEventListener("click", async () => {
   } catch {
     button.textContent = "Copy failed";
   }
-  setTimeout(() => (button.textContent = "Copy address"), 2000);
+  clearTimeout(copyReset);
+  copyReset = setTimeout(() => (button.textContent = "Copy address"), 2000);
 });
 
+// Uses the last status that loaded, so during an outage the line keeps
+// ageing and turns amber instead of saying "just now" forever.
 function tick() {
-  if (data.status?.checked) $("updated").textContent = `Updated ${fmtAgo(data.status.checked)}`;
+  if (!data.lastChecked) return;
+  const updated = $("updated");
+  updated.textContent = `Updated ${fmtAgo(data.lastChecked)}`;
+  updated.classList.toggle("stale", Date.now() - new Date(data.lastChecked) > 30_000);
 }
 
 let timers = [];
