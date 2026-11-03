@@ -1,5 +1,6 @@
 // Command mc-players prints the server's online player count and names using
-// a status ping, so it does not wake a sleeping LazyMC proxy.
+// a status ping, so it does not wake a sleeping LazyMC proxy. It is a dev
+// tool, not part of a release. The Paper boot test in CI (#104) uses it.
 //
 // Usage: mc-players [-addr host:port]   (defaults to $MC_ADDR)
 package main

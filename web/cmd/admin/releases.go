@@ -378,6 +378,18 @@ func (a *app) submit(w http.ResponseWriter, r *http.Request, req deploy.Request,
 	json.NewEncoder(w).Encode(map[string]bool{"started": started})
 }
 
+// jsonBody wraps a handler that reads a JSON body, and refuses any other
+// content type, so a form post never reaches it. It goes inside writes.
+func jsonBody(h func(w http.ResponseWriter, r *http.Request, user string)) func(w http.ResponseWriter, r *http.Request, user string) {
+	return func(w http.ResponseWriter, r *http.Request, user string) {
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			writeError(w, http.StatusUnsupportedMediaType, "Send JSON.")
+			return
+		}
+		h(w, r, user)
+	}
+}
+
 // decode reads one JSON object from r's body into v, refusing unknown
 // fields and anything after it.
 func decode(r *http.Request, v any) error {
