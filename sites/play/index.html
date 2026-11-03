@@ -8,8 +8,7 @@
   <link rel="stylesheet" href="/shared/base.css">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="live.css">
-  <script src="app.js" defer></script>
-  <script src="live.js" defer></script>
+  <script type="module" src="app.js"></script>
 </head>
 <body>
   <div class="app">
@@ -40,6 +39,10 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 17V11M10 17V4M16 17V8"/></svg>
           Leaderboards
         </a>
+        <a href="#map">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
+          Map
+        </a>
       </nav>
 
       <div class="sidebar-foot">
@@ -67,7 +70,7 @@
 
           <article class="card metric">
             <span class="eyebrow">Online now</span>
-            <div class="metric-value"><span id="online" data-count>0</span><span class="metric-unit" id="max"></span></div>
+            <div class="metric-value"><span id="online">0</span><span class="metric-unit" id="max"></span></div>
             <div class="avatars" id="online-avatars"></div>
             <p class="metric-sub" id="online-sub">&nbsp;</p>
           </article>
@@ -120,6 +123,27 @@
           <ol class="board" id="board"></ol>
         </article>
       </section>
+
+      <section id="map" class="section">
+        <header class="section-head">
+          <h2>Map</h2>
+          <p class="muted">A look at the world from above.</p>
+        </header>
+        <article class="card map-card" id="map-card" data-ready="false">
+          <div class="map-stage">
+            <div class="map-placeholder">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
+              <p>The map isn't ready yet.</p>
+              <p class="muted">It appears once the server has rendered the world.</p>
+            </div>
+            <iframe id="map-frame" title="Preview of the world map" tabindex="-1" aria-hidden="true" loading="lazy"></iframe>
+          </div>
+          <div class="map-foot">
+            <p class="muted">Live preview of the overworld.</p>
+            <a class="btn btn-primary" id="map-open" href="/map/">Open the full map</a>
+          </div>
+        </article>
+      </section>
     </main>
   </div>
 
@@ -129,12 +153,16 @@
       <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
     </button>
     <div class="sheet-head">
-      <img id="sheet-head" alt="" width="72" height="72">
+      <img id="sheet-skin" alt="" width="60" height="144">
       <div>
         <h2 id="sheet-name"></h2>
         <p id="sheet-seen" class="muted"></p>
       </div>
     </div>
+    <section class="sheet-firsts" id="sheet-firsts" aria-labelledby="sheet-firsts-title" hidden>
+      <h3 id="sheet-firsts-title">Server firsts</h3>
+      <ul class="badges" id="sheet-badges"></ul>
+    </section>
     <dl class="sheet-stats" id="sheet-stats"></dl>
   </aside>
 </body>

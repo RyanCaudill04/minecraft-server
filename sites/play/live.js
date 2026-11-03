@@ -1,5 +1,9 @@
 // play.ryancaudill.dev: the live clock and weather, and the activity feed.
-// Loads after app.js and uses its state (data) and helpers.
+// app.js imports it, starts and stops it with its own polling, and lends it
+// its state (data) and helpers.
+
+import { $, data, el, getJSON, head, renderWorld } from "./app.js";
+import { fmtAgo, fmtWhen } from "./format.js";
 
 const TIME_MS = 10_000; // in-game clock and weather
 const FEED_MS = 10_000; // activity feed
@@ -28,7 +32,7 @@ async function refreshTime() {
 // The world facts with the clock run on to now: the server answers with
 // the time as of its poll and how fast it moves, and the page counts on
 // between polls.
-function liveWorld(w) {
+export function liveWorld(w) {
   const s = live.sky;
   if (!w || !s) return w;
   const elapsed = Math.min(MAX_RUN_ON_S, (performance.now() - live.got) / 1000);
@@ -114,7 +118,7 @@ function feedVerb(e) {
 // ---------- Startup ----------
 
 let liveTimers = [];
-function startLive() {
+export function startLive() {
   if (liveTimers.length) return;
   refreshTime();
   refreshFeed();
@@ -125,10 +129,7 @@ function startLive() {
     setInterval(renderFeed, 30_000), // keeps "5m ago" current
   ];
 }
-function stopLive() {
+export function stopLive() {
   liveTimers.forEach(clearInterval);
   liveTimers = [];
 }
-
-document.addEventListener("visibilitychange", () => (document.hidden ? stopLive() : startLive()));
-startLive();

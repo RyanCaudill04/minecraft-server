@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -213,6 +214,76 @@ func TestComponentText(t *testing.T) {
 	for _, bad := range []string{`42`, `{"text": 1}`, `[1]`} {
 		if _, err := componentText([]byte(bad)); err == nil {
 			t.Errorf("componentText(%s): want an error", bad)
+		}
+	}
+}
+
+// TestWake checks that Wake sends what LazyMC wakes on: a handshake for
+// the login state (2), then Login Start with the name, then hangs up.
+func TestWake(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	type packets struct {
+		handshake, login []byte
+		loginID          int32
+		eof              bool
+	}
+	got := make(chan packets, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		conn.SetDeadline(time.Now().Add(2 * time.Second))
+		r := bufio.NewReader(conn)
+		var p packets
+		_, p.handshake, _ = readPacket(r)
+		p.loginID, p.login, _ = readPacket(r)
+		_, err = r.ReadByte()
+		p.eof = errors.Is(err, io.EOF)
+		got <- p
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := Wake(ctx, ln.Addr().String(), "admin_wake"); err != nil {
+		t.Fatal(err)
+	}
+
+	p := <-got
+	if len(p.handshake) == 0 || p.handshake[len(p.handshake)-1] != nextLogin {
+		t.Errorf("handshake = %x, want next state 2 (login)", p.handshake)
+	}
+	login := bytes.NewReader(p.login)
+	name, err := readString(login)
+	if id := p.loginID; id != 0x00 || err != nil || name != "admin_wake" {
+		t.Errorf("Login Start = id %d, name %q (%v), want id 0 and admin_wake", id, name, err)
+	}
+	if login.Len() != 16 {
+		t.Errorf("Login Start has %d bytes after the name, want a 16-byte UUID", login.Len())
+	}
+	if !p.eof {
+		t.Error("Wake didn't hang up after Login Start")
+	}
+}
+
+func TestWakeErrors(t *testing.T) {
+	// A port nothing listens on: grab one, then close it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := ln.Addr().String()
+	ln.Close()
+
+	for _, addr := range []string{"no-port", "127.0.0.1:notaport", closed} {
+		if err := Wake(context.Background(), addr, "admin_wake"); err == nil {
+			t.Errorf("Wake(%q) = nil, want an error", addr)
 		}
 	}
 }

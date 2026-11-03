@@ -84,7 +84,7 @@ func TestAPIActivity(t *testing.T) {
 func TestWatchConfirmsVisits(t *testing.T) {
 	server := worldtest.Build(t)
 	dir, shared := t.TempDir(), t.TempDir()
-	h, poll := newApp(dir, shared, server, fakeChecker(active("Alice", "Anonymous Player"), nil))
+	h, poll := newApp(dir, shared, server, filepath.Join(server, "plugins", "squaremap", "web"), fakeChecker(active("Alice", "Anonymous Player"), nil))
 	writeLatestLog(t, server, "Alice joined the game", "Bob joined the game", "Bob was slain by Zombie")
 
 	ctx, cancel := context.WithCancel(context.Background())
