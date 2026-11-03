@@ -222,10 +222,10 @@ to `main`, and by hand.
 
    | Scope | Turned on by | Checks |
    | --- | --- | --- |
-   | go | always | `gofmt`, `go vet`, `go test -race`, an arm64 build |
+   | go | always | `gofmt`, `go vet`, `go test -race`, arm64 and amd64 builds |
    | play | `web/cmd/play`, `sites/play`, shared code | JS syntax, smoke test of the built server |
    | admin | `web/cmd/admin`, `web/cmd/serve`, `sites/admin`, `sites/portfolio`, shared code | JS syntax, smoke tests of admin and each static site |
-   | mc_server | server configs, jars, `start.sh`, `config/`, `plugins/` | `shellcheck start.sh`, `lazymc.toml` addresses, no secrets in `server.properties.example` |
+   | mc_server | server configs, jars, `start.sh`, `config/`, `plugins/` | `shellcheck start.sh`, `lazymc.toml` addresses, no secrets in `server.properties.example`; the **paper-boot** job boots Paper with `start.sh`, checks every plugin is enabled, pings it and stops it |
    | infra | `deploy/`, `scripts/`, `.github/` | actionlint, shellcheck, the script tests, a test release whose units `systemd-analyze` verifies |
 
    Any change under `.github/` turns every scope on.
@@ -241,8 +241,9 @@ to `main`, and by hand.
      `notes.json`. A PR labeled `enhancement` is a feature, `bug` is a fix,
      and anything else is other,
    - builds the release with [`scripts/build-release.sh`](scripts/build-release.sh),
-   - publishes it as a GitHub Release with `release.tar.gz` and
-     `release.tar.gz.sha256`.
+   - publishes it as a GitHub Release with `release-linux-arm64.tar.gz`,
+     `release-linux-amd64.tar.gz` and `release.tar.gz` (a copy of the arm64
+     one for older agents), each with a `.sha256` file.
 
 To build a release by hand (it needs Go, and `jq` if you pass notes):
 
@@ -250,8 +251,8 @@ To build a release by hand (it needs Go, and `jq` if you pass notes):
 scripts/build-release.sh <tag> <output folder> [notes.json]
 ```
 
-The tarball holds the arm64 binaries in `bin/` (play, admin, serve,
-mc-agent), `sites/`, `deploy/systemd/`, `deploy/sites/`,
+Each tarball holds that architecture's binaries in `bin/` (play, admin,
+serve, mc-agent, mc-rcon), `sites/`, `deploy/systemd/`, `deploy/sites/`,
 `deploy/release.json`, `deploy/notes.json` when notes were given, and
 `VERSION`.
 
@@ -263,7 +264,9 @@ of `mc-agent deploy`:
 
 1. Asks GitHub for the newest release. It stops if that release is already
    active, or if it failed before (recorded in `~/apps/failed`).
-2. Downloads it, checks the SHA-256, and unpacks it into
+2. Downloads its `release-linux-<arch>.tar.gz` for the machine it runs on
+   (or `release.tar.gz` on arm64 for older releases), checks the SHA-256,
+   and unpacks it into
    `~/apps/releases/<tag>`.
 3. Stops, disables and unlinks units the previous release ran that the new
    one doesn't list.

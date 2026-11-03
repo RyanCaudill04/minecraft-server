@@ -1,7 +1,9 @@
 // Package deploy installs releases of this repo's web apps on the Pi.
 //
-// A release is a GitHub Release with two assets: release.tar.gz (binaries,
-// sites and unit files) and release.tar.gz.sha256. Releases are unpacked
+// A release is a GitHub Release with a tarball per platform, such as
+// release-linux-arm64.tar.gz (binaries, sites and unit files), each with a
+// .sha256 checksum file. The agent installs the one built for the platform
+// it runs on. Releases are unpacked
 // into <apps>/releases/<tag>, and <apps>/current is a symlink to the active
 // one. Unit files are linked into the systemd user folder through current,
 // so switching the link switches every unit at once.
@@ -37,17 +39,26 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 )
 
-// Asset names in each GitHub Release.
-const (
-	TarballName  = "release.tar.gz"
-	ChecksumName = TarballName + ".sha256"
-)
+// TarballName is the name of a release's tarball for a platform, e.g.
+// release-linux-arm64.tar.gz. Its checksum file adds ChecksumSuffix.
+func TarballName(goos, goarch string) string {
+	return "release-" + goos + "-" + goarch + ".tar.gz"
+}
+
+// ChecksumSuffix turns a tarball's name into its checksum file's name.
+const ChecksumSuffix = ".sha256"
+
+// LegacyTarballName is the linux/arm64 tarball's name from before releases
+// had one per platform. Agents built before then download only this name,
+// so releases still publish the arm64 tarball under it too.
+const LegacyTarballName = "release.tar.gz"
 
 // ManifestPath is where the manifest lives inside a release.
 const ManifestPath = "deploy/release.json"
@@ -114,6 +125,24 @@ func (r *Release) assetURL(name string) (string, error) {
 	return "", fmt.Errorf("release %s has no %s asset", r.Tag, name)
 }
 
+func (r *Release) has(name string) bool {
+	_, err := r.assetURL(name)
+	return err == nil
+}
+
+// tarball picks the tarball built for goos/goarch. Releases from before
+// per-platform tarballs only have LegacyTarballName, which is linux/arm64.
+func (r *Release) tarball(goos, goarch string) (string, error) {
+	name := TarballName(goos, goarch)
+	if r.has(name) {
+		return name, nil
+	}
+	if goos == "linux" && goarch == "arm64" && r.has(LegacyTarballName) {
+		return LegacyTarballName, nil
+	}
+	return "", fmt.Errorf("deploy: release %s has no build for %s/%s (no %s asset)", r.Tag, goos, goarch, name)
+}
+
 // Deployer installs and activates releases.
 type Deployer struct {
 	Repo    string // GitHub "owner/name"
@@ -128,6 +157,21 @@ type Deployer struct {
 	HealthTimeout time.Duration // how long each health URL may take to answer 200
 	Keep          int           // installed releases to keep, at least 2
 	Log           *log.Logger
+
+	// GOOS and GOARCH pick the tarball to install. Empty means the
+	// platform the agent runs on.
+	GOOS, GOARCH string
+}
+
+func (d *Deployer) platform() (goos, goarch string) {
+	goos, goarch = d.GOOS, d.GOARCH
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+	if goarch == "" {
+		goarch = runtime.GOARCH
+	}
+	return goos, goarch
 }
 
 func (d *Deployer) releasesDir() string { return filepath.Join(d.Apps, "releases") }
@@ -255,11 +299,15 @@ func (d *Deployer) Install(ctx context.Context, rel *Release) error {
 	}
 	d.Log.Printf("installing %s", rel.Tag)
 
-	sumURL, err := rel.assetURL(ChecksumName)
+	name, err := rel.tarball(d.platform())
 	if err != nil {
 		return err
 	}
-	tarURL, err := rel.assetURL(TarballName)
+	sumURL, err := rel.assetURL(name + ChecksumSuffix)
+	if err != nil {
+		return err
+	}
+	tarURL, err := rel.assetURL(name)
 	if err != nil {
 		return err
 	}
