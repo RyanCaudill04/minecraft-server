@@ -7,8 +7,8 @@
 #              stylesheet, its unit, Go code it imports, or its tests
 #              in tests/play
 #   admin      the admin track (admin and mc-rcon), likewise
-#   sites      the sites track: serve, the portfolio, deploy/sites and
-#              site@.service
+#   sites      the sites track: serve, the portfolio, deploy/sites,
+#              site@.service, or Go code it imports
 #   agent      the agent track: mc-agent, its units, or Go code it imports
 #   mc_server  the Minecraft server's own files (configs, jars, start.sh),
 #              plus fetch-server.sh and mc-players, which its checks run
@@ -46,7 +46,7 @@ shipped=$(grep -vE '^web/cmd/mc-players/|^deploy/server\.json$' <<<"$files" || t
 # ci-changes_test.sh checks these against the code.
 play_pkgs='mcstatus|nbt|ping|site|world'
 admin_pkgs='access|control|deploy|mcstatus|ping|plugins|rcon|site'
-sites_pkgs=''
+sites_pkgs='site'
 agent_pkgs='deploy'
 
 every='^web/(go\.mod|go\.sum)$|^deploy/tracks\.json$|^scripts/build-release\.sh$'

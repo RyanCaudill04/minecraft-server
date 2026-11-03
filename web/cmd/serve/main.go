@@ -8,8 +8,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
+
+	"github.com/ryancaudill04/minecraft-server/web/internal/site"
 )
 
 func main() {
@@ -20,7 +21,7 @@ func main() {
 	// Require -dir: defaulting to the current folder could expose whatever
 	// directory the program happens to start in.
 	if *dir == "" {
-		fmt.Fprintln(os.Stderr, "serve: set -dir (e.g. -dir sites/play)")
+		fmt.Fprintln(os.Stderr, "serve: set -dir (e.g. -dir sites/portfolio)")
 		os.Exit(2)
 	}
 
@@ -32,7 +33,8 @@ func main() {
 		log.Fatalf("serve: %s is not a directory", *dir)
 	}
 
-	files := http.FileServer(http.Dir(*dir))
+	// The same file server as play and admin, so listings and dotfiles stay
+	// hidden here too. These sites don't use the shared stylesheet.
 	log.Printf("serving %s on http://%s", *dir, *addr)
-	log.Fatal(http.ListenAndServe(*addr, files))
+	log.Fatal(site.Server(*addr, site.Static(*dir, "")).ListenAndServe())
 }

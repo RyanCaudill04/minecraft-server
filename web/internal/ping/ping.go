@@ -25,14 +25,14 @@ import (
 // largest value a 3-byte VarInt can hold).
 const maxPacketLength = 1<<21 - 1
 
-var errVarIntTooLong = errors.New("ping: VarInt is longer than 5 bytes")
+// Inner errors carry no "ping:" prefix; Status adds it once.
+var errVarIntTooLong = errors.New("VarInt is longer than 5 bytes")
 
 // Response is the JSON payload returned by a status request.
 type Response struct {
 	Version     Version     `json:"version"`
 	Players     Players     `json:"players"`
 	Description Description `json:"description"`
-	Favicon     string      `json:"favicon,omitempty"`
 }
 
 // Version is the server's advertised game version and protocol number.
@@ -61,60 +61,52 @@ type Description struct {
 }
 
 // UnmarshalJSON accepts either a JSON string or a chat component object.
+// It never fails: the MOTD is cosmetic, and an odd one must not turn a
+// server that answered into a failed ping.
 func (d *Description) UnmarshalJSON(data []byte) error {
-	text, err := componentText(data)
-	if err != nil {
-		return fmt.Errorf("ping: decoding description: %w", err)
-	}
-	d.Text = text
+	d.Text = componentText(data)
 	return nil
 }
 
 // componentText flattens a chat component (a string, an object with "text"
 // and "extra", or an array of components) into its plain text. Legacy §
-// formatting codes inside the text are left as-is.
-func componentText(data []byte) (string, error) {
+// formatting codes inside the text are left as-is. Anything else (null, a
+// number, a bool) counts as no text, and so does a field of the wrong type.
+func componentText(data []byte) string {
 	data = bytes.TrimSpace(data)
 	if len(data) == 0 {
-		return "", nil
+		return ""
 	}
 
 	switch data[0] {
 	case '"':
 		var s string
-		err := json.Unmarshal(data, &s)
-		return s, err
+		json.Unmarshal(data, &s)
+		return s
 	case '[':
 		var parts []json.RawMessage
-		if err := json.Unmarshal(data, &parts); err != nil {
-			return "", err
-		}
+		json.Unmarshal(data, &parts)
 		return joinComponents(parts)
 	case '{':
+		// On a type mismatch json.Unmarshal still fills the fields it
+		// can, so a bad "text" keeps the "extra" and vice versa.
 		var c struct {
 			Text  string            `json:"text"`
 			Extra []json.RawMessage `json:"extra"`
 		}
-		if err := json.Unmarshal(data, &c); err != nil {
-			return "", err
-		}
-		extra, err := joinComponents(c.Extra)
-		return c.Text + extra, err
+		json.Unmarshal(data, &c)
+		return c.Text + joinComponents(c.Extra)
 	default:
-		return "", fmt.Errorf("unexpected chat component %.20q", data)
+		return ""
 	}
 }
 
-func joinComponents(parts []json.RawMessage) (string, error) {
+func joinComponents(parts []json.RawMessage) string {
 	var sb strings.Builder
 	for _, p := range parts {
-		s, err := componentText(p)
-		if err != nil {
-			return "", err
-		}
-		sb.WriteString(s)
+		sb.WriteString(componentText(p))
 	}
-	return sb.String(), nil
+	return sb.String()
 }
 
 // Status connects to addr ("host:port"), performs the handshake and status
@@ -135,13 +127,11 @@ func Status(ctx context.Context, addr string) (*Response, error) {
 // abandoned login and does nothing.
 func Wake(ctx context.Context, addr, name string) error {
 	return dial(ctx, addr, func(conn net.Conn, host string, port uint16) error {
+		// bufio.Writer keeps the first write error and returns it from
+		// Flush, so the writes don't need checking one by one.
 		w := bufio.NewWriter(conn)
-		if err := writePacket(w, handshakePacket(host, port, nextLogin)); err != nil {
-			return err
-		}
-		if err := writePacket(w, loginStartPacket(name)); err != nil {
-			return err
-		}
+		writePacket(w, handshakePacket(host, port, nextLogin))
+		writePacket(w, loginStartPacket(name))
 		return w.Flush()
 	})
 }
@@ -190,13 +180,11 @@ func dial(ctx context.Context, addr string, talk func(conn net.Conn, host string
 // exchange sends the handshake and status request on conn and decodes the
 // status response.
 func exchange(conn net.Conn, host string, port uint16) (*Response, error) {
+	// bufio.Writer keeps the first write error and returns it from Flush,
+	// so the writes don't need checking one by one.
 	w := bufio.NewWriter(conn)
-	if err := writePacket(w, handshakePacket(host, port, nextStatus)); err != nil {
-		return nil, err
-	}
-	if err := writePacket(w, statusRequestPacket()); err != nil {
-		return nil, err
-	}
+	writePacket(w, handshakePacket(host, port, nextStatus))
+	writePacket(w, []byte{0x00}) // Status Request: packet ID 0, no fields
 	if err := w.Flush(); err != nil {
 		return nil, err
 	}
@@ -228,7 +216,6 @@ const (
 
 // handshakePacket builds the body of the Handshake packet (ID 0x00).
 func handshakePacket(host string, port uint16, next int32) []byte {
-	// Writes to a bytes.Buffer cannot fail, so their errors are ignored.
 	var b bytes.Buffer
 	writeVarInt(&b, 0x00) // packet ID
 	// Protocol version: -1 is conventional for status pings, and LazyMC
@@ -252,25 +239,23 @@ func loginStartPacket(name string) []byte {
 	return b.Bytes()
 }
 
-// statusRequestPacket builds the body of the Status Request packet (ID 0x00,
-// no fields).
-func statusRequestPacket() []byte {
-	return []byte{0x00}
-}
-
 // writePacket frames body as VarInt(len(body)) followed by body and writes it
 // to w.
-func writePacket(w io.Writer, body []byte) error {
-	var b bytes.Buffer
-	writeVarInt(&b, int32(len(body)))
-	b.Write(body)
-	_, err := w.Write(b.Bytes())
-	return err
+func writePacket(w *bufio.Writer, body []byte) {
+	writeVarInt(w, int32(len(body)))
+	w.Write(body)
+}
+
+// reader is what the read helpers need: bufio.Reader and bytes.Reader are
+// both one.
+type reader interface {
+	io.Reader
+	io.ByteReader
 }
 
 // readPacket reads one length-prefixed packet from r and returns its packet ID
 // and remaining payload.
-func readPacket(r io.ByteReader) (id int32, payload []byte, err error) {
+func readPacket(r reader) (id int32, payload []byte, err error) {
 	length, err := readVarInt(r)
 	if err != nil {
 		return 0, nil, err
@@ -279,8 +264,8 @@ func readPacket(r io.ByteReader) (id int32, payload []byte, err error) {
 		return 0, nil, fmt.Errorf("invalid packet length %d", length)
 	}
 
-	data, err := readBytes(r, int(length))
-	if err != nil {
+	data := make([]byte, length)
+	if _, err := io.ReadFull(r, data); err != nil {
 		return 0, nil, err
 	}
 
@@ -292,19 +277,25 @@ func readPacket(r io.ByteReader) (id int32, payload []byte, err error) {
 	return id, data[len(data)-body.Len():], nil
 }
 
+// writer is what the write helpers need. Only bytes.Buffer and bufio.Writer
+// are passed in, and both report errors elsewhere (never, or from Flush), so
+// the helpers return none.
+type writer interface {
+	io.ByteWriter
+	io.StringWriter
+}
+
 // writeVarInt writes v using Minecraft's VarInt encoding: 7 bits per byte,
 // least-significant group first, high bit set when more bytes follow.
-func writeVarInt(w io.ByteWriter, v int32) error {
+func writeVarInt(w io.ByteWriter, v int32) {
 	// Shift as unsigned so negative values terminate after 5 bytes instead of
 	// sign-extending forever.
 	u := uint32(v)
 	for u >= 0x80 {
-		if err := w.WriteByte(byte(u&0x7f) | 0x80); err != nil {
-			return err
-		}
+		w.WriteByte(byte(u&0x7f) | 0x80)
 		u >>= 7
 	}
-	return w.WriteByte(byte(u))
+	w.WriteByte(byte(u))
 }
 
 // readVarInt reads a VarInt from r. It returns an error if the value is longer
@@ -328,16 +319,13 @@ func readVarInt(r io.ByteReader) (int32, error) {
 }
 
 // writeString writes s as VarInt(byte length) followed by its UTF-8 bytes.
-func writeString(w io.Writer, s string) error {
-	var b bytes.Buffer
-	writeVarInt(&b, int32(len(s)))
-	b.WriteString(s)
-	_, err := w.Write(b.Bytes())
-	return err
+func writeString(w writer, s string) {
+	writeVarInt(w, int32(len(s)))
+	w.WriteString(s)
 }
 
 // readString reads a VarInt length-prefixed UTF-8 string from r.
-func readString(r io.ByteReader) (string, error) {
+func readString(r reader) (string, error) {
 	n, err := readVarInt(r)
 	if err != nil {
 		return "", err
@@ -345,27 +333,7 @@ func readString(r io.ByteReader) (string, error) {
 	if n < 0 || n > maxPacketLength {
 		return "", fmt.Errorf("invalid string length %d", n)
 	}
-	b, err := readBytes(r, int(n))
+	b := make([]byte, n)
+	_, err = io.ReadFull(r, b)
 	return string(b), err
-}
-
-// readBytes reads exactly n bytes from r, using io.ReadFull when r is also an
-// io.Reader (as bufio.Reader and bytes.Reader are).
-func readBytes(r io.ByteReader, n int) ([]byte, error) {
-	buf := make([]byte, n)
-	if rr, ok := r.(io.Reader); ok {
-		_, err := io.ReadFull(rr, buf)
-		return buf, err
-	}
-	for i := range buf {
-		b, err := r.ReadByte()
-		if err != nil {
-			if err == io.EOF {
-				err = io.ErrUnexpectedEOF
-			}
-			return nil, err
-		}
-		buf[i] = b
-	}
-	return buf, nil
 }

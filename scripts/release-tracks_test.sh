@@ -51,13 +51,13 @@ check "re-run after release" ''
 check "older commit" '' HEAD~1
 
 commit web/internal/site/site.go
-check "shared package" 'play play-r3 play-r2;admin admin-r2 admin-r1'
+check "shared package" 'play play-r3 play-r2;admin admin-r2 admin-r1;sites sites-r2 sites-r1'
 
 commit web/internal/deploy/deploy.go
-check "deploy package" 'play play-r3 play-r2;admin admin-r2 admin-r1;agent agent-r2 agent-r1'
+check "deploy package" 'play play-r3 play-r2;admin admin-r2 admin-r1;sites sites-r2 sites-r1;agent agent-r2 agent-r1'
 
 commit README.md
-git tag play-r3 && git tag admin-r2 && git tag agent-r2
+git tag play-r3 && git tag admin-r2 && git tag sites-r2 && git tag agent-r2
 check "readme only" ''
 
 commit tests/play/e2e/play.spec.js

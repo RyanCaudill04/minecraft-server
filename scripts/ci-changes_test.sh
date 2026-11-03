@@ -29,7 +29,7 @@ check "play site"         'sites/play/app.js\n'                    'play deploy'
 check "play tests"        'tests/play/e2e/play.spec.js\n'         'play'
 check "play command"      'web/cmd/play/main.go\n'                 'play deploy'
 check "play-only package" 'web/internal/world/world.go\n'          'play deploy'
-check "site package"      'web/internal/site/site.go\n'            'play admin deploy'
+check "site package"      'web/internal/site/site.go\n'            'play admin sites deploy'
 check "deploy package"    'web/internal/deploy/deploy.go\n'        'admin agent deploy'
 check "deploy state"      'web/internal/deploy/state/state.go\n'   'admin agent deploy'
 check "go.mod"            'web/go.mod\n'                           "$all deploy"
