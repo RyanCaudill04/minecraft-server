@@ -84,7 +84,7 @@ func TestReadPlayers(t *testing.T) {
 			LastSeen:     worldtest.BobSeen,
 			PlayTicks:    36000,
 			MobKills:     5,
-			Advancements: 5,
+			Advancements: 6,
 			Firsts: []world.First{
 				{Advancement: "minecraft:story/mine_diamond", At: time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)},
 			},

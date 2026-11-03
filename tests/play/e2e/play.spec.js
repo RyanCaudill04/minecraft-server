@@ -126,6 +126,21 @@ test.describe("player sheet", () => {
     await expect(page.locator("#sheet-close")).toBeFocused();
   });
 
+  test("shows the player's skin and server firsts", async ({ page }) => {
+    const { sheet } = await openAlice(page);
+    await expect(sheet.locator("#sheet-skin")).toHaveAttribute("src", /^https:\/\/mc-heads\.net\/body\//);
+    const badges = sheet.locator("#sheet-badges .badge");
+    await expect(badges.locator(".badge-label")).toHaveText(["First into the Nether", "First into the End", "First wings"]);
+    await expect(badges.locator(".badge-date")).toHaveText(["Oct 2, 2026", "Oct 8, 2026", "Oct 20, 2026"]);
+  });
+
+  test("hides server firsts for a player without any", async ({ page }) => {
+    await open(page, "active");
+    await page.locator("#player-grid .player-card").filter({ hasText: "33333333" }).click();
+    await expect(page.locator("#sheet-name")).toHaveText("33333333");
+    await expect(page.locator("#sheet-firsts")).toBeHidden();
+  });
+
   test("Esc closes it and returns focus", async ({ page }) => {
     const { card, sheet } = await openAlice(page);
     await page.keyboard.press("Escape");
@@ -196,7 +211,7 @@ test.describe("screenshots", () => {
 
         await page.locator("#player-grid .player-card").first().click();
         await expect(page.getByRole("dialog")).toBeVisible();
-        await page.waitForFunction(() => document.getElementById("sheet-head").naturalWidth > 0);
+        await page.waitForFunction(() => document.getElementById("sheet-skin").naturalWidth > 0);
         await page.screenshot({ path: `screenshots/${size}-${scheme}-sheet.png` });
       });
     }

@@ -243,9 +243,10 @@ func readAdvancements(path string) (int, map[string]time.Time, error) {
 		if strings.Contains(key, ":recipes/") {
 			continue
 		}
+		// Criteria are read loosely, so an odd one costs only the time.
 		var adv struct {
-			Done     bool              `json:"done"`
-			Criteria map[string]string `json:"criteria"`
+			Done     bool           `json:"done"`
+			Criteria map[string]any `json:"criteria"`
 		}
 		if json.Unmarshal(raw, &adv) != nil || !adv.Done {
 			continue
@@ -255,7 +256,8 @@ func readAdvancements(path string) (int, map[string]time.Time, error) {
 			continue
 		}
 		var last time.Time
-		for _, s := range adv.Criteria {
+		for _, v := range adv.Criteria {
+			s, _ := v.(string)
 			if t, err := time.Parse(advancementTime, s); err == nil && t.After(last) {
 				last = t
 			}

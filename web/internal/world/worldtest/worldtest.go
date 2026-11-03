@@ -97,7 +97,7 @@ func Build(t testing.TB) string {
 		"minecraft:story/enter_the_nether": advancement("2026-10-01 20:00:00 -0500"),
 		"minecraft:story/enter_the_end":    advancement("2026-10-08 12:00:00 +0000"),
 		"minecraft:end/elytra":             advancement("2026-10-20 12:00:00 +0000"),
-		// Unfinished, so no badge, though Bob never got it either.
+		// Unfinished, so no badge, and Bob's has no readable time.
 		"minecraft:end/kill_dragon": map[string]any{"done": false, "criteria": map[string]any{"killed_dragon": "2026-10-01 00:00:00 +0000"}},
 		"DataVersion":               4903,
 	})
@@ -110,7 +110,9 @@ func Build(t testing.TB) string {
 		"minecraft:end/elytra": advancement("2026-10-20 07:00:00 -0500"),
 		// Done, but the time can't be read, so it can't be a first.
 		"minecraft:nether/summon_wither": advancement("not a time"),
-		"DataVersion":                    4903,
+		// A criterion that isn't a time string still counts as done.
+		"minecraft:end/kill_dragon": map[string]any{"done": true, "criteria": map[string]any{"killed_dragon": 5}},
+		"DataVersion":               4903,
 	})
 
 	touch(t, filepath.Join(players, "data", AliceID+".dat"), AliceSeen)
