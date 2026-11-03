@@ -28,6 +28,7 @@ func TestReadInfo(t *testing.T) {
 		Raining:    true,
 		LastSaved:  time.UnixMilli(worldtest.LastSaved).UTC(),
 		Spawn:      []int64{192, 76, -192},
+		Players:    3,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ReadInfo:\n got %+v\nwant %+v", got, want)
@@ -107,8 +108,9 @@ func TestReadPlayers(t *testing.T) {
 			},
 		},
 		{
-			ID:   worldtest.CarolID,
-			Name: "33333333", // not in usercache.json; never seen
+			ID:       worldtest.CarolID,
+			Name:     "33333333", // not in usercache.json; no data file
+			LastSeen: worldtest.CarolSeen,
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -160,5 +162,29 @@ func TestReadPlayersEmptyWorld(t *testing.T) {
 	}
 	if got == nil || len(got) != 0 {
 		t.Errorf("got %#v, want an empty, non-nil slice (it encodes as [] not null)", got)
+	}
+}
+
+func TestReadPlayersLastSeenIncludesStatsAndAdvancements(t *testing.T) {
+	server := worldtest.Build(t)
+	world0 := filepath.Join(server, "world")
+	later := worldtest.AliceSeen.Add(time.Hour)
+	for _, f := range []string{
+		filepath.Join(world0, "players", "stats", worldtest.AliceID+".json"),
+		filepath.Join(world0, "players", "advancements", worldtest.AliceID+".json"),
+	} {
+		if err := os.Chtimes(f, later, later); err != nil {
+			t.Fatal(err)
+		}
+		got, err := world.ReadPlayers(server, world0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range got {
+			if p.ID == worldtest.AliceID && !p.LastSeen.Equal(later) {
+				t.Errorf("after touching %s: LastSeen = %v, want %v", filepath.Base(filepath.Dir(f)), p.LastSeen, later)
+			}
+		}
+		later = later.Add(time.Hour)
 	}
 }

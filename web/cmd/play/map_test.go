@@ -35,7 +35,7 @@ func newMapServer(t *testing.T) (http.Handler, string) {
 	writeFile(t, web, "tiles/settings.json", `{"ui":{}}`)
 	writeFile(t, web, "tiles/players.json", `{"players":[{"name":"Steve","x":10,"z":20}],"max":20}`)
 	writeFile(t, web, "tiles/minecraft_overworld/3/0_0.png", "\x89PNG\r\n\x1a\nfake")
-	return newHandler(t.TempDir(), t.TempDir(), server, web, fakeChecker(nil, nil)), web
+	return newHandler(t.TempDir(), t.TempDir(), server, web, fakeChecker(nil, nil), listedEveryone(t)), web
 }
 
 // get sends a GET for target, which may hold anything a client could put
@@ -103,7 +103,7 @@ func TestMapMissingTile(t *testing.T) {
 
 func TestMapNotRenderedYet(t *testing.T) {
 	server := t.TempDir()
-	h := newHandler(t.TempDir(), t.TempDir(), server, filepath.Join(server, "nope"), fakeChecker(nil, nil))
+	h := newHandler(t.TempDir(), t.TempDir(), server, filepath.Join(server, "nope"), fakeChecker(nil, nil), listedEveryone(t))
 	for _, p := range []string{"/map/", "/map/tiles/minecraft_overworld/0/0_0.png"} {
 		rec := get(h, p)
 		if rec.Code != http.StatusNotFound {

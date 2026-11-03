@@ -21,7 +21,9 @@ import (
 //	PLAY_FIXTURE_ADDR=127.0.0.1:19150 go test ./cmd/play -run '^TestFixtureServer$' -count=1 -timeout 0
 //
 // Each server state gets its own port, counting up from PLAY_FIXTURE_ADDR:
-// active (Alice online), sleeping, starting, then offline.
+// active (Alice online), sleeping, starting, then offline. Every player
+// counts as listed, so all of them are public; the Go tests cover hidden
+// players.
 func TestFixtureServer(t *testing.T) {
 	addr := os.Getenv("PLAY_FIXTURE_ADDR")
 	if addr == "" {
@@ -39,6 +41,7 @@ func TestFixtureServer(t *testing.T) {
 	// go test runs in the package folder, web/cmd/play.
 	const dir, shared = "../../../sites/play", "../../../sites/shared"
 	server := worldtest.Build(t)
+	reg := listedEveryone(t)
 	states := []struct {
 		name      string
 		responses map[string]*ping.Response
@@ -70,7 +73,7 @@ func TestFixtureServer(t *testing.T) {
 		}
 		fmt.Printf("fixture: %s on http://%s\n", s.name, a)
 		go func() {
-			errs <- http.Serve(ln, newHandler(dir, shared, server, filepath.Join(server, "plugins", "squaremap", "web"), fakeChecker(s.responses, nil)))
+			errs <- http.Serve(ln, newHandler(dir, shared, server, filepath.Join(server, "plugins", "squaremap", "web"), fakeChecker(s.responses, nil), reg))
 		}()
 	}
 	if err := <-errs; err != nil && !errors.Is(err, http.ErrServerClosed) {

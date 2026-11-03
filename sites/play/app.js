@@ -126,10 +126,13 @@ function renderStatus() {
 
   let sub;
   if (s.state === "active") {
+    // Hidden players count in s.online but aren't named anywhere.
     sub = onlineNames(s.online, online);
   } else if (data.players[0]?.lastSeen) {
+    // Only public players are listed, so this is the latest public one,
+    // not necessarily whoever played last.
     const last = data.players[0];
-    sub = `Last played ${fmtAgo(last.lastSeen)} by ${last.name}`;
+    sub = `${last.name} was on ${fmtAgo(last.lastSeen)}`;
   } else {
     sub = " ";
   }
@@ -170,7 +173,7 @@ function renderWorld() {
     ["Spawn", w.spawn ? w.spawn.join(", ") : "Unknown", "X, Y, Z"],
     ["Version", w.version || "Unknown", "Java Edition"],
     ["Last saved", fmtAgo(w.lastSaved), w.lastSaved ? fmtWhen(w.lastSaved) : "Unknown"],
-    ["Players", fmtNum(data.players.length), "Have joined so far"],
+    ["Players", fmtNum(w.players ?? data.players.length), "Have joined so far"],
   ];
   const appear = once("world");
   $("facts").replaceChildren(

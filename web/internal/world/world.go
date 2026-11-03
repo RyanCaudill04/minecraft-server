@@ -38,6 +38,7 @@ type Info struct {
 	Thundering bool      `json:"thundering"`
 	LastSaved  time.Time `json:"lastSaved,omitzero"` // left out when unknown
 	Spawn      []int64   `json:"spawn,omitempty"`    // x, y, z
+	Players    int       `json:"players"`            // how many have joined, hidden ones included
 }
 
 // Player is one player's saved statistics.
@@ -99,6 +100,12 @@ func ReadInfo(worldDir string) (*Info, error) {
 	if pos, ok := nbt.Get(level, "Data", "spawn", "pos").([]int32); ok && len(pos) == 3 {
 		info.Spawn = []int64{int64(pos[0]), int64(pos[1]), int64(pos[2])}
 	}
+	// A count only: who they are is up to package listing.
+	statFiles, err := filepath.Glob(filepath.Join(worldDir, "players", "stats", "*.json"))
+	if err != nil {
+		return nil, fmt.Errorf("world: %w", err)
+	}
+	info.Players = len(statFiles)
 
 	// The day/night clock and weather are per-dimension files. They are
 	// optional: a fresh world may not have written them yet.
@@ -147,14 +154,23 @@ func ReadPlayers(serverDir, worldDir string) ([]Player, error) {
 		if err := readStats(path, &p); err != nil {
 			return nil, fmt.Errorf("world: %s: %w", id, err)
 		}
-		// The player data file is rewritten on every save while they're
-		// online and on logout, so its time is when they were last seen.
-		if fi, err := os.Stat(filepath.Join(playersDir, "data", id+".dat")); err == nil {
-			p.LastSeen = fi.ModTime().UTC()
-		}
 		p.Advancements, earned[id], err = readAdvancements(filepath.Join(playersDir, "advancements", id+".json"))
 		if err != nil {
 			return nil, fmt.Errorf("world: %s: %w", id, err)
+		}
+		// The player data file is rewritten on every save while they're
+		// online and on logout, and Paper saves the stats and advancements
+		// with it. LastSeen is the newest of the three, taken after the
+		// contents were read, so a save that lands mid-read looks newer
+		// than what was read rather than older.
+		for _, f := range []string{
+			filepath.Join(playersDir, "data", id+".dat"),
+			path,
+			filepath.Join(playersDir, "advancements", id+".json"),
+		} {
+			if fi, err := os.Stat(f); err == nil && fi.ModTime().After(p.LastSeen) {
+				p.LastSeen = fi.ModTime().UTC()
+			}
 		}
 		players = append(players, p)
 	}

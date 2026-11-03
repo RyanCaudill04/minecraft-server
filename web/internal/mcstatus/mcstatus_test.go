@@ -59,6 +59,16 @@ func TestCheckStates(t *testing.T) {
 				Players: []Player{{"Alice", "Alice-id"}, {"Bob", "Bob-id"}}},
 		},
 		{
+			name: "hidden players count but aren't listed",
+			responses: map[string]*ping.Response{
+				paperAddr: {Players: ping.Players{Online: 2, Max: 20, Sample: []ping.Player{
+					{Name: "Alice", ID: "Alice-id"},
+					{Name: "Anonymous Player", ID: AnonymousID},
+				}}},
+			},
+			want: Status{State: StateActive, Online: 2, Max: 20, Players: []Player{{"Alice", "Alice-id"}}},
+		},
+		{
 			name:      "only lazymc answers: sleeping",
 			responses: map[string]*ping.Response{lazymcAddr: response("§7Server is sleeping\n§aJoin to wake it up", 0)},
 			want:      Status{State: StateSleeping, Max: 20, Version: "Paper 26.2", Players: []Player{}},

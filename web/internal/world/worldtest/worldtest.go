@@ -29,8 +29,9 @@ const (
 )
 
 // Last-seen times written by Build: Bob most recently, then Alice. Carol has
-// no player data file.
+// no player data file, so her time is that of her stats file, the oldest.
 var (
+	CarolSeen = time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
 	AliceSeen = time.Date(2026, 10, 25, 20, 0, 0, 0, time.UTC)
 	BobSeen   = time.Date(2026, 10, 26, 21, 0, 0, 0, time.UTC)
 )
@@ -115,6 +116,12 @@ func Build(t testing.TB) string {
 		"DataVersion":               4903,
 	})
 
+	// Paper saves the data file, stats and advancements together.
+	stamp(t, filepath.Join(players, "stats", AliceID+".json"), AliceSeen)
+	stamp(t, filepath.Join(players, "advancements", AliceID+".json"), AliceSeen)
+	stamp(t, filepath.Join(players, "stats", BobID+".json"), BobSeen)
+	stamp(t, filepath.Join(players, "advancements", BobID+".json"), BobSeen)
+	stamp(t, filepath.Join(players, "stats", CarolID+".json"), CarolSeen)
 	touch(t, filepath.Join(players, "data", AliceID+".dat"), AliceSeen)
 	touch(t, filepath.Join(players, "data", BobID+".dat"), BobSeen)
 	return server
@@ -164,6 +171,14 @@ func touch(t testing.TB, path string, mtime time.Time) {
 	if err := os.WriteFile(path, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// stamp sets the modification time of an existing file.
+func stamp(t testing.TB, path string, mtime time.Time) {
+	t.Helper()
 	if err := os.Chtimes(path, mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
