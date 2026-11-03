@@ -68,14 +68,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "play: set -dir, -shared and -server (e.g. -dir sites/play -shared sites/shared -server ~/minecraft_server)")
 		os.Exit(2)
 	}
-	for _, d := range []string{*dir, *sharedDir, *serverDir} {
-		info, err := os.Stat(d)
-		if err != nil {
-			log.Fatalf("play: %v", err)
-		}
-		if !info.IsDir() {
-			log.Fatalf("play: %s is not a directory", d)
-		}
+	if err := site.CheckDirs(*dir, *sharedDir, *serverDir); err != nil {
+		log.Fatalf("play: %v", err)
 	}
 	if *mapDir == "" {
 		*mapDir = filepath.Join(*serverDir, "plugins", "squaremap", "web")

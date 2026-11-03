@@ -192,3 +192,34 @@ func TestServer(t *testing.T) {
 		t.Errorf("ReadHeaderTimeout = %v, IdleTimeout = %v; want both set", srv.ReadHeaderTimeout, srv.IdleTimeout)
 	}
 }
+
+func TestWriteJSONStatus(t *testing.T) {
+	rec := httptest.NewRecorder()
+	WriteJSON(rec, http.StatusAccepted, map[string]string{"action": "wake"})
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("code = %d, want 202", rec.Code)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q", cc)
+	}
+	if body := strings.TrimSpace(rec.Body.String()); body != `{"action":"wake"}` {
+		t.Errorf("body = %s", body)
+	}
+}
+
+func TestCheckDirs(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckDirs(dir, dir); err != nil {
+		t.Errorf("CheckDirs(folders) = %v", err)
+	}
+	if err := CheckDirs(dir, file); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Errorf("CheckDirs(file) = %v, want not a directory", err)
+	}
+	if err := CheckDirs(filepath.Join(dir, "missing")); err == nil {
+		t.Error("CheckDirs(missing) = nil, want an error")
+	}
+}

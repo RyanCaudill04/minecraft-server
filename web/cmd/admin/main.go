@@ -152,11 +152,11 @@ func newHandler(a *app) http.Handler {
 		} else if n != nil && n.Tag == s.Active {
 			res.Kind, res.Changes, res.ReleasedAt = n.Kind, n.Changes, n.ReleasedAt
 		}
-		site.WriteJSON(w, "admin: deploy", res)
+		site.WriteJSON(w, http.StatusOK, res)
 	})
 	mux.HandleFunc("GET /api/plugins", site.JSON("admin: plugins", installed))
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
-		site.WriteJSON(w, "admin: me", a.me(r))
+		site.WriteJSON(w, http.StatusOK, a.me(r))
 	})
 	mux.HandleFunc("GET /api/logs", a.signedIn(a.logs))
 	mux.Handle("POST /api/console", a.writes(a.console))
@@ -311,14 +311,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "admin: set -dir and -shared (e.g. -dir sites/admin -shared sites/shared)")
 		os.Exit(2)
 	}
-	for _, d := range []string{*dir, *sharedDir} {
-		info, err := os.Stat(d)
-		if err != nil {
-			log.Fatalf("admin: %v", err)
-		}
-		if !info.IsDir() {
-			log.Fatalf("admin: %s is not a directory", d)
-		}
+	if err := site.CheckDirs(*dir, *sharedDir); err != nil {
+		log.Fatalf("admin: %v", err)
 	}
 	auth := authFromEnv(*devUser)
 

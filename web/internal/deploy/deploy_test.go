@@ -542,12 +542,6 @@ func (h *harness) linked(unit string) bool {
 	return err == nil
 }
 
-// before reports whether call a comes before call b in calls.
-func before(calls []string, a, b string) bool {
-	i, j := slices.Index(calls, a), slices.Index(calls, b)
-	return i >= 0 && j >= 0 && i < j
-}
-
 // disabledAt returns the index of the first successful "disable --now"
 // call in calls that names unit, or -1.
 func disabledAt(calls []string, unit string) int {
