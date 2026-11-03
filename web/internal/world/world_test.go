@@ -79,11 +79,15 @@ func TestReadPlayers(t *testing.T) {
 	}
 	want := []world.Player{
 		{
-			ID:        worldtest.BobID,
-			Name:      "Bob",
-			LastSeen:  worldtest.BobSeen,
-			PlayTicks: 36000,
-			MobKills:  5,
+			ID:           worldtest.BobID,
+			Name:         "Bob",
+			LastSeen:     worldtest.BobSeen,
+			PlayTicks:    36000,
+			MobKills:     5,
+			Advancements: 6,
+			Firsts: []world.First{
+				{Advancement: "minecraft:story/mine_diamond", At: time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)},
+			},
 		},
 		{
 			ID:           worldtest.AliceID,
@@ -95,7 +99,12 @@ func TestReadPlayers(t *testing.T) {
 			BlocksMined:  123,
 			DistanceCM:   75000,
 			Jumps:        300,
-			Advancements: 2, // recipes and unfinished ones don't count
+			Advancements: 5, // recipes and unfinished ones don't count
+			Firsts: []world.First{
+				{Advancement: "minecraft:story/enter_the_nether", At: time.Date(2026, 10, 2, 1, 0, 0, 0, time.UTC)},
+				{Advancement: "minecraft:story/enter_the_end", At: time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)},
+				{Advancement: "minecraft:end/elytra", At: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)},
+			},
 		},
 		{
 			ID:   worldtest.CarolID,
