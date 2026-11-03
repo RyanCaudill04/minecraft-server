@@ -23,6 +23,9 @@
 .player-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .facts-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
 
+/* "Updated …" once status has failed for a while. */
+.stale { color: var(--amber); }
+
 /* ---------- Cards ---------- */
 
 .address {
@@ -60,6 +63,63 @@
   filter: drop-shadow(0 0 4px var(--accent));
   transition: cx 1s var(--ease), cy 1s var(--ease);
 }
+
+/* Map preview */
+.map-card { padding: 0; overflow: hidden; }
+.map-stage {
+  position: relative;
+  height: clamp(240px, 32vw, 360px);
+  background: var(--bg);
+}
+.map-stage iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  pointer-events: none; /* a preview: the button opens the real map */
+  opacity: 0;
+  transition: opacity 0.6s var(--ease);
+}
+.map-card[data-ready="true"] iframe { opacity: 1; }
+.map-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px;
+  text-align: center;
+  background:
+    radial-gradient(60% 80% at 50% 50%, var(--accent-soft), transparent),
+    repeating-linear-gradient(0deg, var(--border) 0 1px, transparent 1px 32px),
+    repeating-linear-gradient(90deg, var(--border) 0 1px, transparent 1px 32px);
+}
+.map-placeholder svg {
+  width: 32px;
+  height: 32px;
+  margin-bottom: 6px;
+  fill: none;
+  stroke: var(--faint);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.map-placeholder p { margin: 0; font-weight: 600; }
+.map-placeholder .muted { font-size: 0.8125rem; font-weight: 400; }
+.map-card[data-ready="true"] .map-placeholder { visibility: hidden; }
+.map-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border);
+}
+.map-foot p { margin: 0; font-size: 0.875rem; }
+.map-foot .btn { text-decoration: none; }
 
 /* Player cards */
 .player-card {
@@ -203,8 +263,16 @@ html:has(.sheet[open]) { overflow: hidden; }
 }
 .sheet-close svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 .sheet-head { display: flex; align-items: center; gap: 16px; margin: 8px 0 24px; }
-.sheet-head img { border-radius: 16px; background: var(--bg); image-rendering: pixelated; }
+.sheet-head img { flex: none; padding: 12px 18px; border-radius: 16px; background: var(--bg); image-rendering: pixelated; box-sizing: content-box; }
 .sheet-head h2 { font-size: 1.5rem; }
+.sheet-firsts { margin: 0 0 24px; }
+.sheet-firsts h3 { margin: 0 0 10px; color: var(--muted); font-size: 0.8125rem; font-weight: 600; }
+.badges { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.badge { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 12px; background: var(--bg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+.badge-icon { font-size: 1.5rem; line-height: 1; }
+.badge-text { display: flex; flex-direction: column; }
+.badge-label { font-weight: 650; }
+.badge-date { color: var(--muted); font-size: 0.8125rem; }
 .sheet-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0; }
 .sheet-stats div { padding: 14px; border-radius: 12px; background: var(--bg); }
 .sheet-stats dt { color: var(--muted); font-size: 0.8125rem; }
@@ -231,4 +299,6 @@ html:has(.sheet[open]) { overflow: hidden; }
   .player-grid { grid-template-columns: minmax(0, 1fr); }
   .facts-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .address { flex-direction: column; align-items: stretch; }
+  .map-stage { height: 260px; }
+  .map-foot { flex-direction: column; align-items: stretch; text-align: center; }
 }
