@@ -43,3 +43,21 @@ world-settings:
     # play also always serves an empty tiles/players.json.
     player-tracker:
       enabled: false
+  # Each world's section overrides "default" only for the keys it sets.
+  # play's map section shows the overworld and the nether by these names.
+  minecraft:overworld:
+    map:
+      display-name: Overworld
+      order: 0
+  minecraft:the_nether:
+    map:
+      display-name: Nether
+      order: 1
+      # A nether block is 8 overworld blocks across, so 625 here covers the
+      # same ground as the overworld's 5,000, linked by portals. squaremap
+      # draws the nether below its bedrock roof on its own.
+      visibility-limits:
+        - type: circle
+          center-x: 0
+          center-z: 0
+          radius: 625
