@@ -213,7 +213,7 @@ func TestChangePlayerRefusesBadRequests(t *testing.T) {
 		t.Errorf("text/plain: %d, want 415", code)
 	}
 	for _, path := range []string{
-		"/api/players/whitelist/on", "/api/players/whitelist/off", "/api/players/whitelist/reload",
+		"/api/players/whitelist/reload", "/api/players/whitelist/list",
 		"/api/players/bans/add", "/api/players/ops/op", "/api/players/whitelist",
 	} {
 		if code, _ := s.post(t, path, `{"name":"bob"}`, nil); code != http.StatusNotFound && code != http.StatusMethodNotAllowed {
@@ -329,5 +329,118 @@ func TestChangePlayerAsleep(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(server, "whitelist.json")); string(b) != testWhitelist {
 		t.Errorf("whitelist.json changed while asleep:\n%s", b)
+	}
+}
+
+// writeJoined gives serverDir a usercache.json and a stats file for each
+// player, as if they had all played.
+func writeJoined(t *testing.T, dir string, players ...Listed) {
+	t.Helper()
+	stats := filepath.Join(dir, "world", "players", "stats")
+	if err := os.MkdirAll(stats, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var cache []string
+	for _, p := range players {
+		writeServerFile(t, stats, p.UUID+".json", `{"stats":{}}`)
+		if p.Name != "" {
+			cache = append(cache, `{"uuid":"`+p.UUID+`","name":"`+p.Name+`","expiresOn":"2030-01-01 00:00:00 +0000"}`)
+		}
+	}
+	writeServerFile(t, dir, "usercache.json", "["+strings.Join(cache, ",")+"]")
+}
+
+func TestReadPlayersNotWhitelisted(t *testing.T) {
+	dir := t.TempDir()
+	writeServerFile(t, dir, "whitelist.json", testWhitelist) // Alice, bob_42, carol
+	writeJoined(t, dir,
+		Listed{Name: "Alice", UUID: "00000000-0000-4000-8000-00000000000a"},    // on it by UUID
+		Listed{Name: "CAROL", UUID: "00000000-0000-4000-8000-0000000000ff"},    // on it by name
+		Listed{Name: "zed", UUID: "00000000-0000-4000-8000-00000000000d"},      // not on it
+		Listed{Name: "Dave_2", UUID: "00000000-0000-4000-8000-00000000000e"},   // not on it
+		Listed{Name: "", UUID: "00000000-0000-4000-8000-00000000000f"},         // no name in the cache
+		Listed{Name: "bad name", UUID: "00000000-0000-4000-8000-000000000010"}, // not a valid username
+	)
+	p, err := readPlayers(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, l := range p.NotListed {
+		names = append(names, l.Name)
+	}
+	if got := strings.Join(names, ","); got != "Dave_2,zed" {
+		t.Errorf("not whitelisted = %q, want Dave_2,zed", got)
+	}
+
+	// A broken usercache.json only loses the hint, not the lists.
+	writeServerFile(t, dir, "usercache.json", "{")
+	p, err = readPlayers(dir)
+	if err != nil || len(p.Whitelist) != 3 || p.NotListed == nil || len(p.NotListed) != 0 {
+		t.Errorf("broken usercache.json = %+v, %v; want the whitelist and no hint", p, err)
+	}
+}
+
+func TestWhitelistOnOff(t *testing.T) {
+	s := newControlServer(t, "ryan@example.com")
+	s.rcon.SetHandle(func(cmd string) string { return "Done: " + cmd })
+	for path, want := range map[string]string{
+		"/api/players/whitelist/on":  "whitelist on",
+		"/api/players/whitelist/off": "whitelist off",
+	} {
+		before := len(s.rcon.Commands())
+		code, body := s.post(t, path, `{}`, nil)
+		if code != http.StatusOK || body["output"] != "Done: "+want {
+			t.Errorf("POST %s = %d %v", path, code, body)
+		}
+		if cmds := s.rcon.Commands(); len(cmds) != before+1 || cmds[before] != want {
+			t.Errorf("POST %s ran %q, want %q", path, cmds[before:], want)
+		}
+		if !strings.Contains(s.out.String(), "audit: ryan@example.com: "+want) {
+			t.Errorf("no audit line for %q", want)
+		}
+	}
+	// on and off are only for the whitelist.
+	for _, path := range []string{"/api/players/ops/on", "/api/players/ops/add-all"} {
+		if code, _ := s.post(t, path, `{}`, nil); code != http.StatusNotFound {
+			t.Errorf("POST %s = %d, want 404", path, code)
+		}
+	}
+}
+
+func TestWhitelistAddAll(t *testing.T) {
+	s := newControlServer(t, "ryan@example.com")
+	s.rcon.SetHandle(func(cmd string) string { return "Added " + strings.TrimPrefix(cmd, "whitelist add ") })
+	writeServerFile(t, s.serverDir, "whitelist.json", testWhitelist)
+	writeJoined(t, s.serverDir,
+		Listed{Name: "Alice", UUID: "00000000-0000-4000-8000-00000000000a"},
+		Listed{Name: "zed", UUID: "00000000-0000-4000-8000-00000000000d"},
+		Listed{Name: "Dave_2", UUID: "00000000-0000-4000-8000-00000000000e"},
+	)
+
+	code, body := s.post(t, "/api/players/whitelist/add-all", `{}`, nil)
+	if code != http.StatusOK || body["output"] != "Added Dave_2\nAdded zed" {
+		t.Errorf("add-all = %d %v", code, body)
+	}
+	if got := strings.Join(s.rcon.Commands(), ";"); got != "whitelist add Dave_2;whitelist add zed" {
+		t.Errorf("add-all ran %q", got)
+	}
+
+	// Once everyone is on it, nothing runs.
+	writeServerFile(t, s.serverDir, "whitelist.json", `[
+  {"uuid": "00000000-0000-4000-8000-00000000000a", "name": "Alice"},
+  {"uuid": "00000000-0000-4000-8000-00000000000d", "name": "zed"},
+  {"uuid": "00000000-0000-4000-8000-00000000000e", "name": "Dave_2"}
+]`)
+	before := len(s.rcon.Commands())
+	code, body = s.post(t, "/api/players/whitelist/add-all", `{}`, nil)
+	if code != http.StatusOK || !strings.Contains(body["output"], "already whitelisted") || len(s.rcon.Commands()) != before {
+		t.Errorf("add-all with nobody missing = %d %v, ran %q", code, body, s.rcon.Commands()[before:])
+	}
+
+	// A broken usercache.json is an error here, not "nobody missing".
+	writeServerFile(t, s.serverDir, "usercache.json", "{")
+	if code, _ := s.post(t, "/api/players/whitelist/add-all", `{}`, nil); code != http.StatusServiceUnavailable {
+		t.Errorf("add-all with a broken usercache.json = %d, want 503", code)
 	}
 }

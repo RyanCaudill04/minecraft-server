@@ -732,6 +732,24 @@ const PLAYER_NAME = /^[A-Za-z0-9_]{3,16}$/;
 const PLAYER_LISTS = {
   whitelist: {
     add: (n) => ({ doing: `Adding ${n}…` }),
+    on: (missing) => ({
+      doing: "Turning the whitelist on…",
+      ask: [
+        "Turn the whitelist on?",
+        missing.length
+          ? `Only players on the list can join. ${joinNames(missing)} ${missing.length === 1 ? "has played here but isn't" : "have played here but aren't"} on it, so they'll be locked out. Cancel and add them first to keep them.`
+          : "Only players on the list can join. Everyone who has played here is on it.",
+        "Turn on",
+      ],
+    }),
+    off: () => ({
+      doing: "Turning the whitelist off…",
+      ask: ["Turn the whitelist off?", "Anyone who knows the server's address can join.", "Turn off"],
+    }),
+    "add-all": (missing) => ({
+      doing: `Adding ${missing.length === 1 ? missing[0].name : `${missing.length} players`}…`,
+      ask: [`Whitelist ${missing.length === 1 ? missing[0].name : `all ${missing.length} players`}?`, `Adds ${joinNames(missing)} to the whitelist.`, "Add all"],
+    }),
     remove: (n) => ({
       doing: `Removing ${n}…`,
       ask: [`Remove ${n} from the whitelist?`, `${n} can't join while the whitelist is on. Players already online stay until they leave.`, "Remove"],
@@ -748,6 +766,14 @@ const PLAYER_LISTS = {
     }),
   },
 };
+
+// "Alice", "Alice and Bob", "Alice, Bob and 3 others".
+function joinNames(players) {
+  const names = players.map((p) => p.name);
+  if (names.length <= 1) return names.join("");
+  if (names.length <= 3) return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `${names.slice(0, 2).join(", ")} and ${names.length - 2} others`;
+}
 
 // A change in flight. The buttons stay enabled meanwhile, so focus stays
 // put; a second click is ignored.
@@ -803,17 +829,38 @@ function renderPlayers() {
   $("players-asleep-text").textContent = why;
   $("players-asleep").querySelector('[data-action="wake"]').hidden = data.status?.state !== "sleeping";
 
-  const state = $("whitelist-state");
-  state.hidden = d?.white_list == null;
-  state.dataset.kind = d?.white_list ? "active" : "rolled_back";
-  state.textContent = d?.white_list ? (d.enforce_whitelist ? "On, enforced" : "On") : "Off";
-  state.title = d?.white_list
-    ? d.enforce_whitelist
-      ? "white-list and enforce-whitelist are on: only these players can join, and anyone removed is kicked."
-      : "white-list is on: only these players can join."
-    : "white-list is off in server.properties, so anyone can join. This list is kept for when it's on.";
+  const on = d?.white_list;
+  const sw = $("whitelist-switch");
+  sw.setAttribute("aria-checked", on ? "true" : "false");
+  if (!can && sw === document.activeElement) sw.closest(".card").focus();
+  sw.disabled = !can || on == null;
+  $("whitelist-switch-state").textContent = !d ? "…" : on == null ? "unknown" : on ? "on" : "off";
+  $("whitelist-mode-text").textContent = !d
+    ? ""
+    : on == null
+      ? "server.properties has no white-list setting yet; Paper writes it on its first start."
+      : on
+        ? d.enforce_whitelist
+          ? "Only players on the list can join, and anyone removed is kicked straight away."
+          : "Only players on the list can join. Anyone removed stays until they leave."
+        : "Anyone can join. The list is kept for when it's on.";
+  const n = d?.whitelist.length ?? 0;
+  $("whitelist-count").textContent = d ? (n === 1 ? "1 player" : `${n} players`) : "";
 
-  for (const form of document.querySelectorAll(".player-form")) {
+  const missing = d?.not_whitelisted ?? [];
+  $("not-listed").hidden = !missing.length;
+  $("not-listed-text").textContent = on
+    ? `${missing.length === 1 ? "This player has" : "These players have"} joined before but can't now, because the whitelist is on.`
+    : `${missing.length === 1 ? "This player has" : "These players have"} joined before. Add them before turning the whitelist on, or they'll be locked out.`;
+  const all = $("whitelist-add-all");
+  all.textContent = missing.length > 1 ? `Add all ${missing.length}` : "Add";
+  if (!can && all === document.activeElement) all.closest(".card").focus();
+  all.disabled = !can;
+
+  $("whitelist-switch").addEventListener("click", () => whitelistAction(data.players?.white_list ? "off" : "on"));
+$("whitelist-add-all").addEventListener("click", () => whitelistAction("add-all"));
+
+for (const form of document.querySelectorAll(".player-form")) {
     for (const el of form.elements) {
       // Disabling the focused field would drop focus to the top of the
       // page, so keep it on the card instead.
@@ -829,6 +876,7 @@ function renderPlayers() {
 
   renderPlayerList("whitelist", d?.whitelist ?? [], can);
   renderPlayerList("ops", d?.ops ?? [], can);
+  renderPlayerList("not-listed", missing, can);
 }
 
 function setPlayerEmpty(id, text) {
@@ -870,10 +918,15 @@ function renderPlayerList(list, players, can) {
         li.append(level);
       }
 
-      const b = button(list === "ops" ? "Deop" : "Remove", "remove", p.name, "btn-secondary");
-      b.setAttribute("aria-label", list === "ops" ? `Deop ${p.name}` : `Remove ${p.name} from the whitelist`);
+      const [label, aria, target, action] = {
+        ops: ["Deop", `Deop ${p.name}`, "ops", "remove"],
+        whitelist: ["Remove", `Remove ${p.name} from the whitelist`, "whitelist", "remove"],
+        "not-listed": ["Add", `Add ${p.name} to the whitelist`, "whitelist", "add"],
+      }[list];
+      const b = button(label, action, p.name, "btn-secondary");
+      b.setAttribute("aria-label", aria);
       b.disabled = !can;
-      b.addEventListener("click", () => changePlayer(list, "remove", p.name));
+      b.addEventListener("click", () => changePlayer(target, action, p.name));
       li.append(b);
       return li;
     }),
@@ -891,15 +944,26 @@ async function changePlayer(list, action, name) {
     setPlayersNote("A Minecraft name is 3 to 16 letters, digits or underscores.", true);
     return false;
   }
-  const step = PLAYER_LISTS[list][action](name);
+  return playerRequest(list, action, PLAYER_LISTS[list][action](name), { name });
+}
+
+// Whitelist on, off and add-all: no name, and the server works out who
+// is missing itself.
+function whitelistAction(action) {
+  if (playersBusy) return false;
+  return playerRequest("whitelist", action, PLAYER_LISTS.whitelist[action](data.players?.not_whitelisted ?? []), {});
+}
+
+async function playerRequest(list, action, step, body) {
   if (step.ask && !(await ask(...step.ask))) return false;
+  if (playersBusy) return false;
 
   playersBusy = true;
   renderPlayers();
   setPlayersNote(step.doing);
   let ok = false;
   try {
-    const { output } = await post(`/api/players/${list}/${action}`, { name });
+    const { output } = await post(`/api/players/${list}/${action}`, body);
     // Paper's own words, e.g. "Added steve to the whitelist" or "That
     // player does not exist".
     setPlayersNote(output || "Done.");

@@ -244,7 +244,15 @@
             <div class="cell">
               <div class="log-head">
                 <span class="eyebrow">Whitelist</span>
-                <span class="kind" id="whitelist-state" hidden></span>
+                <span class="muted" id="whitelist-count"></span>
+              </div>
+              <div class="whitelist-mode">
+                <button type="button" class="switch" id="whitelist-switch" role="switch" aria-checked="false"
+                        aria-describedby="whitelist-mode-text" disabled>
+                  <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+                  <span class="switch-label">Whitelist <span id="whitelist-switch-state">…</span></span>
+                </button>
+                <p class="muted" id="whitelist-mode-text"></p>
               </div>
               <form class="command player-form" data-list="whitelist" autocomplete="off" novalidate>
                 <label class="prompt">
@@ -255,6 +263,14 @@
               </form>
               <ul class="change-list player-list" id="whitelist-list" aria-label="Whitelisted players"></ul>
               <p class="muted" id="whitelist-empty">&nbsp;</p>
+              <div class="not-listed" id="not-listed" hidden>
+                <div class="log-head">
+                  <span class="eyebrow" id="not-listed-title">Played here, not on the whitelist</span>
+                  <button type="button" class="btn btn-secondary" id="whitelist-add-all" disabled>Add all</button>
+                </div>
+                <p class="muted" id="not-listed-text"></p>
+                <ul class="change-list player-list" id="not-listed-list" aria-labelledby="not-listed-title"></ul>
+              </div>
             </div>
             <div class="cell">
               <div class="log-head">
