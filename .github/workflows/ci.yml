@@ -315,7 +315,9 @@ jobs:
       - name: Change detection tests
         run: scripts/ci-changes_test.sh
       - name: Release notes tests
-        run: scripts/release-notes_test.sh
+        run: |
+          scripts/release-notes_test.sh
+          scripts/release-changes_test.sh
       - name: World backup tests
         run: scripts/mc-backup_test.sh
       - name: Server fetch and migration tests
