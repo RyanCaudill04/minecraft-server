@@ -12,6 +12,8 @@
 //	                          deploy's result
 //	GET  /api/plugins         the jars in the server's plugins folder, checked
 //	                          against plugins/manifest.json
+//	GET  /api/health          the Pi's CPU temperature, memory, disk, load and
+//	                          uptime, and Paper's TPS and MSPT while it's awake
 //	GET  /api/me              who is signed in and which controls they can use
 //	GET  /api/logs?lines=n    the end of Paper's latest.log
 //	POST /api/console         run {"command": "..."} over RCON
@@ -68,6 +70,7 @@ import (
 	"github.com/ryancaudill04/minecraft-server/web/internal/plugins"
 	"github.com/ryancaudill04/minecraft-server/web/internal/rcon"
 	"github.com/ryancaudill04/minecraft-server/web/internal/site"
+	"github.com/ryancaudill04/minecraft-server/web/internal/sysinfo"
 )
 
 // Deploy is the JSON body of GET /api/deploy. Releases built before notes
@@ -112,6 +115,9 @@ type app struct {
 	backupUnit control.Controller
 	// logPath is Paper's latest.log.
 	logPath string
+	// hostRoot is where /proc and /sys are read from for /api/health; ""
+	// is the real root, and tests use a folder of synthetic files.
+	hostRoot string
 	// user returns the verified email of whoever sent r, or "" if there
 	// isn't one. Only a verified user may use the controls. It defaults to
 	// the email the Access check put on the request.
@@ -120,6 +126,7 @@ type app struct {
 	status     *site.Cache[Status]
 	unitErrs   logOnce
 	backupErrs logOnce
+	healthErrs logOnce
 }
 
 // newHandler routes the API and serves the static page from a.dir and the
@@ -143,8 +150,23 @@ func newHandler(a *app) http.Handler {
 		return Plugins{Manifest: m != nil, Plugins: list}, err
 	}}
 
+	// The disk is the one the server's world is on. A reading that's
+	// missing (no thermal zone in a container, or /proc on macOS) is
+	// logged once, then left out of every reply.
+	missing := map[string]string{}
+	host := &sysinfo.Reader{Root: a.hostRoot, DiskPath: a.serverDir, Errs: func(name string, err error) {
+		if msg := err.Error(); missing[name] != msg {
+			missing[name] = msg
+			log.Printf("admin: health: %s: %v", name, err)
+		}
+	}}
+	health := &site.Cache[Health]{MaxAge: healthMaxAge, Load: func(ctx context.Context) (Health, error) {
+		return a.loadHealth(ctx, host)
+	}}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", site.JSON("admin: status", a.status))
+	mux.HandleFunc("GET /api/health", site.JSON("admin: health", health))
 	mux.HandleFunc("GET /api/deploy", func(w http.ResponseWriter, r *http.Request) {
 		// A few small files, so it's read fresh on every request. agent has
 		// no API set, so this never calls GitHub.
