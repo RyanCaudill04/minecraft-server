@@ -26,6 +26,10 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.2"/><path d="M3.5 17c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"/></svg>
           Players
         </a>
+        <a href="#activity">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10h3.5l2-5.5 4 11 2-5.5h3.5"/></svg>
+          Activity
+        </a>
         <a href="#world">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2.2 2.8 4.5 2.8 7s-.8 4.8-2.8 7c-2-2.2-2.8-4.5-2.8-7S8 5.2 10 3z"/></svg>
           World
@@ -100,6 +104,17 @@
           <p class="muted">Everyone who has joined. Select a player to see their stats.</p>
         </header>
         <div class="grid player-grid" id="player-grid"></div>
+      </section>
+
+      <section id="activity" class="section">
+        <header class="section-head">
+          <h2>Activity</h2>
+          <p class="muted">Recent advancements and first joins, from the last save.</p>
+        </header>
+        <article class="card feed-card">
+          <ol class="feed" id="feed" aria-label="Recent activity" hidden></ol>
+          <p class="feed-empty muted" id="feed-empty">Loading activity…</p>
+        </article>
       </section>
 
       <section id="world" class="section">

@@ -154,6 +154,31 @@
 .player-card .who { min-width: 0; }
 .online-badge { color: var(--green-text); font-weight: 600; }
 
+/* Activity feed */
+.feed-card { padding: 8px; }
+.feed { list-style: none; margin: 0; padding: 0; }
+.feed-item {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+}
+.feed-item + .feed-item { border-top: 1px solid var(--border); }
+.feed-item img, .feed-item .head-fallback {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--bg);
+  image-rendering: pixelated;
+}
+.feed-text { min-width: 0; }
+.feed-line { margin: 0; overflow-wrap: anywhere; }
+.feed-line strong { font-weight: 650; }
+.feed-when { display: block; margin-top: 2px; color: var(--muted); font-size: 0.8125rem; font-variant-numeric: tabular-nums; }
+.feed-ago { color: var(--text); font-weight: 500; }
+.feed-empty { margin: 0; padding: 12px; }
+
 /* World facts */
 .fact { display: flex; flex-direction: column; gap: 4px; padding: 16px 18px; }
 .fact .label { color: var(--muted); font-size: 0.8125rem; font-weight: 500; }

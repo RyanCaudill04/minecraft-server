@@ -34,6 +34,10 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M6 8l2.5 2L6 12M10.5 12.5H14"/></svg>
           Console
         </a>
+        <a href="#players">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7.5" cy="7" r="3"/><path d="M2.5 16.5c.5-2.8 2.5-4.5 5-4.5s4.5 1.7 5 4.5M13 4.2a3 3 0 0 1 0 5.6M14.5 12.3c1.6.6 2.7 2 3 4.2"/></svg>
+          Players
+        </a>
         <a href="#backups">
           <svg viewBox="0 0 20 20" aria-hidden="true"><ellipse cx="10" cy="5" rx="6.5" ry="2.5"/><path d="M3.5 5v5c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5V5M3.5 10v5c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5v-5"/></svg>
           Backups
@@ -224,6 +228,51 @@
             <pre class="log" id="log" tabindex="0" aria-label="Recent log lines"></pre>
           </article>
         </div>
+      </section>
+
+      <section id="players" class="section">
+        <header class="section-head">
+          <h2>Players</h2>
+          <p class="muted">The whitelist and operators, read from <code>whitelist.json</code> and <code>ops.json</code>. Changes go to Paper over RCON.</p>
+        </header>
+        <article class="card players-card" tabindex="-1">
+          <div class="asleep" id="players-asleep" hidden>
+            <p id="players-asleep-text"></p>
+            <button type="button" class="btn btn-secondary" data-action="wake" disabled>Wake Paper</button>
+          </div>
+          <div class="player-cols">
+            <div class="cell">
+              <div class="log-head">
+                <span class="eyebrow">Whitelist</span>
+                <span class="kind" id="whitelist-state" hidden></span>
+              </div>
+              <form class="command player-form" data-list="whitelist" autocomplete="off" novalidate>
+                <label class="prompt">
+                  <input name="name" type="text" maxlength="16" spellcheck="false" autocapitalize="off"
+                         placeholder="Player name" aria-label="Player to add to the whitelist" disabled>
+                </label>
+                <button type="submit" class="btn btn-primary" disabled>Add</button>
+              </form>
+              <ul class="change-list player-list" id="whitelist-list" aria-label="Whitelisted players"></ul>
+              <p class="muted" id="whitelist-empty">&nbsp;</p>
+            </div>
+            <div class="cell">
+              <div class="log-head">
+                <span class="eyebrow">Operators</span>
+              </div>
+              <form class="command player-form" data-list="ops" autocomplete="off" novalidate>
+                <label class="prompt">
+                  <input name="name" type="text" maxlength="16" spellcheck="false" autocapitalize="off"
+                         placeholder="Player name" aria-label="Player to make an operator" disabled>
+                </label>
+                <button type="submit" class="btn btn-primary" disabled>Op</button>
+              </form>
+              <ul class="change-list player-list" id="ops-list" aria-label="Operators"></ul>
+              <p class="muted" id="ops-empty">&nbsp;</p>
+            </div>
+          </div>
+          <p class="note" id="players-note" role="status"></p>
+        </article>
       </section>
 
       <section id="backups" class="section">

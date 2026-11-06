@@ -2,8 +2,9 @@
 // Updates only text and data-state, so polling never moves keyboard focus;
 // the list of changes is rebuilt only when the release changes. The Server
 // and Console sections POST actions and commands; their output is only
-// ever set as text. The Backups section lists the world backups and
-// keeps, deletes, downloads and starts them.
+// ever set as text. The Players section edits the whitelist and ops over
+// RCON. The Backups section lists the world backups and keeps, deletes,
+// downloads and starts them.
 
 const STATUS_MS = 10_000; // server state and who's online
 const DEPLOY_MS = 60_000; // the active release (changes a few times a day)
@@ -25,7 +26,7 @@ const KINDS = { feature: "Feature", fix: "Bug fix", other: "Other" };
 const OUTCOMES = { success: "Succeeded", failed: "Failed", rolled_back: "Rolled back" };
 const REPO = "https://github.com/RyanCaudill04/minecraft-server";
 
-const data = { status: null, deploy: null, plugins: null, me: null, backups: null, health: null };
+const data = { status: null, deploy: null, plugins: null, me: null, backups: null, players: null, health: null };
 
 const PLUGIN_STATUS = {
   pinned: { label: "Pinned", note: "Matches the manifest." },
@@ -54,6 +55,7 @@ async function refreshStatus() {
   }
   renderStatus();
   renderUnit();
+  renderPlayers();
   tick();
 }
 
@@ -491,6 +493,7 @@ async function refreshMe() {
   renderUnit();
   renderConsole();
   renderBackups();
+  renderPlayers();
 }
 
 function renderMe() {
@@ -717,6 +720,208 @@ async function refreshLogs() {
   if (log.textContent !== text) log.textContent = text;
   if (atBottom) log.scrollTop = log.scrollHeight;
   $("log-updated").textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
+}
+
+// ---------- Players ----------
+
+const PLAYERS_MS = 30_000; // the lists (Paper saves them on each change)
+
+// A Minecraft name. admin checks it again before anything reaches RCON.
+const PLAYER_NAME = /^[A-Za-z0-9_]{3,16}$/;
+
+const PLAYER_LISTS = {
+  whitelist: {
+    add: (n) => ({ doing: `Adding ${n}…` }),
+    remove: (n) => ({
+      doing: `Removing ${n}…`,
+      ask: [`Remove ${n} from the whitelist?`, `${n} can't join while the whitelist is on. Players already online stay until they leave.`, "Remove"],
+    }),
+  },
+  ops: {
+    add: (n) => ({
+      doing: `Making ${n} an operator…`,
+      ask: [`Make ${n} an operator?`, `${n} gets every command, including stop, op and whitelist.`, "Op"],
+    }),
+    remove: (n) => ({
+      doing: `Removing ${n}'s operator status…`,
+      ask: [`Deop ${n}?`, `${n} can no longer run operator commands.`, "Deop"],
+    }),
+  },
+};
+
+// A change in flight. The buttons stay enabled meanwhile, so focus stays
+// put; a second click is ignored.
+let playersBusy = false;
+let playersTried = false; // the lists have been asked for once
+
+async function refreshPlayers() {
+  playersTried = true;
+  try {
+    data.players = await getJSON("/api/players");
+  } catch (err) {
+    console.warn(err);
+    data.players = null;
+  }
+  renderPlayers();
+}
+
+function setPlayersNote(text, isError = false) {
+  const note = $("players-note");
+  note.textContent = text;
+  note.classList.toggle("error", isError);
+}
+
+// Changes need RCON, so Paper has to be awake. The lists still show from
+// the files while it sleeps.
+function playersLocked() {
+  const me = data.me;
+  if (!me) return "Checking…";
+  if (!me.console) return me.locked ?? "RCON isn't available.";
+  const s = data.status;
+  switch (s?.state) {
+    case "active":
+      return "";
+    case "sleeping":
+      return "Paper is asleep, so the lists can't change: Paper looks up each player and saves the files itself. Wake it to edit them; LazyMC puts it back to sleep after 5 minutes with nobody online.";
+    case "starting":
+      return "Paper is starting. The lists can change once it's up.";
+    case "offline":
+      return "The server is off. Start it from the Server section to change the lists.";
+  }
+  return "Checking the server…";
+}
+
+function renderPlayers() {
+  const d = data.players;
+  const locked = playersLocked();
+  const can = !locked;
+
+  // The note only explains why editing is off once admin knows who you
+  // are; a locked user sees why in the empty-list text instead.
+  const why = data.me?.console && locked && data.status ? locked : "";
+  $("players-asleep").hidden = !why;
+  $("players-asleep-text").textContent = why;
+  $("players-asleep").querySelector('[data-action="wake"]').hidden = data.status?.state !== "sleeping";
+
+  const state = $("whitelist-state");
+  state.hidden = d?.white_list == null;
+  state.dataset.kind = d?.white_list ? "active" : "rolled_back";
+  state.textContent = d?.white_list ? (d.enforce_whitelist ? "On, enforced" : "On") : "Off";
+  state.title = d?.white_list
+    ? d.enforce_whitelist
+      ? "white-list and enforce-whitelist are on: only these players can join, and anyone removed is kicked."
+      : "white-list is on: only these players can join."
+    : "white-list is off in server.properties, so anyone can join. This list is kept for when it's on.";
+
+  for (const form of document.querySelectorAll(".player-form")) {
+    for (const el of form.elements) {
+      // Disabling the focused field would drop focus to the top of the
+      // page, so keep it on the card instead.
+      if (!can && el === document.activeElement) form.closest(".card").focus();
+      el.disabled = !can;
+    }
+  }
+
+  let unread = "";
+  if (!d) unread = !playersTried ? "Loading…" : data.me && !data.me.email ? data.me.locked : "Couldn't read the lists.";
+  setPlayerEmpty("whitelist-empty", unread || (d.whitelist.length ? "" : "Nobody is whitelisted."));
+  setPlayerEmpty("ops-empty", unread || (d.ops.length ? "" : "Nobody is an operator."));
+
+  renderPlayerList("whitelist", d?.whitelist ?? [], can);
+  renderPlayerList("ops", d?.ops ?? [], can);
+}
+
+function setPlayerEmpty(id, text) {
+  $(id).textContent = text;
+  $(id).hidden = !text;
+}
+
+// Rebuilds a list when it changes, and puts focus back on the same
+// button afterwards (or on the card, if that player is gone).
+const shownPlayers = {};
+function renderPlayerList(list, players, can) {
+  const key = JSON.stringify([players, can]);
+  if (key === shownPlayers[list]) return;
+  shownPlayers[list] = key;
+
+  const ul = $(`${list}-list`);
+  const active = document.activeElement;
+  const refocus = ul.contains(active) ? active.dataset.name : null;
+
+  ul.replaceChildren(
+    ...players.map((p) => {
+      const li = document.createElement("li");
+      const who = document.createElement("span");
+      who.className = "who";
+      const name = document.createElement("span");
+      name.className = "title";
+      name.textContent = p.name;
+      const id = document.createElement("span");
+      id.className = "file";
+      id.textContent = p.uuid;
+      who.append(name, id);
+      li.append(who);
+
+      if (list === "ops") {
+        const level = document.createElement("span");
+        level.className = "kind";
+        level.textContent = `Level ${p.level}`;
+        level.title = "Operator permission level, 1 to 4.";
+        li.append(level);
+      }
+
+      const b = button(list === "ops" ? "Deop" : "Remove", "remove", p.name, "btn-secondary");
+      b.setAttribute("aria-label", list === "ops" ? `Deop ${p.name}` : `Remove ${p.name} from the whitelist`);
+      b.disabled = !can;
+      b.addEventListener("click", () => changePlayer(list, "remove", p.name));
+      li.append(b);
+      return li;
+    }),
+  );
+
+  if (refocus) {
+    const again = [...ul.querySelectorAll("[data-name]")].find((n) => n.dataset.name === refocus && !n.disabled);
+    (again ?? ul.closest(".card")).focus();
+  }
+}
+
+async function changePlayer(list, action, name) {
+  if (playersBusy) return false;
+  if (!PLAYER_NAME.test(name)) {
+    setPlayersNote("A Minecraft name is 3 to 16 letters, digits or underscores.", true);
+    return false;
+  }
+  const step = PLAYER_LISTS[list][action](name);
+  if (step.ask && !(await ask(...step.ask))) return false;
+
+  playersBusy = true;
+  renderPlayers();
+  setPlayersNote(step.doing);
+  let ok = false;
+  try {
+    const { output } = await post(`/api/players/${list}/${action}`, { name });
+    // Paper's own words, e.g. "Added steve to the whitelist" or "That
+    // player does not exist".
+    setPlayersNote(output || "Done.");
+    ok = true;
+  } catch (err) {
+    setPlayersNote(err.message, true);
+  } finally {
+    playersBusy = false;
+  }
+  await refreshPlayers();
+  return ok;
+}
+
+for (const form of document.querySelectorAll(".player-form")) {
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = form.elements.name;
+    const name = input.value.trim();
+    if (!name) return;
+    if (await changePlayer(form.dataset.list, "add", name)) input.value = "";
+    if (!input.disabled) input.focus();
+  });
 }
 
 // ---------- Backups ----------
@@ -979,6 +1184,7 @@ function start() {
   refreshDeploy();
   refreshPlugins();
   refreshBackups();
+  refreshPlayers();
   refreshHealth();
   refreshMe().then(refreshLogs);
   timers = [
@@ -986,6 +1192,7 @@ function start() {
     setInterval(refreshDeploy, DEPLOY_MS),
     setInterval(refreshPlugins, PLUGINS_MS),
     setInterval(refreshBackups, BACKUPS_MS),
+    setInterval(refreshPlayers, PLAYERS_MS),
     setInterval(refreshHealth, HEALTH_MS),
     setInterval(refreshLogs, LOG_MS),
     setInterval(tick, 1000),

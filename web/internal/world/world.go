@@ -255,15 +255,8 @@ func readAdvancements(path string) (int, map[string]time.Time, error) {
 		if !slices.Contains(Firsts, key) {
 			continue
 		}
-		var last time.Time
-		for _, v := range adv.Criteria {
-			s, _ := v.(string)
-			if t, err := time.Parse(advancementTime, s); err == nil && t.After(last) {
-				last = t
-			}
-		}
-		if !last.IsZero() {
-			done[key] = last.UTC()
+		if last := lastCriterion(adv.Criteria); !last.IsZero() {
+			done[key] = last
 		}
 	}
 	return n, done, nil

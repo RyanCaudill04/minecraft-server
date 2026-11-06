@@ -89,27 +89,29 @@ func Build(t testing.TB) string {
 	// Alice and Bob race for the milestones world.Firsts tracks. Alice wins
 	// the Nether, the End and elytra; Bob wins diamonds.
 	writeJSON(t, filepath.Join(players, "advancements", AliceID+".json"), map[string]any{
-		"minecraft:story/root":             map[string]any{"done": true},
-		"minecraft:story/mine_stone":       map[string]any{"done": true},
-		"minecraft:story/smelt_iron":       map[string]any{"done": false},
-		"minecraft:recipes/misc/torch":     map[string]any{"done": true},
+		"minecraft:story/root":       map[string]any{"done": true},
+		"minecraft:story/mine_stone": map[string]any{"done": true},
+		"minecraft:story/smelt_iron": map[string]any{"done": false},
+		// A recipe unlock with a time: not counted, and not in the activity
+		// feed, but it can set when the player joined.
+		"minecraft:recipes/misc/torch":     Advancement("2026-10-03 08:00:00 +0000"),
 		"minecraft:recipes/building/stone": map[string]any{"done": true},
-		"minecraft:story/enter_the_nether": advancement("2026-10-01 20:00:00 -0500"),
-		"minecraft:story/enter_the_end":    advancement("2026-10-08 12:00:00 +0000"),
-		"minecraft:end/elytra":             advancement("2026-10-20 12:00:00 +0000"),
+		"minecraft:story/enter_the_nether": Advancement("2026-10-01 20:00:00 -0500"),
+		"minecraft:story/enter_the_end":    Advancement("2026-10-08 12:00:00 +0000"),
+		"minecraft:end/elytra":             Advancement("2026-10-20 12:00:00 +0000"),
 		// Unfinished, so no badge, and Bob's has no readable time.
 		"minecraft:end/kill_dragon": map[string]any{"done": false, "criteria": map[string]any{"killed_dragon": "2026-10-01 00:00:00 +0000"}},
 		"DataVersion":               4903,
 	})
 	writeJSON(t, filepath.Join(players, "advancements", BobID+".json"), map[string]any{
-		"minecraft:story/enter_the_nether": advancement("2026-10-02 09:00:00 +0000"),
-		"minecraft:story/mine_diamond":     advancement("2026-10-02 10:00:00 +0000"),
+		"minecraft:story/enter_the_nether": Advancement("2026-10-02 09:00:00 +0000"),
+		"minecraft:story/mine_diamond":     Advancement("2026-10-02 10:00:00 +0000"),
 		// Done when the last criterion is, so after Alice.
-		"minecraft:story/enter_the_end": advancement("2026-10-07 12:00:00 +0000", "2026-10-09 12:00:00 +0000"),
+		"minecraft:story/enter_the_end": Advancement("2026-10-07 12:00:00 +0000", "2026-10-09 12:00:00 +0000"),
 		// The same instant as Alice: the lower ID (Alice) wins the tie.
-		"minecraft:end/elytra": advancement("2026-10-20 07:00:00 -0500"),
+		"minecraft:end/elytra": Advancement("2026-10-20 07:00:00 -0500"),
 		// Done, but the time can't be read, so it can't be a first.
-		"minecraft:nether/summon_wither": advancement("not a time"),
+		"minecraft:nether/summon_wither": Advancement("not a time"),
 		// A criterion that isn't a time string still counts as done.
 		"minecraft:end/kill_dragon": map[string]any{"done": true, "criteria": map[string]any{"killed_dragon": 5}},
 		"DataVersion":               4903,
@@ -131,14 +133,21 @@ func stats(custom, mined map[string]int64) map[string]any {
 	return map[string]any{"stats": s, "DataVersion": 4903}
 }
 
-// advancement is a completed advancement with one criterion per time, in
+// Advancement is a completed advancement with one criterion per time, in
 // the format advancement files use.
-func advancement(times ...string) map[string]any {
+func Advancement(times ...string) map[string]any {
 	criteria := map[string]any{}
 	for i, t := range times {
 		criteria[fmt.Sprintf("criterion_%d", i)] = t
 	}
 	return map[string]any{"done": true, "criteria": criteria}
+}
+
+// WriteAdvancements writes, or replaces, a player's advancements file in a
+// server folder from Build.
+func WriteAdvancements(t testing.TB, server, id string, advancements map[string]any) {
+	t.Helper()
+	writeJSON(t, filepath.Join(server, "world", "players", "advancements", id+".json"), advancements)
 }
 
 func writeJSON(t testing.TB, path string, v any) {
