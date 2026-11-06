@@ -8,7 +8,8 @@
 //
 // systemctl always gets fixed arguments: the action is one of three
 // constants and the unit is checked against an allowlist, so nothing from
-// a request ever reaches the command line.
+// a request ever reaches the command line. BackupUnit, the nightly backup,
+// may only be started.
 package control
 
 import (
@@ -18,13 +19,24 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Unit is the only unit control may act on.
+// Unit is the Minecraft server's unit.
 const Unit = "minecraft.service"
+
+// BackupUnit is the world backup's oneshot unit (deploy/backup). It is
+// "activating" while a backup runs.
+const BackupUnit = "mc-backup.service"
+
+// allowed lists the units control may act on and what it may do to each.
+var allowed = map[string][]Action{
+	Unit:       {Start, Stop, Restart},
+	BackupUnit: {Start},
+}
 
 // Action is something to do to the unit.
 type Action string
@@ -86,11 +98,11 @@ type Systemd struct {
 	mu sync.Mutex // held while an action runs
 }
 
-// NewSystemd returns a controller for unit, which must be Unit. run may be
-// nil to run the real systemctl.
+// NewSystemd returns a controller for unit, which must be Unit or
+// BackupUnit. run may be nil to run the real systemctl.
 func NewSystemd(unit string, run Runner) (*Systemd, error) {
-	if unit != Unit {
-		return nil, fmt.Errorf("control: unit %q isn't allowed, only %s", unit, Unit)
+	if _, ok := allowed[unit]; !ok {
+		return nil, fmt.Errorf("control: unit %q isn't allowed, only %s or %s", unit, Unit, BackupUnit)
 	}
 	if run == nil {
 		run = execRun
@@ -104,6 +116,9 @@ func NewSystemd(unit string, run Runner) (*Systemd, error) {
 func (s *Systemd) Do(ctx context.Context, a Action) error {
 	if _, ok := ParseAction(string(a)); !ok {
 		return fmt.Errorf("control: unknown action %q", a)
+	}
+	if !slices.Contains(allowed[s.unit], a) {
+		return fmt.Errorf("control: %s isn't allowed on %s", a, s.unit)
 	}
 	if !s.mu.TryLock() {
 		return ErrBusy

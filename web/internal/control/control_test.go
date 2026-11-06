@@ -59,6 +59,32 @@ func TestOnlyMinecraftUnit(t *testing.T) {
 	}
 }
 
+func TestBackupUnitOnlyStarts(t *testing.T) {
+	f := &fakeSystemctl{state: "ActiveState=inactive\nSubState=dead\n"}
+	s, err := NewSystemd(BackupUnit, f.run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []Action{Stop, Restart} {
+		if err := s.Do(context.Background(), a); err == nil {
+			t.Errorf("Do(%s) on %s succeeded", a, BackupUnit)
+		}
+	}
+	if err := s.Do(context.Background(), Start); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"systemctl", "--user", "--no-block", "start", "mc-backup.service"}
+	if got := f.lastCall(); !reflect.DeepEqual(got, want) {
+		t.Errorf("start ran %q, want %q", got, want)
+	}
+
+	// A backup that's running is "activating", so a second start is busy.
+	f.state = "ActiveState=activating\nSubState=start\n"
+	if err := s.Do(context.Background(), Start); !errors.Is(err, ErrBusy) {
+		t.Errorf("start while a backup runs = %v, want ErrBusy", err)
+	}
+}
+
 func TestActions(t *testing.T) {
 	for _, a := range []Action{Start, Stop, Restart} {
 		s, f := newFake(t, "ActiveState=active\nSubState=running\n")
