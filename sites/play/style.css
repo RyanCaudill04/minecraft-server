@@ -64,7 +64,9 @@
   transition: cx 1s var(--ease), cy 1s var(--ease);
 }
 
-/* Map preview */
+/* Map previews, one subsection per world */
+.subsection + .subsection { margin-top: 28px; }
+.subsection h3 { margin: 0 0 12px; font-size: 1rem; font-weight: 600; }
 .map-card { padding: 0; overflow: hidden; }
 .map-stage {
   position: relative;

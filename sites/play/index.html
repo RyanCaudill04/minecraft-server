@@ -34,10 +34,21 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 17V11M10 17V4M16 17V8"/></svg>
           Leaderboards
         </a>
-        <a href="#map">
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
-          Map
-        </a>
+        <div class="nav-group">
+          <button class="nav-toggle" id="map-toggle" type="button" data-section="map" aria-expanded="false" aria-controls="map-nav">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
+            Map
+            <svg class="nav-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="M8 6l4 4-4 4"/></svg>
+          </button>
+          <div class="nav-sub" id="map-nav" inert>
+            <div class="nav-sub-inner">
+              <div class="nav-sub-list">
+                <a href="#map-overworld">Overworld</a>
+                <a href="#map-nether">Nether</a>
+              </div>
+            </div>
+          </div>
+        </div>
       </nav>
 
       <div class="sidebar-foot">
@@ -114,20 +125,42 @@
           <h2>Map</h2>
           <p class="muted">A look at the world from above.</p>
         </header>
-        <article class="card map-card" id="map-card" data-ready="false">
-          <div class="map-stage">
-            <div class="map-placeholder">
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
-              <p>The map isn't ready yet.</p>
-              <p class="muted">It appears once the server has rendered the world.</p>
+
+        <section class="subsection" id="map-overworld" aria-labelledby="map-overworld-title">
+          <h3 id="map-overworld-title">Overworld</h3>
+          <article class="card map-card" data-world="minecraft_overworld" data-ready="false">
+            <div class="map-stage">
+              <div class="map-placeholder">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
+                <p>The overworld map isn't ready yet.</p>
+                <p class="muted">It appears once the server has rendered the world.</p>
+              </div>
+              <iframe title="Preview of the overworld map" tabindex="-1" aria-hidden="true" loading="lazy"></iframe>
             </div>
-            <iframe id="map-frame" title="Preview of the world map" tabindex="-1" aria-hidden="true" loading="lazy"></iframe>
-          </div>
-          <div class="map-foot">
-            <p class="muted">Live preview of the overworld.</p>
-            <a class="btn btn-primary" id="map-open" href="/map/">Open the full map</a>
-          </div>
-        </article>
+            <div class="map-foot">
+              <p class="muted">Live preview of the overworld.</p>
+              <a class="btn btn-primary" href="/map/?world=minecraft_overworld">Open the overworld map</a>
+            </div>
+          </article>
+        </section>
+
+        <section class="subsection" id="map-nether" aria-labelledby="map-nether-title">
+          <h3 id="map-nether-title">Nether</h3>
+          <article class="card map-card" data-world="minecraft_the_nether" data-ready="false">
+            <div class="map-stage">
+              <div class="map-placeholder">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
+                <p>The nether map isn't ready yet.</p>
+                <p class="muted">It appears once the server has rendered the nether.</p>
+              </div>
+              <iframe title="Preview of the nether map" tabindex="-1" aria-hidden="true" loading="lazy"></iframe>
+            </div>
+            <div class="map-foot">
+              <p class="muted">Live preview of the nether.</p>
+              <a class="btn btn-primary" href="/map/?world=minecraft_the_nether">Open the nether map</a>
+            </div>
+          </article>
+        </section>
       </section>
     </main>
   </div>

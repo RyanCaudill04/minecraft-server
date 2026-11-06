@@ -382,10 +382,12 @@ function placeSky(tod) {
 
 // ---------- Scroll spy ----------
 
-// Highlights the last section whose top has scrolled above a line 30% down
-// the window, or the final one once the page is scrolled to the bottom.
+// Highlights the last section or subsection whose top has scrolled above a
+// line 30% down the window, or the final one once the page is scrolled to
+// the bottom. A group's toggle is highlighted while one of its sections is.
 const navLinks = [...document.querySelectorAll(".nav a")];
-const sections = [...document.querySelectorAll(".section")];
+const navToggles = [...document.querySelectorAll(".nav-toggle")];
+const sections = [...document.querySelectorAll(".section, .subsection")];
 
 function updateNav() {
   const line = innerHeight * 0.3;
@@ -395,10 +397,34 @@ function updateNav() {
   if (atBottom && scrollY > 0) current = sections.at(-1);
   if (scrollY < 8) current = sections[0];
   for (const a of navLinks) a.classList.toggle("active", a.hash === `#${current.id}`);
+  for (const t of navToggles) t.classList.toggle("active", $(t.dataset.section).contains(current));
 }
 addEventListener("scroll", updateNav, { passive: true });
 addEventListener("resize", updateNav);
 updateNav();
+
+// A toggle shows or hides its group's links; the CSS animates the group from
+// aria-expanded, and a closed group is inert so its links can't be focused.
+// In the phone top bar the group grows past the right edge, so once it has
+// grown the bar scrolls to show it (in the sidebar it's already in view).
+for (const t of navToggles) {
+  const group = $(t.getAttribute("aria-controls"));
+  const reveal = () => {
+    if (t.getAttribute("aria-expanded") === "true") {
+      group.querySelector("a:last-child").scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    }
+  };
+  group.addEventListener("transitionend", (e) => {
+    if (e.target === group && e.propertyName === "grid-template-columns") reveal();
+  });
+  t.addEventListener("click", () => {
+    const open = t.getAttribute("aria-expanded") !== "true";
+    t.setAttribute("aria-expanded", String(open));
+    group.inert = !open;
+    // With reduced motion there's no transition to wait for.
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) reveal();
+  });
+}
 
 // ---------- Helpers ----------
 
@@ -475,29 +501,44 @@ function countTo(node, to) {
 // buttons that do nothing. These URL options turn them off: the zoom and
 // layer buttons, the sidebar of worlds and players, the coordinates box and
 // the copy-link button.
-const MAP_PREVIEW_URL =
-  "/map/?show_controls=false&show_sidebar=false&show_coordinates=false&show_link_button=false";
+const mapPreviewURL = (world) =>
+  `/map/?world=${encodeURIComponent(world)}` +
+  "&show_controls=false&show_sidebar=false&show_coordinates=false&show_link_button=false";
 
-// The preview is squaremap's own page in a frame. Before loading it, ask
-// whether the map exists, so an unrendered map shows the placeholder instead
-// of an error page. The frame loads once; the map refreshes its own tiles.
-async function loadMapPreview() {
-  const card = $("map-card");
+// The worlds squaremap has a map for, from its tiles/settings.json, or an
+// empty set before it has written one.
+async function renderedWorlds() {
   try {
-    const res = await fetch("/map/", { method: "HEAD", cache: "no-store" });
-    if (!res.ok) return false;
+    const res = await fetch("/map/tiles/settings.json", { cache: "no-store" });
+    if (!res.ok) return new Set();
+    const settings = await res.json();
+    return new Set((settings.worlds ?? []).map((w) => w.name));
   } catch {
-    return false;
+    return new Set();
   }
-  const frame = $("map-frame");
-  frame.addEventListener("load", () => (card.dataset.ready = "true"), { once: true });
-  frame.src = MAP_PREVIEW_URL;
-  return true;
 }
 
-// Try again every minute until the map shows up.
+// Each card previews one world in a frame of squaremap's own page. A world
+// squaremap doesn't list keeps its placeholder: squaremap would show its
+// first world instead of an unknown one. A frame loads once; the map
+// refreshes its own tiles. Returns whether every card is loaded.
+async function loadMapPreviews() {
+  const waiting = [...document.querySelectorAll(".map-card:not([data-loading])")];
+  if (!waiting.length) return true;
+  const worlds = await renderedWorlds();
+  for (const card of waiting) {
+    if (!worlds.has(card.dataset.world)) continue;
+    card.dataset.loading = "";
+    const frame = card.querySelector("iframe");
+    frame.addEventListener("load", () => (card.dataset.ready = "true"), { once: true });
+    frame.src = mapPreviewURL(card.dataset.world);
+  }
+  return !document.querySelector(".map-card:not([data-loading])");
+}
+
+// Try again every minute until every map shows up.
 async function mapPreviewLoop() {
-  if (!(await loadMapPreview())) setTimeout(mapPreviewLoop, 60_000);
+  if (!(await loadMapPreviews())) setTimeout(mapPreviewLoop, 60_000);
 }
 mapPreviewLoop();
 
