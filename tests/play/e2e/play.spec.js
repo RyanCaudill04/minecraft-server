@@ -84,6 +84,27 @@ test("world facts and the in-game clock", async ({ page }) => {
   await expect(fact("Players")).toHaveText("3");
 });
 
+test("activity feed, newest first", async ({ page }) => {
+  await open(page);
+  const items = page.locator("#feed .feed-item");
+  await expect(items).toHaveCount(9);
+  await expect(items.locator(".feed-line")).toHaveText([
+    "Alice earned Sky's the Limit",
+    "Bob earned Sky's the Limit",
+    "Bob earned The End?",
+    "Alice earned The End?",
+    "Bob earned Diamonds!",
+    "Bob earned We Need to Go Deeper",
+    "Bob joined for the first time",
+    "Alice earned We Need to Go Deeper",
+    "Alice joined for the first time",
+  ]);
+  const newest = items.first().locator("time");
+  await expect(newest).toHaveText("7d ago · Oct 20, 2026, 12:00 PM");
+  await expect(newest).toHaveAttribute("datetime", "2026-10-20T12:00:00Z");
+  await expect(page.locator("#feed-empty")).toBeHidden();
+});
+
 test("leaderboard picker", async ({ page }) => {
   await open(page);
   const tabs = page.locator("#board-tabs button");

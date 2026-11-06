@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -133,6 +135,76 @@ func TestAPIWorldAndPlayers(t *testing.T) {
 	}
 }
 
+func TestAPIActivity(t *testing.T) {
+	ts, server := newTestServer(t, nil, nil)
+
+	var raw []map[string]any
+	resp := getJSON(t, ts.URL+"/api/activity", &raw)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status code %d", resp.StatusCode)
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q", cc)
+	}
+	if len(raw) != 9 {
+		t.Fatalf("got %d events, want the fixture's 9: %v", len(raw), raw)
+	}
+	want := map[string]any{
+		"kind":        "advancement",
+		"at":          "2026-10-20T12:00:00Z",
+		"playerId":    worldtest.AliceID,
+		"name":        "Alice",
+		"advancement": "minecraft:end/elytra",
+		"title":       "Sky's the Limit",
+	}
+	if !reflect.DeepEqual(raw[0], want) {
+		t.Errorf("newest event = %v, want %v", raw[0], want)
+	}
+	// A join has no advancement or title keys.
+	last := raw[len(raw)-1]
+	if _, has := last["advancement"]; last["kind"] != "joined" || has {
+		t.Errorf("oldest event = %v, want Alice's join without an advancement", last)
+	}
+
+	// A half-written file only drops that player's events (see #38). The
+	// cache still holds the last result, so use a fresh server.
+	ts2 := httptest.NewServer(newHandler(t.TempDir(), t.TempDir(), server, t.TempDir(), fakeChecker(nil, nil)))
+	t.Cleanup(ts2.Close)
+	if err := os.WriteFile(filepath.Join(server, "world", "players", "advancements", worldtest.BobID+".json"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var events []world.Event
+	if resp := getJSON(t, ts2.URL+"/api/activity", &events); resp.StatusCode != http.StatusOK {
+		t.Fatalf("with an empty file: status code %d", resp.StatusCode)
+	}
+	if len(events) != 4 {
+		t.Errorf("with Bob's file empty: got %d events, want Alice's 4", len(events))
+	}
+	for _, e := range events {
+		if e.PlayerID != worldtest.AliceID {
+			t.Errorf("unexpected event %+v", e)
+		}
+	}
+}
+
+func TestAPIActivityLimit(t *testing.T) {
+	ts, server := newTestServer(t, nil, nil)
+	many := map[string]any{}
+	for i := range activityLimit + 10 {
+		many[fmt.Sprintf("minecraft:story/step_%02d", i)] = worldtest.Advancement(fmt.Sprintf("2026-11-01 00:%02d:00 +0000", i))
+	}
+	worldtest.WriteAdvancements(t, server, worldtest.CarolID, many)
+
+	var events []world.Event
+	getJSON(t, ts.URL+"/api/activity", &events)
+	if len(events) != activityLimit {
+		t.Fatalf("got %d events, want %d", len(events), activityLimit)
+	}
+	if got, want := events[0].Advancement, fmt.Sprintf("minecraft:story/step_%02d", activityLimit+9); got != want {
+		t.Errorf("newest = %s, want %s", got, want)
+	}
+}
+
 func TestAPIUnavailableWorld(t *testing.T) {
 	ts, server := newTestServer(t, nil, nil)
 	if err := os.Remove(filepath.Join(server, "world", "level.dat")); err != nil {
@@ -157,6 +229,7 @@ func TestRouting(t *testing.T) {
 		{"GET", "/missing.js", http.StatusNotFound},
 		{"POST", "/api/status", http.StatusMethodNotAllowed},
 		{"DELETE", "/api/players", http.StatusMethodNotAllowed},
+		{"POST", "/api/activity", http.StatusMethodNotAllowed},
 		{"GET", "/../../etc/passwd", http.StatusNotFound},
 	}
 	for _, tt := range tests {

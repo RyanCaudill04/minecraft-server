@@ -63,6 +63,8 @@ const data = {
   status: null,
   world: null,
   players: [],
+  activity: null, // recent events, newest first; null until one load works
+  activityFailed: false,
   board: BOARDS[0].key,
   rendered: new Set(), // sections that already played their entrance
   lastChecked: null, // from the last status that loaded, kept through outages
@@ -97,13 +99,20 @@ async function refreshStatus() {
 }
 
 async function refreshData() {
-  const [world, players] = await Promise.allSettled([getJSON("/api/world"), getJSON("/api/players")]);
+  const [world, players, activity] = await Promise.allSettled([
+    getJSON("/api/world"),
+    getJSON("/api/players"),
+    getJSON("/api/activity"),
+  ]);
   if (world.status === "fulfilled") data.world = world.value;
   if (players.status === "fulfilled") data.players = players.value;
+  if (activity.status === "fulfilled") data.activity = activity.value;
+  data.activityFailed = activity.status === "rejected";
   renderStatus();
   renderWorld();
   renderPlayers();
   renderBoard();
+  renderActivity();
 }
 
 // ---------- Rendering ----------
@@ -293,6 +302,48 @@ function renderBoard() {
   });
   list.replaceChildren(...rows);
   if (focusedID) focusPlayer("board", focusedID, { preventScroll: true });
+}
+
+// The feed is rebuilt on every data refresh, which also keeps its relative
+// times current. Nothing in it takes focus, so rebuilding loses nothing.
+function renderActivity() {
+  const events = data.activity;
+  const feed = $("feed");
+  const empty = $("feed-empty");
+  if (!events) {
+    // Never loaded: keep "Loading…" until a load fails.
+    if (data.activityFailed) empty.textContent = "Activity isn't available right now. Retrying…";
+    return;
+  }
+
+  feed.hidden = events.length === 0;
+  empty.hidden = events.length > 0;
+  empty.textContent = "Nothing yet. Advancements and new players show up here after the server saves.";
+
+  const appear = events.length > 0 && once("activity");
+  feed.replaceChildren(
+    ...events.map((e, i) => {
+      const li = el("li", "feed-item" + (appear ? " appear" : ""));
+      li.style.animationDelay = `${Math.min(i, 10) * 30}ms`;
+      const line = el("p", "feed-line");
+      line.append(el("strong", "", e.name));
+      if (e.kind === "joined") {
+        line.append(" joined for the first time");
+      } else {
+        line.append(" earned ", el("strong", "", e.title || "an advancement"));
+      }
+      // The relative time, with the full time beside it so it's there on
+      // touch screens and for screen readers too, not only on hover.
+      const when = el("time", "feed-when");
+      when.dateTime = e.at;
+      when.title = new Date(e.at).toLocaleString(undefined, { dateStyle: "full", timeStyle: "long" });
+      when.append(el("span", "feed-ago", fmtAgo(e.at)), ` · ${fmtWhen(e.at)}`);
+      const text = el("div", "feed-text");
+      text.append(line, when);
+      li.append(head({ id: e.playerId }, 32), text);
+      return li;
+    }),
+  );
 }
 
 // ---------- Player sheet ----------

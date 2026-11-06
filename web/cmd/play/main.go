@@ -4,6 +4,7 @@
 //	GET /api/status   active, sleeping, starting or offline, and who is online
 //	GET /api/world    world facts from the saved world files
 //	GET /api/players  every known player's saved stats
+//	GET /api/activity recent advancements and first joins, newest first
 //	GET /map/         the world map squaremap renders (see mapHandler)
 //
 // The status comes from status pings (see package mcstatus), so checking
@@ -30,6 +31,9 @@ import (
 	"github.com/ryancaudill04/minecraft-server/web/internal/world"
 )
 
+// activityLimit is how many events /api/activity returns at most.
+const activityLimit = 20
+
 // newHandler routes the API and serves the static page from dir and the
 // shared files from sharedDir. World and player data are read from
 // serverDir, and the map from m.
@@ -42,11 +46,15 @@ func newHandler(dir, sharedDir, serverDir, mapDir string, c *mcstatus.Checker) h
 	players := &site.Cache[[]world.Player]{MaxAge: 30 * time.Second, Load: func(context.Context) ([]world.Player, error) {
 		return world.ReadPlayers(serverDir, worldDir)
 	}}
+	activity := &site.Cache[[]world.Event]{MaxAge: 30 * time.Second, Load: func(context.Context) ([]world.Event, error) {
+		return world.ReadActivity(serverDir, worldDir, activityLimit)
+	}}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", site.JSON("play: status", status))
 	mux.HandleFunc("GET /api/world", site.JSON("play: world", worldInfo))
 	mux.HandleFunc("GET /api/players", site.JSON("play: players", players))
+	mux.HandleFunc("GET /api/activity", site.JSON("play: activity", activity))
 	mux.Handle("GET /map/", http.StripPrefix("/map", mapHandler(mapDir)))
 	mux.Handle("GET /map", http.RedirectHandler("/map/", http.StatusMovedPermanently))
 	mux.Handle("GET /", site.Static(dir, sharedDir))
