@@ -6,6 +6,8 @@
 // RCON. The Backups section lists the world backups and keeps, deletes,
 // downloads and starts them.
 
+import { actionHint, consoleLock, enabledActions, summary, unitMessage } from "./status.js";
+
 const STATUS_MS = 10_000; // server state and who's online
 const DEPLOY_MS = 60_000; // the active release (changes a few times a day)
 const PLUGINS_MS = 120_000; // installed plugins (change only on a restart)
@@ -13,14 +15,6 @@ const HEALTH_MS = 15_000; // the Pi's readings and Paper's TPS (cached 10s)
 
 // Paper sends this UUID for players who hide themselves from the list.
 const ANONYMOUS_ID = "00000000-0000-0000-0000-000000000000";
-
-const STATES = {
-  active: { title: "Online", message: (s) => `${s.version || "Paper"} is running.` },
-  sleeping: { title: "Sleeping", message: () => "LazyMC is holding the port. A join wakes Paper." },
-  starting: { title: "Starting up", message: () => "Paper is starting." },
-  offline: { title: "Offline", message: () => "Neither Paper nor LazyMC answers a status ping." },
-  unknown: { title: "Can't reach admin", message: () => "The admin API isn't answering. Retrying…" },
-};
 
 const KINDS = { feature: "Feature", fix: "Bug fix", other: "Other" };
 const OUTCOMES = { success: "Succeeded", failed: "Failed", rolled_back: "Rolled back" };
@@ -91,14 +85,48 @@ async function refreshHealth() {
 
 // ---------- Rendering ----------
 
+// Long lists show their first few rows, with a Show all button after them,
+// so a long list doesn't push the rest of the page down.
+const LIST_SHOWN = 5;
+const expanded = new Set(); // ids of the lists showing every row
+
+// The first rows of items, or all of them once the list is expanded.
+function shownRows(ul, items, shown = LIST_SHOWN) {
+  return expanded.has(ul.id) ? items : items.slice(0, shown);
+}
+
+// Puts the Show all / Show fewer button after ul, and hides it when every
+// row fits. rerender redraws the list after a toggle.
+function showAll(ul, count, shown, rerender) {
+  let more = $(`${ul.id}-more`);
+  if (!more) {
+    more = document.createElement("button");
+    more.type = "button";
+    more.id = `${ul.id}-more`;
+    more.className = "show-all";
+    more.setAttribute("aria-controls", ul.id);
+    more.addEventListener("click", () => {
+      if (!expanded.delete(ul.id)) expanded.add(ul.id);
+      rerender();
+    });
+    ul.after(more);
+  }
+  const open = expanded.has(ul.id);
+  more.hidden = count <= shown;
+  more.setAttribute("aria-expanded", String(open));
+  more.textContent = open ? "Show fewer" : `Show all ${count}`;
+}
+
+// The pill, the Overview card and the Server card all show summary(), so
+// they agree; the Server card adds systemd's detail below it.
 function renderStatus() {
   const s = data.status;
-  const info = STATES[s.state] ?? STATES.unknown;
+  const sum = summary(s);
 
-  for (const node of document.querySelectorAll("[data-state]")) node.dataset.state = s.state;
-  $("pill-text").textContent = info.title;
-  $("state-title").textContent = info.title;
-  $("state-message").textContent = info.message(s);
+  for (const node of document.querySelectorAll("[data-state]")) node.dataset.state = sum.state;
+  $("pill-text").textContent = sum.title;
+  $("state-title").textContent = sum.title;
+  $("state-message").textContent = sum.message;
 
   $("online").textContent = s.online;
   $("max").textContent = s.max ? `/ ${s.max}` : "";
@@ -124,7 +152,8 @@ function renderDeploy() {
   // Changes are newest first, so this is the latest one.
   else sub = d.changes?.[0]?.title ?? "Installed by mc-agent.";
   $("release-sub").textContent = sub;
-  $("release-sub").title = sub;
+  // The card's link covers the clamped line, so its tooltip carries it.
+  $("release-link").title = sub;
 
   setKind($("release-kind"), d?.kind);
   setKind($("deploy-kind"), d?.kind);
@@ -218,13 +247,15 @@ function renderChanges(d) {
   $("deploy-changes-empty").textContent = empty;
   $("deploy-changes-empty").hidden = !empty;
 
-  const key = JSON.stringify([d?.active, d?.changes]);
+  const list = $("deploy-changes");
+  const key = JSON.stringify([d?.active, d?.changes, expanded.has(list.id)]);
   if (key === shownChanges) return;
   shownChanges = key;
 
-  const list = $("deploy-changes");
+  const changes = d?.changes ?? [];
+  showAll(list, changes.length, LIST_SHOWN, () => renderChanges(data.deploy));
   list.replaceChildren(
-    ...(d?.changes ?? []).map((c) => {
+    ...shownRows(list, changes).map((c) => {
       const li = document.createElement("li");
       const kind = document.createElement("span");
       kind.className = "kind";
@@ -254,12 +285,15 @@ function renderPlugins() {
   $("plugin-empty").textContent = empty;
   $("plugin-empty").hidden = !empty;
 
-  const key = JSON.stringify(d);
+  const ul = $("plugin-list");
+  const key = JSON.stringify([d, expanded.has(ul.id)]);
   if (key === shownPlugins) return;
   shownPlugins = key;
 
-  $("plugin-list").replaceChildren(
-    ...(d?.plugins ?? []).map((p) => {
+  const plugins = d?.plugins ?? [];
+  showAll(ul, plugins.length, LIST_SHOWN, renderPlugins);
+  ul.replaceChildren(
+    ...shownRows(ul, plugins).map((p) => {
       const li = document.createElement("li");
       const who = document.createElement("span");
       who.className = "who";
@@ -307,10 +341,17 @@ const worst = (...ls) => ls.reduce((a, b) => (WORST[b] > WORST[a] ? b : a));
 // Non-breaking spaces, so a narrow card wraps "/ 59.6 GB" onto its own
 // line instead of splitting it.
 const NBSP = "\u00a0";
-const GB = 1024 ** 3;
+
+// Sizes for Pi health and backups: "512 KB", "3.7 GB", "118 GB".
 function fmtBytes(n) {
-  if (n >= GB) return `${(n / GB).toFixed(n >= 100 * GB ? 0 : 1)}${NBSP}GB`;
-  return `${Math.round(n / 1024 ** 2)}${NBSP}MB`;
+  if (n == null) return "–";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${n < 100 && i ? n.toFixed(1) : Math.round(n)}${NBSP}${units[i]}`;
 }
 const fmtPct = (part, whole) => `${Math.round((100 * part) / whole)}%`;
 const fixed = (n, digits = 2) => n.toFixed(digits);
@@ -430,26 +471,6 @@ function renderPaperHealth(p) {
 
 // ---------- Server controls ----------
 
-// minecraft.service's systemd state. Paper's own state comes from the ping.
-const UNIT = {
-  active: {
-    title: "Running",
-    message: (s) =>
-      s.state === "active"
-        ? "LazyMC and Paper are up."
-        : s.state === "starting"
-          ? "LazyMC is up and Paper is starting."
-          : s.state === "sleeping"
-            ? "LazyMC is up. Paper sleeps until someone joins."
-            : "systemd says it's running, but LazyMC isn't answering pings yet.",
-  },
-  activating: { title: "Starting…", message: () => "systemd is starting LazyMC." },
-  deactivating: { title: "Stopping…", message: () => "Paper is saving the world. This can take a few minutes." },
-  inactive: { title: "Stopped", message: () => "LazyMC and Paper are off. Nobody can join until it's started." },
-  failed: { title: "Failed", message: () => "systemd gave up on it. Start it again, or check journalctl --user-unit minecraft." },
-  unknown: { title: "Unknown", message: () => "admin can't read the unit's state from systemd." },
-};
-
 const ACTIONS = {
   start: { doing: "Starting the server…", done: "Asked systemd to start the server." },
   stop: { doing: "Stopping the server…", done: "Asked systemd to stop the server. Paper saves first." },
@@ -497,34 +518,23 @@ async function refreshMe() {
 }
 
 function renderMe() {
-  const me = data.me;
-  $("me-email").textContent = me.email || "Not verified";
-  $("me-sub").textContent = me.locked || "You can start, stop and restart the server and use its console.";
+  $("me-email").textContent = data.me.email || "Not verified";
 }
 
 function renderUnit() {
   const s = data.status;
   const st = s?.unit?.active;
-  const key = !s ? "loading" : st in UNIT ? st : "unknown";
-  const info = UNIT[key] ?? { title: "Checking…", message: () => "One moment." };
 
   const card = document.querySelector(".unit-card");
-  card.dataset.unit = key;
-  $("unit-title").textContent = info.title;
-  $("unit-message").textContent = info.message(s ?? {});
+  $("unit-title").textContent = summary(s).title;
+  $("unit-message").textContent = unitMessage(s);
+  $("actions-hint").textContent = actionHint(data.me, s, pending);
 
   renderChain(s, st);
 
-  const can = data.me?.control && !pending;
-  // Waking only makes sense while LazyMC holds the port for a sleeping
-  // Paper; the button is there only then.
+  // The wake button is there only while Paper sleeps behind LazyMC.
   const asleep = st === "active" && s?.state === "sleeping";
-  const enabled = {
-    start: can && (st === "inactive" || st === "failed"),
-    stop: can && st === "active",
-    restart: can && st === "active",
-    wake: can && asleep,
-  };
+  const enabled = enabledActions(data.me, s, pending);
   for (const b of document.querySelectorAll("[data-action]")) {
     const off = !enabled[b.dataset.action];
     // Disabling the focused button would drop focus to the top of the
@@ -652,16 +662,18 @@ const TRANSCRIPT_MAX = 20;
 
 let consoleBusy = false; // a command is running
 
+// The lock reason shows once, where the output would be. The log only
+// needs sign-in, not RCON, so it stays up whenever admin knows who you are.
 function renderConsole() {
-  const on = !!data.me?.console;
-  $("command").disabled = !on || consoleBusy;
-  $("command-run").disabled = !on || consoleBusy;
-  if (!on) {
-    $("console-empty").textContent = data.me?.locked ?? "Checking…";
-    $("log").textContent = data.me?.locked ?? "";
+  const locked = consoleLock(data.me);
+  $("command").disabled = !!locked || consoleBusy;
+  $("command-run").disabled = !!locked || consoleBusy;
+  if (locked) $("console-empty").textContent = locked;
+  else if (!$("transcript").children.length) $("console-empty").textContent = "Output appears here.";
+
+  if (data.me && !data.me.email) {
+    $("log").textContent = "Sign in to read the log.";
     $("log-updated").textContent = "";
-  } else if (!$("transcript").children.length) {
-    $("console-empty").textContent = "Output appears here.";
   }
 }
 
@@ -704,7 +716,7 @@ $("command-form").addEventListener("submit", async (e) => {
 });
 
 async function refreshLogs() {
-  if (!data.me?.console) return;
+  if (!data.me?.email) return;
   let lines;
   try {
     ({ lines } = await getJSON("/api/logs?lines=200"));
@@ -719,8 +731,27 @@ async function refreshLogs() {
   const text = lines.length ? lines.join("\n") : "The log is empty. Paper writes it once it starts.";
   if (log.textContent !== text) log.textContent = text;
   if (atBottom) log.scrollTop = log.scrollHeight;
+  updateLogExpand();
   $("log-updated").textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
 }
+
+// The log starts short. Expand shows up once there's more than fits, and
+// stays while it's expanded so it can be collapsed again.
+function updateLogExpand() {
+  const log = $("log");
+  const open = log.classList.contains("expanded");
+  const button = $("log-expand");
+  button.hidden = !open && log.scrollHeight <= log.clientHeight;
+  button.setAttribute("aria-expanded", String(open));
+  button.textContent = open ? "Collapse" : "Expand";
+}
+
+$("log-expand").addEventListener("click", () => {
+  const log = $("log");
+  log.classList.toggle("expanded");
+  log.scrollTop = log.scrollHeight; // newest lines in view either way
+  updateLogExpand();
+});
 
 // ---------- Players ----------
 
@@ -857,10 +888,7 @@ function renderPlayers() {
   if (!can && all === document.activeElement) all.closest(".card").focus();
   all.disabled = !can;
 
-  $("whitelist-switch").addEventListener("click", () => whitelistAction(data.players?.white_list ? "off" : "on"));
-$("whitelist-add-all").addEventListener("click", () => whitelistAction("add-all"));
-
-for (const form of document.querySelectorAll(".player-form")) {
+  for (const form of document.querySelectorAll(".player-form")) {
     for (const el of form.elements) {
       // Disabling the focused field would drop focus to the top of the
       // page, so keep it on the card instead.
@@ -887,17 +915,16 @@ function setPlayerEmpty(id, text) {
 // Rebuilds a list when it changes, and puts focus back on the same
 // button afterwards (or on the card, if that player is gone).
 const shownPlayers = {};
-// Lists show this many players until Show all is pressed.
+// Player lists show this many players until Show all is pressed.
 const PLAYERS_SHOWN = 3;
-const expandedLists = new Set();
 
 function renderPlayerList(list, players, can) {
-  const open = expandedLists.has(list);
+  const ul = $(`${list}-list`);
+  const open = expanded.has(ul.id);
   const key = JSON.stringify([players, can, open]);
   if (key === shownPlayers[list]) return;
   shownPlayers[list] = key;
 
-  const ul = $(`${list}-list`);
   const active = document.activeElement;
   const refocus = ul.contains(active) ? active.dataset.name : null;
 
@@ -932,33 +959,12 @@ function renderPlayerList(list, players, can) {
       return li;
     }),
   );
-  renderShowAll(list, ul, players.length, open);
+  showAll(ul, players.length, PLAYERS_SHOWN, renderPlayers);
 
   if (refocus) {
     const again = [...ul.querySelectorAll("[data-name]")].find((n) => n.dataset.name === refocus && !n.disabled);
     (again ?? ul.closest(".card")).focus();
   }
-}
-
-// The Show all / Show fewer button under a list longer than PLAYERS_SHOWN.
-function renderShowAll(list, ul, count, open) {
-  let more = $(`${list}-more`);
-  if (!more) {
-    more = document.createElement("button");
-    more.type = "button";
-    more.id = `${list}-more`;
-    more.className = "show-all";
-    more.setAttribute("aria-controls", ul.id);
-    more.addEventListener("click", () => {
-      if (expandedLists.has(list)) expandedLists.delete(list);
-      else expandedLists.add(list);
-      renderPlayers();
-    });
-    ul.after(more);
-  }
-  more.hidden = count <= PLAYERS_SHOWN;
-  more.setAttribute("aria-expanded", open ? "true" : "false");
-  more.textContent = open ? "Show fewer" : `Show all ${count}`;
 }
 
 // A player's skin head from mc-heads, as on play, or a blank tile if it
@@ -1018,6 +1024,9 @@ async function playerRequest(list, action, step, body) {
   return ok;
 }
 
+$("whitelist-switch").addEventListener("click", () => whitelistAction(data.players?.white_list ? "off" : "on"));
+$("whitelist-add-all").addEventListener("click", () => whitelistAction("add-all"));
+
 for (const form of document.querySelectorAll(".player-form")) {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1057,17 +1066,6 @@ function setBackupNote(text, isError = false) {
   const note = $("backup-note");
   note.textContent = text;
   note.classList.toggle("error", isError);
-}
-
-function fmtBytes(n) {
-  if (n == null) return "–";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let i = 0;
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024;
-    i++;
-  }
-  return `${n < 10 && i ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
 }
 
 const fmtDate = (iso) =>
@@ -1124,15 +1122,17 @@ function renderBackups() {
 // text), and puts focus back on the same button afterwards.
 let shownBackups;
 function renderBackupList(list, can) {
-  const key = JSON.stringify([list, can, Math.floor(Date.now() / 3_600_000)]);
+  const ul = $("backup-list");
+  const key = JSON.stringify([list, can, expanded.has(ul.id), Math.floor(Date.now() / 3_600_000)]);
   if (key === shownBackups) return;
   shownBackups = key;
 
   const active = document.activeElement;
-  const refocus = $("backup-list").contains(active) ? [active.dataset.name, active.dataset.op] : null;
+  const refocus = ul.contains(active) ? [active.dataset.name, active.dataset.op] : null;
 
-  $("backup-list").replaceChildren(
-    ...list.map((b) => {
+  showAll(ul, list.length, LIST_SHOWN, renderBackups);
+  ul.replaceChildren(
+    ...shownRows(ul, list).map((b) => {
       const li = document.createElement("li");
       const who = document.createElement("span");
       who.className = "who";
