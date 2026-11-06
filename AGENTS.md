@@ -22,7 +22,8 @@ imports this file, so every tool reads the same rules. Where a skill under
 | `deploy/sites/*.env` | Listen address for each `site@<name>` instance. |
 | `deploy/release.json` | Units, services, timers and health checks mc-agent applies for a release. |
 | `scripts/` | CI change detection, release notes and the release build, each with a `_test.sh` where it has logic. |
-| `.github/workflows/ci.yml` | CI/CD: scoped checks on PRs, one required check `ci-ok`, and releases from `main`. |
+| `.github/workflows/ci.yml` | CI/CD: scoped checks on PRs, one required check `ci-ok`, releases from `main`, and the dev sites from `dev`. |
+| `dev/` | The dev sites on Cloudflare Workers (free plan): `worker.mjs` and a wrangler config per site. See "Dev sites" below. |
 | `.github/workflows/review.yml`, `.github/review.md` | Optional advisory review on PRs labelled `review` (see below). |
 | `.claude/skills/` | Repo-specific agent skills, added in #105 (see "Decision: agent instructions and skills"). |
 | Repo root | The Minecraft server's own files: `lazymc.toml`, `start.sh`, `server.properties.example`, Paper/Spigot/Bukkit configs, `plugins/`, `config/`. |
@@ -47,6 +48,10 @@ scripts/ci-changes_test.sh
 scripts/release-notes_test.sh
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12   # CI pins this version
 scripts/build-release.sh <tag> <output folder> [notes.json]   # e.g. scripts/build-release.sh dev "$(mktemp -d)"
+
+# Dev sites
+node --test tests/dev/worker.test.mjs
+scripts/build-dev_test.sh
 ```
 
 ### Preview play or admin locally
@@ -96,6 +101,26 @@ Fixtures are synthetic (`worldtest`, `nbttest`).
   `tech-debt`, `documentation`). Use only labels that exist
   (`gh label list`).
 - Never merge a PR unless the owner asks.
+
+## Dev sites
+
+Pushing to the `dev` branch runs CI's checks, then deploys
+dev-play.ryancaudill.dev and dev-admin.ryancaudill.dev to Cloudflare
+Workers. Both are behind Cloudflare Access. They serve the real pages from
+`sites/` with a frozen, synthetic API: `scripts/build-dev.sh` saves each
+GET route's JSON from the `TestDevSnapshot` tests in `web/cmd/play` and
+`web/cmd/admin`, and `dev/worker.mjs` serves those files. Every POST is
+refused, so nothing on the dev sites reaches the Pi or the server.
+
+- `dev` is a scratch branch: push any branch to it to try it, with
+  `git push --force origin HEAD:dev`. It never merges into `main`, and
+  nothing on it ships to the Pi. Agents ask before pushing to it.
+- When a page starts reading a new GET route, add it to that site's
+  `TestDevSnapshot`. `scripts/build-dev_test.sh` fails until you do.
+- Snapshot data comes only from test fixtures. Never put real player data
+  or anything from the Pi into it.
+- The squaremap preview on play is empty on the dev site: there are no
+  map tiles in the snapshot.
 
 ## Rules
 
