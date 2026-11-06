@@ -29,6 +29,35 @@ code {
 
 .small { font-size: 0.75rem; }
 
+/* Who's signed in, under the status pill. */
+.sidebar-foot { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.me { font-size: 0.75rem; overflow-wrap: anywhere; }
+#me-email { font-weight: 600; }
+/* The top bar on phones has room only for the pill. */
+@media (max-width: 900px) { .me { display: none; } }
+
+/* An Overview card that opens its section: the eyebrow is the link, and
+   it stretches over the whole card. */
+.card-link {
+  position: static;
+  color: var(--muted);
+  text-decoration: none;
+}
+.card-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+}
+.card-link .chevron { margin-left: -2px; font-size: 1rem; line-height: 1; transition: transform 0.2s var(--ease); }
+.card-link:focus-visible { outline: none; }
+.linked { transition: background 0.2s, border-color 0.2s; }
+.linked:hover { background: var(--card-hover); border-color: var(--accent-soft); }
+.linked:hover .chevron { transform: translateX(2px); }
+.linked:has(.card-link:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.status-card > .card-link { position: static; }
+
 /* ---------- Buttons ---------- */
 
 .btn-secondary {
@@ -45,8 +74,8 @@ code {
 
 /* ---------- Server ---------- */
 
-/* The unit's systemd state; data-unit, not data-state, so the ping state
-   the page sets on every [data-state] doesn't overwrite it. */
+/* Colored by the same [data-state] as the pill and the Overview card, so
+   they all agree; systemd's own state is in the chain below. */
 .unit-card {
   display: flex;
   flex-direction: column;
@@ -80,15 +109,11 @@ code {
   letter-spacing: -0.025em;
   line-height: 1.1;
 }
-[data-unit="active"]       { --state: var(--green); }
-[data-unit="activating"],
-[data-unit="deactivating"] { --state: var(--amber); }
-[data-unit="inactive"],
-[data-unit="failed"]       { --state: var(--red); }
-[data-unit="active"] .dot { box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 20%, transparent); }
-[data-unit="activating"] .dot,
-[data-unit="deactivating"] .dot,
-[data-unit="loading"] .dot { animation: pulse 1.4s ease-in-out infinite; }
+
+/* The buttons, and under them why any are off. */
+.controls { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.hint { max-width: 40ch; color: var(--muted); font-size: 0.8125rem; text-align: right; }
+.hint:empty { display: none; }
 
 .unit-card .btn {
   display: inline-flex;
@@ -175,21 +200,13 @@ code {
 }
 .link[data-link="failed"] .link-state { color: var(--red); }
 
-.unit-foot {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px 20px;
-  flex-wrap: wrap;
-  margin-top: -8px;
-}
 .note { min-height: 1.5em; color: var(--muted); font-size: 0.8125rem; }
 .note:empty { min-height: 0; }
 .note.error,
 .out.error { color: var(--red); }
-.who-am-i { margin-left: auto; font-size: 0.8125rem; text-align: right; overflow-wrap: anywhere; }
-#me-email { font-weight: 600; }
-#me-sub { display: block; }
+/* An empty note takes no room: its margin cancels the card's gap. */
+.unit-card > .note { margin-top: -8px; }
+.unit-card > .note:empty { margin-top: -22px; }
 
 /* Confirmation for stop and restart. */
 .confirm {
@@ -296,8 +313,13 @@ html:has(dialog[open]) { overflow: hidden; }
 .transcript .out { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 
 .log-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.log-tools { display: flex; align-items: baseline; gap: 12px; }
+.log.expanded { max-height: 70vh; }
+/* As tall as the log up to about 12 lines, then it scrolls; Expand makes
+   it as tall as most of the window. */
 .log {
-  height: 420px;
+  min-height: 5lh;
+  max-height: 12lh;
   margin: 0;
   padding: 12px 14px;
   overflow: auto;
@@ -423,15 +445,13 @@ html:has(dialog[open]) { overflow: hidden; }
    console cards stack. */
 @media (max-width: 760px) {
   .unit-card { padding: 20px; }
-  .unit-head .actions { width: 100%; }
+  .controls { width: 100%; align-items: stretch; }
+  .hint { max-width: none; text-align: left; }
   .unit-head .btn { flex: 1; justify-content: center; padding-inline: 10px; }
-  .who-am-i { margin-left: 0; text-align: left; }
-  .log { height: 320px; }
+  /* Two by two, so no cell is left alone on a row. */
   .release-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 16px; }
-  .release-strip .cell:first-child { grid-column: 1 / -1; }
-  .release-strip .cell:nth-child(2) { padding-left: 0; border-left: 0; }
-  .release-strip .cell:nth-child(3) { padding-left: 20px; border-left: 1px solid var(--border); }
-  .release-strip .cell:nth-child(4) { padding-left: 0; border-left: 0; }
+  .release-strip .cell:nth-child(odd) { padding-left: 0; border-left: 0; }
+  .release-strip .cell:nth-child(even) { padding-left: 20px; border-left: 1px solid var(--border); }
   .deploy-state { grid-template-columns: minmax(0, 1fr); row-gap: 16px; }
   .deploy-state .cell { padding-left: 0; border-left: 0; }
 }
