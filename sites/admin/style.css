@@ -510,16 +510,44 @@ a.btn[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; }
   border-left: 1px solid var(--border);
 }
 .player-cols .cell:first-child { padding-left: 0; border-left: 0; }
-.player-list li { align-items: center; }
-.player-list .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.player-list .title { font-weight: 600; overflow-wrap: anywhere; }
-.player-list .file {
-  color: var(--muted);
-  font: 0.75rem ui-monospace, "SF Mono", Menlo, monospace;
-  overflow-wrap: anywhere;
+/* Player tiles, as on play: the skin head, the name and the action. */
+.player-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.player-tile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
 }
-.player-list .kind { align-self: center; }
-.player-list .btn { flex: none; padding: 6px 12px; font-size: 0.8125rem; }
+.player-tile img, .player-tile .head-fallback {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--bg);
+  image-rendering: pixelated;
+}
+.player-tile .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.player-tile .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player-tile .meta { color: var(--muted); font-size: 0.8125rem; }
+.player-tile .btn { flex: none; padding: 6px 12px; font-size: 0.8125rem; }
+.show-all {
+  align-self: flex-start;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.show-all::after { content: " \25BE" / ""; }
+.show-all[aria-expanded="true"]::after { content: " \25B4" / ""; }
+.show-all:hover { text-decoration: underline; }
+.show-all[hidden] { display: none; }
 #players-note:empty { display: none; }
 
 /* The whitelist on/off switch, with what that means beside it. */

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https://mc-heads.net">
   <title>admin.ryancaudill.dev</title>
   <link rel="stylesheet" href="/shared/base.css">
   <link rel="stylesheet" href="style.css">
@@ -261,7 +261,7 @@
                 </label>
                 <button type="submit" class="btn btn-primary" disabled>Add</button>
               </form>
-              <ul class="change-list player-list" id="whitelist-list" aria-label="Whitelisted players"></ul>
+              <ul class="player-list" id="whitelist-list" aria-label="Whitelisted players"></ul>
               <p class="muted" id="whitelist-empty">&nbsp;</p>
               <div class="not-listed" id="not-listed" hidden>
                 <div class="log-head">
@@ -269,7 +269,7 @@
                   <button type="button" class="btn btn-secondary" id="whitelist-add-all" disabled>Add all</button>
                 </div>
                 <p class="muted" id="not-listed-text"></p>
-                <ul class="change-list player-list" id="not-listed-list" aria-labelledby="not-listed-title"></ul>
+                <ul class="player-list" id="not-listed-list" aria-labelledby="not-listed-title"></ul>
               </div>
             </div>
             <div class="cell">
@@ -283,7 +283,7 @@
                 </label>
                 <button type="submit" class="btn btn-primary" disabled>Op</button>
               </form>
-              <ul class="change-list player-list" id="ops-list" aria-label="Operators"></ul>
+              <ul class="player-list" id="ops-list" aria-label="Operators"></ul>
               <p class="muted" id="ops-empty">&nbsp;</p>
             </div>
           </div>

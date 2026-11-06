@@ -887,8 +887,13 @@ function setPlayerEmpty(id, text) {
 // Rebuilds a list when it changes, and puts focus back on the same
 // button afterwards (or on the card, if that player is gone).
 const shownPlayers = {};
+// Lists show this many players until Show all is pressed.
+const PLAYERS_SHOWN = 3;
+const expandedLists = new Set();
+
 function renderPlayerList(list, players, can) {
-  const key = JSON.stringify([players, can]);
+  const open = expandedLists.has(list);
+  const key = JSON.stringify([players, can, open]);
   if (key === shownPlayers[list]) return;
   shownPlayers[list] = key;
 
@@ -896,46 +901,82 @@ function renderPlayerList(list, players, can) {
   const active = document.activeElement;
   const refocus = ul.contains(active) ? active.dataset.name : null;
 
+  const [label, aria, target, action] = {
+    ops: ["Deop", (n) => `Deop ${n}`, "ops", "remove"],
+    whitelist: ["Remove", (n) => `Remove ${n} from the whitelist`, "whitelist", "remove"],
+    "not-listed": ["Add", (n) => `Add ${n} to the whitelist`, "whitelist", "add"],
+  }[list];
+
   ul.replaceChildren(
-    ...players.map((p) => {
+    ...players.slice(0, open ? players.length : PLAYERS_SHOWN).map((p) => {
       const li = document.createElement("li");
+      li.className = "player-tile";
       const who = document.createElement("span");
       who.className = "who";
       const name = document.createElement("span");
-      name.className = "title";
+      name.className = "name";
       name.textContent = p.name;
-      const id = document.createElement("span");
-      id.className = "file";
-      id.textContent = p.uuid;
-      who.append(name, id);
-      li.append(who);
-
+      who.append(name);
       if (list === "ops") {
-        const level = document.createElement("span");
-        level.className = "kind";
-        level.textContent = `Level ${p.level}`;
-        level.title = "Operator permission level, 1 to 4.";
-        li.append(level);
+        const meta = document.createElement("span");
+        meta.className = "meta";
+        meta.textContent = `Level ${p.level}`;
+        meta.title = "Operator permission level, 1 to 4. Level 4 can run every command.";
+        who.append(meta);
       }
-
-      const [label, aria, target, action] = {
-        ops: ["Deop", `Deop ${p.name}`, "ops", "remove"],
-        whitelist: ["Remove", `Remove ${p.name} from the whitelist`, "whitelist", "remove"],
-        "not-listed": ["Add", `Add ${p.name} to the whitelist`, "whitelist", "add"],
-      }[list];
       const b = button(label, action, p.name, "btn-secondary");
-      b.setAttribute("aria-label", aria);
+      b.setAttribute("aria-label", aria(p.name));
       b.disabled = !can;
       b.addEventListener("click", () => changePlayer(target, action, p.name));
-      li.append(b);
+      li.append(playerHead(p), who, b);
       return li;
     }),
   );
+  renderShowAll(list, ul, players.length, open);
 
   if (refocus) {
     const again = [...ul.querySelectorAll("[data-name]")].find((n) => n.dataset.name === refocus && !n.disabled);
     (again ?? ul.closest(".card")).focus();
   }
+}
+
+// The Show all / Show fewer button under a list longer than PLAYERS_SHOWN.
+function renderShowAll(list, ul, count, open) {
+  let more = $(`${list}-more`);
+  if (!more) {
+    more = document.createElement("button");
+    more.type = "button";
+    more.id = `${list}-more`;
+    more.className = "show-all";
+    more.setAttribute("aria-controls", ul.id);
+    more.addEventListener("click", () => {
+      if (expandedLists.has(list)) expandedLists.delete(list);
+      else expandedLists.add(list);
+      renderPlayers();
+    });
+    ul.after(more);
+  }
+  more.hidden = count <= PLAYERS_SHOWN;
+  more.setAttribute("aria-expanded", open ? "true" : "false");
+  more.textContent = open ? "Show fewer" : `Show all ${count}`;
+}
+
+// A player's skin head from mc-heads, as on play, or a blank tile if it
+// doesn't load.
+function playerHead(p) {
+  const blank = () => {
+    const span = document.createElement("span");
+    span.className = "head-fallback";
+    return span;
+  };
+  if (!p.uuid || p.uuid === ANONYMOUS_ID) return blank();
+  const img = document.createElement("img");
+  img.src = `https://mc-heads.net/avatar/${encodeURIComponent(p.uuid)}/72`;
+  img.width = img.height = 36;
+  img.alt = "";
+  img.loading = "lazy";
+  img.onerror = () => img.replaceWith(blank());
+  return img;
 }
 
 async function changePlayer(list, action, name) {
