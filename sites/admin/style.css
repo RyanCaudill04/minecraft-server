@@ -410,3 +410,48 @@ html:has(dialog[open]) { overflow: hidden; }
 .kind[data-kind="invalid"]  { --kind: var(--red); }
 .kind[data-kind="unpinned"],
 .kind[data-kind="missing"]  { --kind: var(--amber); }
+
+/* ---------- Backups ---------- */
+
+/* The run cell's dot follows mc-backup.service: data-run, not data-state,
+   so the ping state the page sets on every [data-state] leaves it alone. */
+.backup-run { --state: var(--gray); align-items: flex-start; }
+.backup-run[data-run="on"]     { --state: var(--green); }
+.backup-run[data-run="busy"]   { --state: var(--amber); }
+.backup-run[data-run="failed"] { --state: var(--red); }
+.backup-run[data-run="busy"] .dot { animation: pulse 1.4s ease-in-out infinite; }
+.backup-run[data-run="failed"] .at { color: var(--red); }
+.backup-run .btn { margin-top: auto; }
+.backup-strip .btn,
+.backup-list .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  text-decoration: none;
+}
+.backup-list .btn { padding: 6px 12px; font-size: 0.8125rem; }
+.backup-list a.btn { color: var(--text); font-weight: 600; text-decoration: none; }
+a.btn[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; }
+
+/* A row: date, file and size; when it's removed or that it's kept; and
+   the buttons. */
+.backup-list li { align-items: center; flex-wrap: wrap; }
+.backup-list .who { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.backup-list .title { font-weight: 600; }
+.backup-list .file { color: var(--muted); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.backup-list .kind { min-width: 0; text-align: center; }
+.backup-list .actions { flex: none; }
+.kind[data-kind="kept"]     { --kind: var(--green); }
+.kind[data-kind="expiring"] { --kind: var(--amber); }
+.btn[aria-pressed="true"]::before { content: "✓"; }
+.btn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--green) 14%, var(--bg));
+  color: color-mix(in srgb, var(--green) 80%, var(--text));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 40%, transparent);
+}
+#backup-note:not(:empty) { margin-top: 2px; }
+
+@media (max-width: 760px) {
+  .backup-list .actions { width: 100%; }
+  .backup-list .actions .btn { flex: 1; justify-content: center; }
+}
