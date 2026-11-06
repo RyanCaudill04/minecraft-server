@@ -471,6 +471,13 @@ function countTo(node, to) {
 
 // ---------- Map preview ----------
 
+// The preview ignores the pointer, so squaremap's own controls would show as
+// buttons that do nothing. These URL options turn them off: the zoom and
+// layer buttons, the sidebar of worlds and players, the coordinates box and
+// the copy-link button.
+const MAP_PREVIEW_URL =
+  "/map/?show_controls=false&show_sidebar=false&show_coordinates=false&show_link_button=false";
+
 // The preview is squaremap's own page in a frame. Before loading it, ask
 // whether the map exists, so an unrendered map shows the placeholder instead
 // of an error page. The frame loads once; the map refreshes its own tiles.
@@ -484,7 +491,7 @@ async function loadMapPreview() {
   }
   const frame = $("map-frame");
   frame.addEventListener("load", () => (card.dataset.ready = "true"), { once: true });
-  frame.src = "/map/";
+  frame.src = MAP_PREVIEW_URL;
   return true;
 }
 
