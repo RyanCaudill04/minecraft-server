@@ -14,6 +14,30 @@ import (
 	"github.com/ryancaudill04/minecraft-server/web/internal/world/worldtest"
 )
 
+// fixtureStates are the server states the fixtures serve: what the status
+// pings find in each one. TestDevSnapshot uses the first, active.
+var fixtureStates = []struct {
+	name      string
+	responses map[string]*ping.Response
+}{
+	{"active", map[string]*ping.Response{paperAddr: {
+		Version: ping.Version{Name: "Paper 26.2"},
+		Players: ping.Players{Online: 2, Max: 20, Sample: []ping.Player{
+			{Name: "Alice", ID: worldtest.AliceID},
+			{Name: "Anonymous Player", ID: "00000000-0000-0000-0000-000000000000"},
+		}},
+	}}},
+	{"sleeping", map[string]*ping.Response{lazymcAddr: {
+		Players:     ping.Players{Max: 20},
+		Description: ping.Description{Text: "Server is sleeping"},
+	}}},
+	{"starting", map[string]*ping.Response{lazymcAddr: {
+		Players:     ping.Players{Max: 20},
+		Description: ping.Description{Text: "Server is Starting..."},
+	}}},
+	{"offline", nil},
+}
+
 // TestFixtureServer serves the real page against the synthetic world for
 // the Playwright tests in tests/play/e2e. It's skipped unless
 // PLAY_FIXTURE_ADDR is set, and then serves until the process is killed:
@@ -39,27 +63,7 @@ func TestFixtureServer(t *testing.T) {
 	// go test runs in the package folder, web/cmd/play.
 	const dir, shared = "../../../sites/play", "../../../sites/shared"
 	server := worldtest.Build(t)
-	states := []struct {
-		name      string
-		responses map[string]*ping.Response
-	}{
-		{"active", map[string]*ping.Response{paperAddr: {
-			Version: ping.Version{Name: "Paper 26.2"},
-			Players: ping.Players{Online: 2, Max: 20, Sample: []ping.Player{
-				{Name: "Alice", ID: worldtest.AliceID},
-				{Name: "Anonymous Player", ID: "00000000-0000-0000-0000-000000000000"},
-			}},
-		}}},
-		{"sleeping", map[string]*ping.Response{lazymcAddr: {
-			Players:     ping.Players{Max: 20},
-			Description: ping.Description{Text: "Server is sleeping"},
-		}}},
-		{"starting", map[string]*ping.Response{lazymcAddr: {
-			Players:     ping.Players{Max: 20},
-			Description: ping.Description{Text: "Server is Starting..."},
-		}}},
-		{"offline", nil},
-	}
+	states := fixtureStates
 
 	errs := make(chan error, len(states))
 	for i, s := range states {
