@@ -26,6 +26,10 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3.5" width="14" height="5" rx="1.5"/><rect x="3" y="11.5" width="14" height="5" rx="1.5"/><path d="M6 6h.01M6 14h.01"/></svg>
           Server
         </a>
+        <a href="#health">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10.5h3l2-5 3.5 9 2-4h4.5"/></svg>
+          Pi health
+        </a>
         <a href="#console">
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M6 8l2.5 2L6 12M10.5 12.5H14"/></svg>
           Console
@@ -149,6 +153,47 @@
             </div>
           </form>
         </dialog>
+      </section>
+
+      <section id="health" class="section">
+        <header class="section-head">
+          <h2>Pi health</h2>
+          <p class="muted">The Raspberry Pi, and how fast Paper is ticking while it's awake. <span id="health-updated"></span></p>
+        </header>
+        <div class="grid health-grid">
+          <article class="card metric health-card" id="health-paper" data-level="unknown">
+            <span class="eyebrow"><span class="dot"></span>Paper tick rate</span>
+            <div class="metric-value"><span class="value">–</span><span class="metric-unit"></span></div>
+            <p class="metric-sub">&nbsp;</p>
+          </article>
+          <article class="card metric health-card" id="health-temp" data-level="unknown">
+            <span class="eyebrow"><span class="dot"></span>CPU temperature</span>
+            <div class="metric-value"><span class="value">–</span><span class="metric-unit">°C</span></div>
+            <p class="metric-sub">&nbsp;</p>
+          </article>
+          <article class="card metric health-card" id="health-memory" data-level="unknown">
+            <span class="eyebrow"><span class="dot"></span>Memory used</span>
+            <div class="metric-value"><span class="value">–</span><span class="metric-unit"></span></div>
+            <div class="bar" aria-hidden="true"><span></span></div>
+            <p class="metric-sub">&nbsp;</p>
+          </article>
+          <article class="card metric health-card" id="health-disk" data-level="unknown">
+            <span class="eyebrow"><span class="dot"></span>Disk free</span>
+            <div class="metric-value"><span class="value">–</span><span class="metric-unit"></span></div>
+            <div class="bar" aria-hidden="true"><span></span></div>
+            <p class="metric-sub">&nbsp;</p>
+          </article>
+          <article class="card metric health-card" id="health-load" data-level="unknown">
+            <span class="eyebrow"><span class="dot"></span>Load average</span>
+            <div class="metric-value"><span class="value">–</span><span class="metric-unit"></span></div>
+            <p class="metric-sub">&nbsp;</p>
+          </article>
+          <article class="card metric health-card" id="health-uptime" data-level="unknown">
+            <span class="eyebrow"><span class="dot"></span>Uptime</span>
+            <div class="metric-value"><span class="value">–</span><span class="metric-unit"></span></div>
+            <p class="metric-sub">&nbsp;</p>
+          </article>
+        </div>
       </section>
 
       <section id="console" class="section">

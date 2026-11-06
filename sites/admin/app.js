@@ -9,6 +9,7 @@
 const STATUS_MS = 10_000; // server state and who's online
 const DEPLOY_MS = 60_000; // the active release (changes a few times a day)
 const PLUGINS_MS = 120_000; // installed plugins (change only on a restart)
+const HEALTH_MS = 15_000; // the Pi's readings and Paper's TPS (cached 10s)
 
 // Paper sends this UUID for players who hide themselves from the list.
 const ANONYMOUS_ID = "00000000-0000-0000-0000-000000000000";
@@ -25,7 +26,7 @@ const KINDS = { feature: "Feature", fix: "Bug fix", other: "Other" };
 const OUTCOMES = { success: "Succeeded", failed: "Failed", rolled_back: "Rolled back" };
 const REPO = "https://github.com/RyanCaudill04/minecraft-server";
 
-const data = { status: null, deploy: null, plugins: null, me: null, backups: null, players: null };
+const data = { status: null, deploy: null, plugins: null, me: null, backups: null, players: null, health: null };
 
 const PLUGIN_STATUS = {
   pinned: { label: "Pinned", note: "Matches the manifest." },
@@ -76,6 +77,16 @@ async function refreshPlugins() {
     data.plugins = null;
   }
   renderPlugins();
+}
+
+async function refreshHealth() {
+  try {
+    data.health = await getJSON("/api/health");
+  } catch (err) {
+    console.warn(err);
+    data.health = null;
+  }
+  renderHealth();
 }
 
 // ---------- Rendering ----------
@@ -270,6 +281,151 @@ function renderPlugins() {
       return li;
     }),
   );
+}
+
+// ---------- Pi health ----------
+
+// When a reading turns amber or red. The Pi 4 starts throttling at 80 °C,
+// and Paper can't hold 20 TPS once a tick takes over 50 ms.
+const LIMITS = {
+  temp: [70, 80], // °C, at or above
+  memory: [85, 95], // % used, at or above
+  disk: [15, 5], // % free, at or below
+  load: [1, 2], // load per core, at or above
+  tps: [18, 15], // at or below
+  mspt: [40, 50], // ms, at or above
+};
+
+// "ok", "warn" or "bad" for v against [warn, bad]; low means lower is worse.
+function level(v, [warn, bad], low = false) {
+  if (low) return v <= bad ? "bad" : v <= warn ? "warn" : "ok";
+  return v >= bad ? "bad" : v >= warn ? "warn" : "ok";
+}
+const WORST = { unknown: 0, idle: 0, ok: 1, warn: 2, bad: 3 };
+const worst = (...ls) => ls.reduce((a, b) => (WORST[b] > WORST[a] ? b : a));
+
+// Non-breaking spaces, so a narrow card wraps "/ 59.6 GB" onto its own
+// line instead of splitting it.
+const NBSP = "\u00a0";
+const GB = 1024 ** 3;
+function fmtBytes(n) {
+  if (n >= GB) return `${(n / GB).toFixed(n >= 100 * GB ? 0 : 1)}${NBSP}GB`;
+  return `${Math.round(n / 1024 ** 2)}${NBSP}MB`;
+}
+const fmtPct = (part, whole) => `${Math.round((100 * part) / whole)}%`;
+const fixed = (n, digits = 2) => n.toFixed(digits);
+
+function fmtUptime(secs) {
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+// Sets one health card: its value, unit, sub line, level and bar.
+function setHealth(id, { value = "–", unit = "", sub = "Not available.", lvl = "unknown", fill }) {
+  const card = $(`health-${id}`);
+  card.dataset.level = lvl;
+  card.querySelector(".value").textContent = value;
+  card.querySelector(".metric-unit").textContent = unit;
+  card.querySelector(".metric-sub").textContent = sub;
+  const bar = card.querySelector(".bar span");
+  if (bar) bar.style.setProperty("--fill", fill == null ? "0%" : `${Math.min(100, Math.max(0, fill))}%`);
+}
+
+// Words for amber and red, so the color is never the only sign.
+const WARN_WORDS = { warn: "Running low", bad: "Almost out" };
+
+function renderHealth() {
+  const h = data.health;
+  $("health-updated").textContent = h ? "" : "Couldn't read the Pi's health.";
+  renderPaperHealth(h?.paper);
+
+  if (h?.temp_c != null) {
+    const lvl = level(h.temp_c, LIMITS.temp);
+    const words = { ok: "Normal.", warn: "Warm: the Pi slows down at 80 °C.", bad: "Hot: the Pi is slowing itself down." };
+    setHealth("temp", { value: h.temp_c.toFixed(1), unit: "°C", sub: words[lvl], lvl });
+  } else setHealth("temp", {});
+
+  const m = h?.memory;
+  if (m?.total) {
+    const pct = (100 * m.used) / m.total;
+    const lvl = level(pct, LIMITS.memory);
+    const prefix = WARN_WORDS[lvl] ? `${WARN_WORDS[lvl]}: ` : "";
+    setHealth("memory", {
+      value: fmtBytes(m.used),
+      unit: `/${NBSP}${fmtBytes(m.total)}`,
+      sub: `${prefix}${fmtPct(m.used, m.total)} used, ${fmtBytes(m.available)} available.`,
+      lvl,
+      fill: pct,
+    });
+  } else setHealth("memory", {});
+
+  const d = h?.disk;
+  if (d?.total) {
+    const freePct = (100 * d.free) / d.total;
+    const lvl = level(freePct, LIMITS.disk, true);
+    const prefix = WARN_WORDS[lvl] ? `${WARN_WORDS[lvl]}: ` : "";
+    setHealth("disk", {
+      value: fmtBytes(d.free),
+      unit: `/${NBSP}${fmtBytes(d.total)}`,
+      sub: `${prefix}${fmtPct(d.used, d.total)} used on the server's filesystem.`,
+      lvl,
+      fill: (100 * d.used) / d.total,
+    });
+  } else setHealth("disk", {});
+
+  const l = h?.load;
+  if (l) {
+    const cpus = h.cpus || 1;
+    const lvl = level(l.one / cpus, LIMITS.load);
+    const busy = { ok: "", warn: "Busy. ", bad: "Overloaded. " }[lvl];
+    setHealth("load", {
+      value: fixed(l.one),
+      unit: `/${NBSP}${cpus}${NBSP}${cpus === 1 ? "core" : "cores"}`,
+      sub: `${busy}5 min ${fixed(l.five)}, 15 min ${fixed(l.fifteen)}.`,
+      lvl,
+    });
+  } else setHealth("load", {});
+
+  if (h?.uptime_seconds != null) {
+    const since = new Date(Date.parse(h.checked) - h.uptime_seconds * 1000);
+    setHealth("uptime", {
+      value: fmtUptime(h.uptime_seconds),
+      sub: `Up since ${since.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.`,
+      lvl: "ok",
+    });
+  } else setHealth("uptime", {});
+}
+
+// Paper's TPS and MSPT, or why there aren't any. Asleep isn't a problem,
+// so it gets a gray dot, not an error.
+const PAPER_IDLE = {
+  sleeping: ["Asleep", "TPS shows while Paper is awake. Reading it never wakes Paper."],
+  starting: ["Starting", "TPS shows once Paper is up."],
+  offline: ["Off", "Paper isn't running."],
+};
+
+function renderPaperHealth(p) {
+  if (!p) return setHealth("paper", {});
+  const idle = PAPER_IDLE[p.state];
+  if (idle) return setHealth("paper", { value: idle[0], sub: idle[1], lvl: "idle" });
+  if (p.state !== "active" || !p.tps) {
+    return setHealth("paper", { value: p.state === "active" ? "Awake" : "–", sub: p.note || "Not available." });
+  }
+
+  const t = p.tps;
+  let lvl = level(t.one, LIMITS.tps, true);
+  let sub = `5 min ${fixed(t.five, 1)}, 15 min ${fixed(t.fifteen, 1)}.`;
+  if (p.mspt) {
+    lvl = worst(lvl, level(p.mspt.avg, LIMITS.mspt));
+    const over = p.mspt.window ? ` over ${p.mspt.window}` : "";
+    sub += ` ${fixed(p.mspt.avg, 1)} ms a tick${over} (max ${fixed(p.mspt.max, 1)}).`;
+  }
+  if (lvl !== "ok") sub = `${lvl === "bad" ? "Lagging" : "Slowing"}: ${sub}`;
+  setHealth("paper", { value: fixed(t.one, 1), unit: "TPS", sub, lvl });
 }
 
 // ---------- Server controls ----------
@@ -1033,6 +1189,7 @@ function start() {
   refreshPlugins();
   refreshBackups();
   refreshPlayers();
+  refreshHealth();
   refreshMe().then(refreshLogs);
   timers = [
     setInterval(refreshStatus, STATUS_MS),
@@ -1040,6 +1197,7 @@ function start() {
     setInterval(refreshPlugins, PLUGINS_MS),
     setInterval(refreshBackups, BACKUPS_MS),
     setInterval(refreshPlayers, PLAYERS_MS),
+    setInterval(refreshHealth, HEALTH_MS),
     setInterval(refreshLogs, LOG_MS),
     setInterval(tick, 1000),
   ];

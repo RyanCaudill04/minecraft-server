@@ -202,6 +202,42 @@ html:has(dialog[open]) { overflow: hidden; }
 .confirm form { display: flex; flex-direction: column; gap: 10px; }
 .confirm .actions { justify-content: flex-end; margin-top: 8px; }
 
+/* ---------- Pi health ---------- */
+
+/* One card per reading. data-level, not data-state, so the ping state the
+   page sets on every [data-state] doesn't overwrite it: ok, warn or bad
+   color the dot and bar, and the sub line says the same in words. */
+.health-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.health-card[data-level="ok"]   { --state: var(--green); }
+.health-card[data-level="warn"] { --state: var(--amber); }
+.health-card[data-level="bad"]  { --state: var(--red); }
+.health-card[data-level="bad"] .dot { box-shadow: 0 0 0 4px color-mix(in srgb, var(--red) 20%, transparent); }
+.health-card .metric-unit:empty { display: none; }
+/* A long value and its unit wrap rather than overflow a narrow card. */
+.health-card .metric-value { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 4px; }
+.health-card .metric-unit { margin-left: 0; }
+
+/* How full memory or the disk is. */
+.bar {
+  height: 6px;
+  margin-top: 4px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.bar span {
+  display: block;
+  width: var(--fill, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--state, var(--gray));
+  transition: width 0.6s var(--ease), background 0.4s var(--ease);
+}
+
+@media (max-width: 1200px) {
+  .health-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* ---------- Console ---------- */
 
 .console-grid { grid-template-columns: minmax(0, 1fr); }
