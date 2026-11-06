@@ -1,12 +1,10 @@
 // play.ryancaudill.dev: polls the play API and renders the dashboard.
 
-import { accentHue, capitalize, fmtAgo, fmtDate, fmtDistance, fmtHours, fmtNum, fmtPlaytime, fmtWhen, mcClock, phase, weather } from "./format.js";
+import { $, ANONYMOUS_ID, el, fmtAgo, getJSON, scrollSpy } from "../shared/common.js";
+import { accentHue, capitalize, fmtDate, fmtDistance, fmtHours, fmtNum, fmtPlaytime, fmtWhen, mcClock, phase, weather } from "./format.js";
 
 const STATUS_MS = 10_000; // server state and who's online
 const DATA_MS = 60_000; // world facts and player stats (change only on save)
-
-// Paper sends this UUID for players who hide themselves from the list.
-const ANONYMOUS_ID = "00000000-0000-0000-0000-000000000000";
 
 const STATES = {
   active: {
@@ -71,15 +69,7 @@ const data = {
   sheetId: null, // player in the open sheet
 };
 
-const $ = (id) => document.getElementById(id);
-
 // ---------- Fetching ----------
-
-async function getJSON(path) {
-  const res = await fetch(path, { cache: "no-store" });
-  if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
-  return res.json();
-}
 
 async function refreshStatus() {
   const before = data.status?.state;
@@ -380,34 +370,9 @@ function placeSky(tod) {
   body.setAttribute("r", tod < 12000 ? 4 : 3);
 }
 
-// ---------- Scroll spy ----------
-
-// Highlights the last section whose top has scrolled above a line 30% down
-// the window, or the final one once the page is scrolled to the bottom.
-const navLinks = [...document.querySelectorAll(".nav a")];
-const sections = [...document.querySelectorAll(".section")];
-
-function updateNav() {
-  const line = innerHeight * 0.3;
-  const atBottom = innerHeight + scrollY >= document.documentElement.scrollHeight - 2;
-  let current = sections[0];
-  for (const s of sections) if (s.getBoundingClientRect().top <= line) current = s;
-  if (atBottom && scrollY > 0) current = sections.at(-1);
-  if (scrollY < 8) current = sections[0];
-  for (const a of navLinks) a.classList.toggle("active", a.hash === `#${current.id}`);
-}
-addEventListener("scroll", updateNav, { passive: true });
-addEventListener("resize", updateNav);
-updateNav();
+scrollSpy();
 
 // ---------- Helpers ----------
-
-function el(tag, className = "", text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
 
 // A front view of the player's whole skin, size pixels wide and 2.4 times
 // as tall.

@@ -125,10 +125,7 @@ func (a *app) serverAction(w http.ResponseWriter, r *http.Request, user string) 
 		writeError(w, http.StatusBadGateway, "systemd refused: see admin's log.")
 	default:
 		// Accepted: systemd has queued it, and /api/status shows the rest.
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"action": string(act)})
+		site.WriteJSON(w, http.StatusAccepted, map[string]string{"action": string(act)})
 	}
 }
 
@@ -170,10 +167,7 @@ func (a *app) wakeServer(w http.ResponseWriter, r *http.Request, user string) {
 		writeError(w, http.StatusBadGateway, "LazyMC didn't take the login: see admin's log.")
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{"action": "wake"})
+	site.WriteJSON(w, http.StatusAccepted, map[string]string{"action": "wake"})
 }
 
 // Command is the JSON body of POST /api/console.
@@ -223,7 +217,7 @@ func (a *app) console(w http.ResponseWriter, r *http.Request, user string) {
 		log.Printf("admin: console: %v", err)
 		writeError(w, http.StatusBadGateway, "RCON failed: see admin's log.")
 	default:
-		site.WriteJSON(w, "admin: console", Output{Output: stripFormatting(out)})
+		site.WriteJSON(w, http.StatusOK, Output{Output: rcon.StripFormatting(out)})
 	}
 }
 
@@ -242,11 +236,6 @@ func cleanCommand(s string) (string, string) {
 	}
 	return s, ""
 }
-
-// formatting matches Minecraft's § color and style codes.
-var formatting = regexp.MustCompile("§.")
-
-func stripFormatting(s string) string { return formatting.ReplaceAllString(s, "") }
 
 // Logs is the JSON body of GET /api/logs.
 type Logs struct {
@@ -270,7 +259,7 @@ func (a *app) logs(w http.ResponseWriter, r *http.Request, user string) {
 		writeError(w, http.StatusServiceUnavailable, "Couldn't read the log.")
 		return
 	}
-	site.WriteJSON(w, "admin: logs", Logs{Lines: lines})
+	site.WriteJSON(w, http.StatusOK, Logs{Lines: lines})
 }
 
 // ansi matches terminal color codes, which Paper writes to some logs.
@@ -315,8 +304,5 @@ func tailLines(path string, n int) ([]string, error) {
 
 // writeError writes {"error": msg}. msg is shown on the page as text.
 func writeError(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	site.WriteJSON(w, code, map[string]string{"error": msg})
 }

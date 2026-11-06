@@ -110,7 +110,7 @@ jobs:
           node-version: 24
       - name: play.ryancaudill.dev JavaScript syntax
         if: needs.changes.outputs.play == 'true'
-        run: node --check sites/play/app.js && node --check sites/play/format.js
+        run: node --check sites/play/app.js && node --check sites/play/format.js && node --check sites/shared/common.js
       - name: play.ryancaudill.dev unit tests for the page's helpers
         if: needs.changes.outputs.play == 'true'
         # Number and date formats follow the locale and zone; the tests expect these.
@@ -128,7 +128,7 @@ jobs:
             -addr 127.0.0.1:8082 -paper 127.0.0.1:1 -lazymc 127.0.0.1:2 &
           for _ in $(seq 50); do curl -fs http://127.0.0.1:8082/ >/dev/null && break; sleep 0.1; done
           curl -fsS http://127.0.0.1:8082/ | grep -q '<title>play.ryancaudill.dev</title>'
-          for asset in /shared/base.css style.css app.js format.js; do
+          for asset in /shared/base.css /shared/common.js style.css app.js format.js; do
             grep -q "$asset" sites/play/index.html sites/play/app.js
             curl -fsS -o /dev/null "http://127.0.0.1:8082/${asset#/}"
           done
@@ -137,7 +137,7 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8082/api/status)" = 405
       - name: admin.ryancaudill.dev JavaScript syntax
         if: needs.changes.outputs.admin == 'true'
-        run: node --check sites/admin/app.js
+        run: node --check sites/admin/app.js && node --check sites/shared/common.js
       - name: admin.ryancaudill.dev smoke test
         if: needs.changes.outputs.admin == 'true'
         run: |
@@ -164,8 +164,8 @@ jobs:
             -addr 127.0.0.1:8081 -paper 127.0.0.1:1 -lazymc 127.0.0.1:2 -dev-user ci@example.com &
           for _ in $(seq 50); do curl -fs http://127.0.0.1:8081/ >/dev/null && break; sleep 0.1; done
           curl -fsS http://127.0.0.1:8081/ | grep -q '<title>admin.ryancaudill.dev</title>'
-          for asset in /shared/base.css style.css app.js; do
-            grep -q "$asset" sites/admin/index.html
+          for asset in /shared/base.css /shared/common.js style.css app.js; do
+            grep -q "$asset" sites/admin/index.html sites/admin/app.js
             curl -fsS -o /dev/null "http://127.0.0.1:8081/${asset#/}"
           done
           curl -fsS http://127.0.0.1:8081/api/status | grep -q '"state":"offline"'

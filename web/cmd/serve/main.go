@@ -24,13 +24,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "serve: set -dir (e.g. -dir sites/portfolio)")
 		os.Exit(2)
 	}
-
-	info, err := os.Stat(*dir)
-	if err != nil {
-		log.Fatalf("serve: cannot use -dir: %v", err)
-	}
-	if !info.IsDir() {
-		log.Fatalf("serve: %s is not a directory", *dir)
+	if err := site.CheckDirs(*dir); err != nil {
+		log.Fatalf("serve: %v", err)
 	}
 
 	// The same file server as play and admin, so listings and dotfiles stay

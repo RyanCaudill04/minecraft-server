@@ -4,12 +4,11 @@
 // and Console sections POST actions and commands; their output is only
 // ever set as text.
 
+import { $, ANONYMOUS_ID, el, fmtAgo, getJSON, scrollSpy } from "../shared/common.js";
+
 const STATUS_MS = 10_000; // server state and who's online
 const DEPLOY_MS = 60_000; // the active release (changes a few times a day)
 const PLUGINS_MS = 120_000; // installed plugins (change only on a restart)
-
-// Paper sends this UUID for players who hide themselves from the list.
-const ANONYMOUS_ID = "00000000-0000-0000-0000-000000000000";
 
 const STATES = {
   active: { title: "Online", message: (s) => `${s.version || "Paper"} is running.` },
@@ -33,15 +32,7 @@ const PLUGIN_STATUS = {
   missing: { label: "Missing", note: "In the manifest, not installed." },
 };
 
-const $ = (id) => document.getElementById(id);
-
 // ---------- Fetching ----------
-
-async function getJSON(path) {
-  const res = await fetch(path, { cache: "no-store" });
-  if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
-  return res.json();
-}
 
 async function refreshStatus() {
   try {
@@ -156,25 +147,18 @@ function renderInstalled(d) {
 
   const tags = d?.installed ?? [];
   const items = tags.map((tag) => {
-    const li = document.createElement("li");
-    const code = document.createElement("code");
-    code.textContent = tag;
-    li.append(code);
+    const li = el("li");
+    li.append(el("code", "", tag));
     const mark = tag === d.active ? "active" : tag === d.failed ? "failed" : "";
     if (mark) {
-      const badge = document.createElement("span");
-      badge.className = "kind";
+      const badge = el("span", "kind", mark === "active" ? "Active" : "Failed");
       badge.dataset.kind = mark;
-      badge.textContent = mark === "active" ? "Active" : "Failed";
       li.append(badge);
     }
     return li;
   });
   if (!items.length) {
-    const li = document.createElement("li");
-    li.className = "muted";
-    li.textContent = d ? "None" : "Unknown";
-    items.push(li);
+    items.push(el("li", "muted", d ? "None" : "Unknown"));
   }
   $("deploy-installed").replaceChildren(...items);
 }
@@ -211,18 +195,13 @@ function renderChanges(d) {
   const list = $("deploy-changes");
   list.replaceChildren(
     ...(d?.changes ?? []).map((c) => {
-      const li = document.createElement("li");
-      const kind = document.createElement("span");
-      kind.className = "kind";
+      const li = el("li");
+      const kind = el("span", "kind");
       setKind(kind, c.kind);
-      const title = document.createElement("span");
-      title.className = "title";
-      title.textContent = c.title;
-      li.append(kind, title);
+      li.append(kind, el("span", "title", c.title));
       if (c.pr) {
-        const a = document.createElement("a");
+        const a = el("a", "", `#${c.pr}`);
         a.href = `${REPO}/pull/${c.pr}`;
-        a.textContent = `#${c.pr}`;
         li.append(a);
       }
       return li;
@@ -246,23 +225,15 @@ function renderPlugins() {
 
   $("plugin-list").replaceChildren(
     ...(d?.plugins ?? []).map((p) => {
-      const li = document.createElement("li");
-      const who = document.createElement("span");
-      who.className = "who";
-      const name = document.createElement("span");
-      name.className = "title";
-      name.textContent = p.meta ? `${p.meta.name} ${p.meta.version}` : p.file;
-      const file = document.createElement("span");
-      file.className = "file";
+      const li = el("li");
+      const who = el("span", "who");
       const info = PLUGIN_STATUS[p.status] ?? { label: p.status, note: "" };
       const hash = p.sha256 ? ` · sha256 ${p.sha256.slice(0, 12)}…` : "";
-      file.textContent = `${p.file}${hash} · ${p.problem || info.note}`;
+      const file = el("span", "file", `${p.file}${hash} · ${p.problem || info.note}`);
       file.title = p.sha256 ?? "";
-      who.append(name, file);
-      const kind = document.createElement("span");
-      kind.className = "kind";
+      who.append(el("span", "title", p.meta ? `${p.meta.name} ${p.meta.version}` : p.file), file);
+      const kind = el("span", "kind", info.label);
       kind.dataset.kind = p.status;
-      kind.textContent = info.label;
       li.append(who, kind);
       return li;
     }),
@@ -498,14 +469,8 @@ function renderConsole() {
 // Adds one command and its output (or error) to the transcript, newest
 // first. Everything goes in as text.
 function addTranscript(cmd, text, isError) {
-  const li = document.createElement("li");
-  const head = document.createElement("div");
-  head.className = "cmd";
-  head.textContent = `/${cmd}`;
-  const out = document.createElement("pre");
-  out.className = isError ? "out error" : "out";
-  out.textContent = text || "(no output)";
-  li.append(head, out);
+  const li = el("li");
+  li.append(el("div", "cmd", `/${cmd}`), el("pre", isError ? "out error" : "out", text || "(no output)"));
   const list = $("transcript");
   list.prepend(li);
   while (list.children.length > TRANSCRIPT_MAX) list.lastChild.remove();
@@ -552,35 +517,9 @@ async function refreshLogs() {
   $("log-updated").textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
 }
 
-// ---------- Scroll spy ----------
-
-// Highlights the last section whose top has scrolled above a line 30% down
-// the window, or the final one once the page is scrolled to the bottom.
-const navLinks = [...document.querySelectorAll(".nav a")];
-const sections = [...document.querySelectorAll(".section")];
-
-function updateNav() {
-  const line = innerHeight * 0.3;
-  const atBottom = innerHeight + scrollY >= document.documentElement.scrollHeight - 2;
-  let current = sections[0];
-  for (const s of sections) if (s.getBoundingClientRect().top <= line) current = s;
-  if (atBottom && scrollY > 0) current = sections.at(-1);
-  if (scrollY < 8) current = sections[0];
-  for (const a of navLinks) a.classList.toggle("active", a.hash === `#${current.id}`);
-}
-addEventListener("scroll", updateNav, { passive: true });
-addEventListener("resize", updateNav);
-updateNav();
+scrollSpy();
 
 // ---------- Startup ----------
-
-function fmtAgo(iso) {
-  const secs = Math.max(0, (Date.now() - new Date(iso)) / 1000);
-  if (secs < 60) return "just now";
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
-}
 
 function tick() {
   const checked = data.status?.checked;

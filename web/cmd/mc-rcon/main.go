@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -62,7 +61,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "mc-rcon: %v\n", err)
 		os.Exit(1)
 	}
-	out = regexp.MustCompile("§.").ReplaceAllString(out, "")
+	out = rcon.StripFormatting(out)
 	if out != "" {
 		fmt.Println(strings.TrimRight(out, "\n"))
 	}

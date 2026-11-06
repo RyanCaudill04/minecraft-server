@@ -62,14 +62,7 @@ export function fmtDistance(cm) {
   return cm >= 100_000 ? `${(cm / 100_000).toFixed(1)} km` : `${Math.round(cm / 100)} m`;
 }
 
-export function fmtAgo(iso) {
-  if (!iso) return "never";
-  const secs = Math.max(0, (Date.now() - new Date(iso)) / 1000);
-  if (secs < 60) return "just now";
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
-}
+export { fmtAgo } from "../shared/common.js";
 
 export function fmtWhen(iso) {
   const d = new Date(iso);

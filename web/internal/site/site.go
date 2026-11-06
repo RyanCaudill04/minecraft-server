@@ -7,9 +7,11 @@ package site
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -62,17 +64,32 @@ func JSON[T any](name string, c *Cache[T]) http.HandlerFunc {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		WriteJSON(w, name, v)
+		WriteJSON(w, http.StatusOK, v)
 	}
 }
 
-// WriteJSON writes v as an uncached JSON response.
-func WriteJSON(w http.ResponseWriter, name string, v any) {
+// WriteJSON writes v as an uncached JSON response with status code.
+func WriteJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("writing %s: %v", name, err)
+		log.Printf("writing JSON: %v", err)
 	}
+}
+
+// CheckDirs reports the first path in dirs that isn't an existing folder.
+func CheckDirs(dirs ...string) error {
+	for _, d := range dirs {
+		info, err := os.Stat(d)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("%s is not a directory", d)
+		}
+	}
+	return nil
 }
 
 // Server returns an http.Server for h on addr with the timeouts every app
