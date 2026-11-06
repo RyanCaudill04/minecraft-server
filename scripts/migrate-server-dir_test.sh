@@ -188,7 +188,7 @@ if out=$(FAKE_MV_FAIL=usercache.json migrate --move-checkout-to "$new" --apply 2
   fail "resume: want a non-zero exit"
 else
   grep -q 'stopped partway' <<<"$out" || fail "resume: no recovery message: $out"
-  grep -qF -- "--checkout $(canon "$new") --server-dir $(canon "$srv") --apply" <<<"$out" ||
+  grep -qF -- "bash $(canon "$new")/scripts/migrate-server-dir.sh --checkout $(canon "$new") --server-dir $(canon "$srv") --apply" <<<"$out" ||
     fail "resume: no finish command: $out"
 fi
 [ -f "$srv/.migrate-in-progress" ] || fail "resume: no in-progress note"
@@ -205,6 +205,28 @@ done
 [ ! -e "$srv/.migrate-in-progress" ] || fail "resume: left the in-progress note"
 [ "$(find "$home/backups/minecraft" -name 'pre-migrate-*.tar.gz' | wc -l | tr -d ' ')" = 1 ] ||
   fail "resume: want exactly one backup"
+
+# On the Pi the script is a copy outside the checkout, whose scripts/ is
+# out of date: the finish command must name the copy, and running it
+# finishes the job.
+layout outside
+new=$home/src/minecraft-server
+srv=$home/minecraft_server
+cp "$co/scripts/migrate-server-dir.sh" "$home/migrate-server-dir.sh"
+rm "$co/scripts/migrate-server-dir.sh"
+git -C "$co" -c user.name=t -c user.email=t@example.com commit -qam 'old scripts/'
+if out=$(FAKE_MV_FAIL=usercache.json HOME=$home PATH="$bin:$PATH" SERVER_DIR='' \
+  bash "$home/migrate-server-dir.sh" --checkout "$co" --move-checkout-to "$new" --apply 2>&1); then
+  fail "outside: want a non-zero exit"
+fi
+finish=$(grep -o "bash .* --apply" <<<"$out" || true)
+[ "${finish%% --checkout*}" = "bash $(canon "$home/migrate-server-dir.sh")" ] ||
+  fail "outside: the finish command should run the copy: $out"
+read -ra finish_args <<<"${finish#bash }"
+out=$(HOME=$home PATH="$bin:$PATH" SERVER_DIR='' bash "${finish_args[@]}" 2>&1) ||
+  fail "outside: the finish command failed: $out"
+[ -f "$srv/usercache.json" ] || fail "outside: usercache.json not in the server folder"
+[ ! -e "$srv/.migrate-in-progress" ] || fail "outside: left the in-progress note"
 
 # Refuses while Paper runs, even when started by hand.
 layout paper
