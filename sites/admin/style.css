@@ -455,3 +455,39 @@ a.btn[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; }
   .backup-list .actions { width: 100%; }
   .backup-list .actions .btn { flex: 1; justify-content: center; }
 }
+
+/* ---------- Players ---------- */
+
+/* The whitelist beside the operators, each with an add form over its
+   list. The asleep note above them says why the forms are off. */
+.players-card { display: flex; flex-direction: column; gap: 16px; }
+.player-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.player-cols .cell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 0 20px;
+  border-left: 1px solid var(--border);
+}
+.player-cols .cell:first-child { padding-left: 0; border-left: 0; }
+.player-list li { align-items: center; }
+.player-list .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.player-list .title { font-weight: 600; overflow-wrap: anywhere; }
+.player-list .file {
+  color: var(--muted);
+  font: 0.75rem ui-monospace, "SF Mono", Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.player-list .kind { align-self: center; }
+.player-list .btn { flex: none; padding: 6px 12px; font-size: 0.8125rem; }
+#players-note:empty { display: none; }
+
+@media (max-width: 760px) {
+  .player-cols { grid-template-columns: minmax(0, 1fr); row-gap: 20px; }
+  .player-cols .cell { padding-left: 0; border-left: 0; }
+  .player-cols .cell + .cell { padding-top: 20px; border-top: 1px solid var(--border); }
+}
