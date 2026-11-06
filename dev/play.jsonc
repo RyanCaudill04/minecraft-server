@@ -1,0 +1,19 @@
+// dev-play.ryancaudill.dev: play's page with a synthetic API snapshot.
+// scripts/build-dev.sh fills dist/play; CI deploys it on every push to the
+// dev branch. See worker.mjs.
+{
+  "$schema": "https://unpkg.com/wrangler@4.151.2/config-schema.json",
+  "name": "dev-play",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-15",
+  // Only the custom domain, which Cloudflare Access protects. No
+  // workers.dev or preview URLs, which Access wouldn't cover.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "dev-play.ryancaudill.dev", "custom_domain": true }],
+  "assets": {
+    "directory": "dist/play",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  }
+}
