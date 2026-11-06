@@ -139,6 +139,8 @@ ones flagged for safe keeping. An archive holds `world`,
 `usercache.json`).
 
 - **Paper asleep** (the usual case at night): the world is copied as-is.
+  LazyMC sleeps Paper by freezing its process, which counts as asleep: a
+  frozen Paper writes nothing.
 - **Paper awake, RCON on:** saving is paused with `save-off` and
   `save-all flush` during the copy, then turned back on with `save-on`.
 - **Paper awake, RCON off:** the backup waits up to 30 minutes for Paper to
@@ -169,6 +171,10 @@ size and when the cleanup will remove it. From there you can:
 - **Download** or **delete** one.
 - **Back up now**, which starts `mc-backup.service` the same way the timer
   does.
+
+Only the nightly `world-*` backups are cleaned up; others in the folder,
+such as `pre-migrate-*` from `scripts/migrate-server-dir.sh`, stay until
+you delete them.
 
 Or from a shell: run one with `systemctl --user start mc-backup`, read its log
 with `journalctl --user-unit mc-backup`, and keep one with

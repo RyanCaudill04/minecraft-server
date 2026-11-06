@@ -3,8 +3,10 @@
 # and removes backups older than BACKUP_KEEP_DAYS unless they're kept. Run nightly by mc-backup.timer; safe to run by hand.
 #
 # Getting a consistent copy:
-#   - Paper asleep (LazyMC stopped it): nothing writes the world, so it is
-#     copied as-is. If Paper starts during the copy, the copy is retried.
+#   - Paper asleep (LazyMC stopped it, or froze it with SIGSTOP, which is
+#     how LazyMC sleeps it by default): nothing writes the world, so it is
+#     copied as-is. If Paper starts or wakes during the copy, the copy is
+#     retried.
 #   - Paper awake, RCON enabled in server.properties: "save-off" and
 #     "save-all flush" over RCON, copy, then "save-on" (always, even on
 #     failure).
@@ -134,11 +136,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-paper_running() { pgrep -f "$paper_pattern" >/dev/null; }
+# paper_pids prints the PIDs of Paper processes that are awake, on one
+# line, so two calls are equal only if the same process kept running in
+# between. A frozen Paper (state T: LazyMC's freeze_process, the default)
+# is asleep: it writes nothing, and it can't answer RCON.
+paper_pids() {
+  local pid
+  for pid in $(pgrep -f "$paper_pattern" || true); do
+    [[ $(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ') == T* ]] || printf '%s ' "$pid"
+  done
+}
 
-# paper_pids prints the PIDs of Paper on one line, so two calls are equal
-# only if the same process kept running in between.
-paper_pids() { pgrep -f "$paper_pattern" | tr '\n' ' ' || true; }
+paper_running() { [[ -n $(paper_pids) ]]; }
 
 # copy_world copies the sources into the staging folder, taking care that
 # Paper isn't writing them. It returns 1 if the copy has to be retried.
