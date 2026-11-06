@@ -104,7 +104,7 @@ Fixtures are synthetic (`worldtest`, `nbttest`).
 
 ## Dev sites
 
-Pushing to the `dev` branch runs CI's checks, then deploys
+Merging a PR into the `dev` branch runs CI's checks, then deploys
 dev-play.ryancaudill.dev and dev-admin.ryancaudill.dev to Cloudflare
 Workers. Both are behind Cloudflare Access. They serve the real pages from
 `sites/` with a frozen, synthetic API: `scripts/build-dev.sh` saves each
@@ -112,9 +112,12 @@ GET route's JSON from the `TestDevSnapshot` tests in `web/cmd/play` and
 `web/cmd/admin`, and `dev/worker.mjs` serves those files. Every POST is
 refused, so nothing on the dev sites reaches the Pi or the server.
 
-- `dev` is a scratch branch: push any branch to it to try it, with
-  `git push --force origin HEAD:dev`. It never merges into `main`, and
-  nothing on it ships to the Pi. Agents ask before pushing to it.
+- `dev` changes only through PRs, like `main`: a ruleset blocks direct
+  pushes, force-pushes and deleting it. To try a branch, open a PR into
+  `dev` (`gh pr create --base dev`), and open its PR into `main` as usual.
+  To bring `dev` up to date, open a PR from `main` into `dev`.
+- `dev` never merges into `main`, and nothing on it ships to the Pi.
+  Never merge a PR into `dev` unless the owner asks.
 - When a page starts reading a new GET route, add it to that site's
   `TestDevSnapshot`. `scripts/build-dev_test.sh` fails until you do.
 - Snapshot data comes only from test fixtures. Never put real player data
