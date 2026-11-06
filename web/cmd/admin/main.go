@@ -383,7 +383,13 @@ func main() {
 		dir: *dir, sharedDir: *sharedDir, appsDir: *appsDir, serverDir: *serverDir,
 		checker: &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status},
 		logPath: *logPath,
-		backups: &backups.Store{Dir: *backupDir, KeepDays: *keepDays},
+		backups: &backups.Store{
+			Dir: *backupDir, KeepDays: *keepDays,
+			// Only the nightly backups, named after the world, are cleaned
+			// up. Read once: level-name rarely changes, and admin restarts
+			// with every deploy.
+			Level: backups.LevelName(filepath.Join(*serverDir, "server.properties")),
+		},
 		wake: func(ctx context.Context) error {
 			return ping.Wake(ctx, *lazymc, wakeName)
 		},

@@ -3,9 +3,11 @@
 // .sha256 file next to each.
 //
 // A backup is kept for safe keeping when a <name>.keep file sits next to
-// it. mc-backup.sh removes every other backup once it is KeepDays old,
-// counting from the time in its name (the Pi's local time), so Expires
-// here matches what the script does.
+// it. mc-backup.sh removes every other one of its own backups (named after
+// the world's level-name) once it is KeepDays old, counting from the time
+// in its name (the Pi's local time), so Expires here matches what the
+// script does. Other archives in the folder, such as the pre-migrate
+// backup scripts/migrate-server-dir.sh writes, are never removed by it.
 //
 // Names are checked against the archive pattern and every file is opened
 // through an os.Root on the backup folder, so a name from a request can
@@ -13,6 +15,7 @@
 package backups
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -53,7 +56,9 @@ type Backup struct {
 	Created  time.Time `json:"created"`  // from the name, in the Pi's local time
 	Keep     bool      `json:"keep"`     // flagged for safe keeping
 	Checksum bool      `json:"checksum"` // has its .sha256 file
-	// Expires is when the nightly cleanup may remove it; zero if it's kept.
+	// Expires is when the nightly cleanup may remove it; zero if it's
+	// kept, or if it isn't one of the nightly backups, which the cleanup
+	// never removes.
 	Expires time.Time `json:"expires,omitzero"`
 }
 
@@ -61,6 +66,41 @@ type Backup struct {
 type Store struct {
 	Dir      string
 	KeepDays int
+	// Level is the world's level-name; the nightly backups are named
+	// <Level>-YYYYmmdd-HHMMSS.tar.gz. Empty means "world".
+	Level string
+}
+
+// LevelName reads level-name from a server.properties file, as
+// mc-backup.sh does: the last exact match wins, and "world" if it's
+// missing or the file can't be read.
+func LevelName(path string) string {
+	level := ""
+	f, err := os.Open(path)
+	if err == nil {
+		defer f.Close()
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			if v, ok := strings.CutPrefix(sc.Text(), "level-name="); ok {
+				level = v
+			}
+		}
+	}
+	if level == "" {
+		return "world"
+	}
+	return level
+}
+
+// nightly reports whether name is one of the backups mc-backup.sh writes
+// and cleans up.
+func (s *Store) nightly(name string) bool {
+	level := s.Level
+	if level == "" {
+		level = "world"
+	}
+	// A valid name ends in -<stamp>.tar.gz; the rest is its prefix.
+	return name[:len(name)-len(archiveExt)-len(stampLayout)-1] == level
 }
 
 // ValidName reports whether name is a backup archive's file name.
@@ -114,7 +154,7 @@ func (s *Store) List() ([]Backup, error) {
 			Keep:     names[e.Name()+keepExt],
 			Checksum: names[e.Name()+sumExt],
 		}
-		if !b.Keep {
+		if !b.Keep && s.nightly(b.Name) {
 			b.Expires = s.expires(at)
 		}
 		list = append(list, b)
