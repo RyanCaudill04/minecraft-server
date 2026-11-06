@@ -16,8 +16,15 @@
 //	GET  /api/logs?lines=n    the end of Paper's latest.log
 //	POST /api/console         run {"command": "..."} over RCON
 //	POST /api/server/{action} start, stop or restart minecraft.service
+//	GET  /api/backups         the world backups, newest first, and whether
+//	                          one is running
+//	GET  /api/backups/{name}  download one
+//	POST /api/backups/run     start mc-backup.service now
+//	POST /api/backups/{name}/keep    {"keep": true} flags it for safe keeping
+//	POST /api/backups/{name}/delete  remove one that isn't kept
 //
-// The last three need the user the Access token names. POSTs must also be
+// Logs, the console, the controls, downloads and every backup change need
+// the user the Access token names. POSTs must also be
 // same-origin and carry the X-Admin-Request: 1 header, and each one is
 // logged with the user's email.
 //
@@ -27,11 +34,16 @@
 // answers everything except /healthz with 503 until they're set. For local
 // development, -dev-user skips the token check instead.
 //
+// Backups are read from BACKUP_DIR (default ~/backups/minecraft), and
+// BACKUP_KEEP_DAYS says how long the nightly cleanup keeps them (default
+// 10), the same settings mc-backup.sh reads from host.env. -backups and
+// -backup-keep-days override them.
+//
 // The RCON password is read from RCON_PASSWORD (set in
 // ~/.config/minecraft/secrets.env, which admin.service loads), never from a
 // flag. Without it the console is off.
 //
-// Usage: admin -dir folder -shared folder [-apps folder] [-server folder] [-addr host:port] [-paper host:port] [-lazymc host:port] [-rcon host:port] [-logs file] [-dev-user email]
+// Usage: admin -dir folder -shared folder [-apps folder] [-server folder] [-addr host:port] [-paper host:port] [-lazymc host:port] [-rcon host:port] [-logs file] [-backups folder] [-backup-keep-days n] [-dev-user email]
 package main
 
 import (
@@ -42,11 +54,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ryancaudill04/minecraft-server/web/internal/access"
+	"github.com/ryancaudill04/minecraft-server/web/internal/backups"
 	"github.com/ryancaudill04/minecraft-server/web/internal/control"
 	"github.com/ryancaudill04/minecraft-server/web/internal/deploy"
 	"github.com/ryancaudill04/minecraft-server/web/internal/mcstatus"
@@ -92,6 +106,10 @@ type app struct {
 	wake func(ctx context.Context) error
 	// rcon runs a console command; nil when there's no RCON password.
 	rcon func(ctx context.Context, cmd string) (string, error)
+	// backups is the backup folder; nil turns the Backups section off.
+	backups *backups.Store
+	// backupUnit starts mc-backup.service; nil turns that button off.
+	backupUnit control.Controller
 	// logPath is Paper's latest.log.
 	logPath string
 	// user returns the verified email of whoever sent r, or "" if there
@@ -99,8 +117,9 @@ type app struct {
 	// the email the Access check put on the request.
 	user func(r *http.Request) string
 
-	status   *site.Cache[Status]
-	unitErrs logOnce
+	status     *site.Cache[Status]
+	unitErrs   logOnce
+	backupErrs logOnce
 }
 
 // newHandler routes the API and serves the static page from a.dir and the
@@ -162,6 +181,11 @@ func newHandler(a *app) http.Handler {
 	mux.Handle("POST /api/console", a.writes(a.console))
 	mux.Handle("POST /api/server/wake", a.writes(a.wakeServer))
 	mux.Handle("POST /api/server/{action}", a.writes(a.serverAction))
+	mux.HandleFunc("GET /api/backups", a.listBackups)
+	mux.HandleFunc("GET /api/backups/{name}", a.signedIn(a.downloadBackup))
+	mux.Handle("POST /api/backups/run", a.writes(a.runBackup))
+	mux.Handle("POST /api/backups/{name}/keep", a.writes(a.keepBackup))
+	mux.Handle("POST /api/backups/{name}/delete", a.writes(a.deleteBackup))
 	mux.Handle("GET /", site.Static(a.dir, a.sharedDir))
 	return mux
 }
@@ -286,6 +310,25 @@ func teamIssuer(domain string) (string, bool) {
 	return "https://" + host, true
 }
 
+// envOr returns the first of the named environment variables that's set,
+// or def. mc-backup.sh lets an MC_ name win over the plain one, and so
+// does this.
+func envOr(def string, names ...string) string {
+	for _, n := range names {
+		if v := strings.TrimSpace(os.Getenv(n)); v != "" {
+			return v
+		}
+	}
+	return def
+}
+
+// flagSet reports whether the flag was given on the command line.
+func flagSet(name string) bool {
+	set := false
+	flag.Visit(func(f *flag.Flag) { set = set || f.Name == name })
+	return set
+}
+
 func main() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -301,8 +344,22 @@ func main() {
 	timeout := flag.Duration("timeout", 2*time.Second, "how long to wait for each ping")
 	rconAddr := flag.String("rcon", "127.0.0.1:25575", "Paper's RCON address (answers only while awake)")
 	logPath := flag.String("logs", "", "Paper's log file (default: logs/latest.log in -server)")
+	backupDir := flag.String("backups", envOr(filepath.Join(home, "backups", "minecraft"), "MC_BACKUP_DIR", "BACKUP_DIR"), "folder mc-backup.sh writes world backups to")
+	keepDays := flag.Int("backup-keep-days", backups.DefaultKeepDays, "days the nightly cleanup keeps a backup that isn't flagged (default: BACKUP_KEEP_DAYS, else 10)")
 	devUser := flag.String("dev-user", "", "skip the Access token check and act as this email (local development only)")
 	flag.Parse()
+	if !flagSet("backup-keep-days") {
+		if v := envOr("", "MC_BACKUP_KEEP_DAYS", "BACKUP_KEEP_DAYS"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 {
+				log.Fatalf("admin: BACKUP_KEEP_DAYS must be a whole number of at least 1, got %q", v)
+			}
+			*keepDays = n
+		}
+	}
+	if *keepDays < 1 {
+		log.Fatalf("admin: -backup-keep-days must be at least 1")
+	}
 	if *logPath == "" {
 		*logPath = filepath.Join(*serverDir, "logs", "latest.log")
 	}
@@ -326,6 +383,7 @@ func main() {
 		dir: *dir, sharedDir: *sharedDir, appsDir: *appsDir, serverDir: *serverDir,
 		checker: &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status},
 		logPath: *logPath,
+		backups: &backups.Store{Dir: *backupDir, KeepDays: *keepDays},
 		wake: func(ctx context.Context) error {
 			return ping.Wake(ctx, *lazymc, wakeName)
 		},
@@ -334,6 +392,11 @@ func main() {
 		log.Fatalf("admin: %v", err)
 	} else {
 		a.control = ctl
+	}
+	if ctl, err := control.NewSystemd(control.BackupUnit, nil); err != nil {
+		log.Fatalf("admin: %v", err)
+	} else {
+		a.backupUnit = ctl
 	}
 	// Read the password once and drop it from the environment, so
 	// systemctl and anything else admin runs never inherit it.

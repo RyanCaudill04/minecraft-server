@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ryancaudill04/minecraft-server/web/internal/backups"
 	"github.com/ryancaudill04/minecraft-server/web/internal/control"
 	"github.com/ryancaudill04/minecraft-server/web/internal/mcstatus"
 	"github.com/ryancaudill04/minecraft-server/web/internal/ping"
@@ -110,6 +111,9 @@ type controlServer struct {
 	rcon *rcontest.Server
 	logs string
 	out  *syncBuffer // admin's log
+	// backupDir is the backup folder and backup the fake mc-backup.service.
+	backupDir string
+	backup    *fakeControl
 }
 
 // syncBuffer is admin's log output, safe to read while handlers write.
@@ -140,6 +144,8 @@ func newControlServer(t *testing.T, user string) *controlServer {
 	ctl := &fakeControl{state: control.State{Active: "active", Sub: "running"}}
 	rs := rcontest.New(t, "pw")
 	mc := &fakeServer{}
+	backupDir := t.TempDir()
+	backup := &fakeControl{state: control.State{Active: "inactive", Sub: "dead"}}
 
 	out := &syncBuffer{}
 	log.SetOutput(out)
@@ -153,12 +159,14 @@ func newControlServer(t *testing.T, user string) *controlServer {
 		rcon: func(ctx context.Context, cmd string) (string, error) {
 			return rcon.Run(ctx, rs.Addr, "pw", cmd)
 		},
-		logPath: logs,
-		user:    func(*http.Request) string { return user },
+		logPath:    logs,
+		backups:    &backups.Store{Dir: backupDir, KeepDays: 10},
+		backupUnit: backup,
+		user:       func(*http.Request) string { return user },
 	}
 	ts := httptest.NewServer(newHandler(a))
 	t.Cleanup(ts.Close)
-	return &controlServer{Server: ts, mc: mc, ctl: ctl, rcon: rs, logs: logs, out: out}
+	return &controlServer{Server: ts, mc: mc, ctl: ctl, rcon: rs, logs: logs, out: out, backupDir: backupDir, backup: backup}
 }
 
 // post sends a same-origin POST the way the page does, with extra headers
