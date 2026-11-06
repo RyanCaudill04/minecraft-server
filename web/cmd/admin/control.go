@@ -48,6 +48,7 @@ type Me struct {
 	Email   string `json:"email,omitzero"`
 	Control bool   `json:"control"` // start, stop and restart
 	Console bool   `json:"console"` // RCON and the log
+	Backups bool   `json:"backups"` // keep, delete, download and run backups
 	// Locked says why the controls are off, if they are.
 	Locked string `json:"locked,omitzero"`
 }
@@ -64,6 +65,7 @@ func (a *app) me(r *http.Request) Me {
 		return m
 	}
 	m.Control = a.control != nil
+	m.Backups = a.backups != nil
 	m.Console = a.rcon != nil
 	if !m.Console {
 		m.Locked = lockedNoRCON

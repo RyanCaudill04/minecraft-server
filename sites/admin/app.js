@@ -2,7 +2,8 @@
 // Updates only text and data-state, so polling never moves keyboard focus;
 // the list of changes is rebuilt only when the release changes. The Server
 // and Console sections POST actions and commands; their output is only
-// ever set as text.
+// ever set as text. The Backups section lists the world backups and
+// keeps, deletes, downloads and starts them.
 
 const STATUS_MS = 10_000; // server state and who's online
 const DEPLOY_MS = 60_000; // the active release (changes a few times a day)
@@ -23,7 +24,7 @@ const KINDS = { feature: "Feature", fix: "Bug fix", other: "Other" };
 const OUTCOMES = { success: "Succeeded", failed: "Failed", rolled_back: "Rolled back" };
 const REPO = "https://github.com/RyanCaudill04/minecraft-server";
 
-const data = { status: null, deploy: null, plugins: null, me: null };
+const data = { status: null, deploy: null, plugins: null, me: null, backups: null };
 
 const PLUGIN_STATUS = {
   pinned: { label: "Pinned", note: "Matches the manifest." },
@@ -333,6 +334,7 @@ async function refreshMe() {
   renderMe();
   renderUnit();
   renderConsole();
+  renderBackups();
 }
 
 function renderMe() {
@@ -426,12 +428,21 @@ function confirmAction(action) {
   else if (s?.online > 1) who = `${s.online} players are online and will be disconnected.`;
 
   const verb = action === "stop" ? "Stop" : "Restart";
-  $("confirm-title").textContent = `${verb} the server?`;
-  $("confirm-message").textContent =
+  return ask(
+    `${verb} the server?`,
     action === "stop"
       ? `${who} Nobody can join until it's started again.`
-      : `${who} Paper saves and LazyMC starts again.`;
-  $("confirm-ok").textContent = verb;
+      : `${who} Paper saves and LazyMC starts again.`,
+    verb,
+  );
+}
+
+// Shows the confirmation dialog and resolves true if its OK button was
+// chosen.
+function ask(title, message, ok) {
+  $("confirm-title").textContent = title;
+  $("confirm-message").textContent = message;
+  $("confirm-ok").textContent = ok;
 
   const dialog = $("confirm");
   dialog.returnValue = "";
@@ -552,6 +563,224 @@ async function refreshLogs() {
   $("log-updated").textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
 }
 
+// ---------- Backups ----------
+
+const BACKUPS_MS = 30_000; // the list (a new one appears nightly)
+const BACKUP_RUN_MS = 3_000; // while a backup runs
+const DAY_MS = 86_400_000;
+
+let backupBusy = false; // a backup request is in flight
+let backupTimer;
+
+async function refreshBackups() {
+  try {
+    data.backups = await getJSON("/api/backups");
+  } catch (err) {
+    console.warn(err);
+    data.backups = null;
+  }
+  renderBackups();
+  // Poll faster while a backup runs, so it shows up when it's done.
+  clearTimeout(backupTimer);
+  if (backupRunning() && !document.hidden) backupTimer = setTimeout(refreshBackups, BACKUP_RUN_MS);
+}
+
+const backupRunning = () => data.backups?.unit?.active === "activating";
+
+function setBackupNote(text, isError = false) {
+  const note = $("backup-note");
+  note.textContent = text;
+  note.classList.toggle("error", isError);
+}
+
+function fmtBytes(n) {
+  if (n == null) return "–";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${n < 10 && i ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
+}
+
+const fmtDate = (iso) =>
+  new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
+// "in 3 days", "tomorrow", or "at the next cleanup" once it's due.
+function fmtUntil(iso) {
+  const ms = new Date(iso) - Date.now();
+  if (ms <= 0) return "at the next cleanup";
+  const days = Math.ceil(ms / DAY_MS);
+  if (days === 1) return ms < 12 * 3_600_000 ? `in ${Math.ceil(ms / 3_600_000)}h` : "within a day";
+  return `in ${days} days`;
+}
+
+// What mc-backup.service is doing, for the run cell.
+const BACKUP_UNIT = {
+  activating: ["busy", "Backing up now…"],
+  failed: ["failed", "The last run failed. See journalctl --user-unit mc-backup."],
+  inactive: ["on", "Runs nightly at about 04:30."],
+};
+
+function renderBackups() {
+  const d = data.backups;
+  const can = !!data.me?.backups;
+  const list = d?.backups ?? [];
+
+  if (d) $("backup-policy").textContent = `World backups from mc-backup. Each one is removed after ${d.keep_days} days unless it's kept for safe keeping.`;
+  $("backup-count").textContent = d ? list.length : "–";
+  const kept = list.filter((b) => b.keep).length;
+  $("backup-total").textContent = d ? `${fmtBytes(d.total_size)}${kept ? ` · ${kept} kept` : ""}` : "";
+  $("backup-newest").textContent = list[0] ? fmtAgo(list[0].created) : d ? "None yet" : "–";
+  $("backup-newest-at").textContent = list[0] ? fmtDate(list[0].created) : "";
+  $("backup-free").textContent = d?.free != null ? fmtBytes(d.free) : "–";
+
+  const [run, runText] = BACKUP_UNIT[d?.unit?.active] ?? ["unknown", d ? "Can't read mc-backup.service." : "Couldn't read the backups."];
+  document.querySelector(".backup-run").dataset.run = run;
+  $("backup-run-state").textContent = runText;
+  const runBtn = $("backup-run");
+  const runOff = !can || backupBusy || !d?.unit || backupRunning();
+  if (runOff && runBtn === document.activeElement) runBtn.closest(".card").focus();
+  runBtn.disabled = runOff;
+
+  let empty = "";
+  if (!d) empty = "Couldn't read the backup folder.";
+  else if (!list.length) empty = "No backups yet. The first one runs tonight, or back up now.";
+  else if (!can) empty = data.me?.locked ?? "";
+  $("backup-empty").textContent = empty;
+  $("backup-empty").hidden = !empty;
+
+  renderBackupList(list, can);
+}
+
+// Rebuilds the list when it changes (or every hour, for the "removed in"
+// text), and puts focus back on the same button afterwards.
+let shownBackups;
+function renderBackupList(list, can) {
+  const key = JSON.stringify([list, can, Math.floor(Date.now() / 3_600_000)]);
+  if (key === shownBackups) return;
+  shownBackups = key;
+
+  const active = document.activeElement;
+  const refocus = $("backup-list").contains(active) ? [active.dataset.name, active.dataset.op] : null;
+
+  $("backup-list").replaceChildren(
+    ...list.map((b) => {
+      const li = document.createElement("li");
+      const who = document.createElement("span");
+      who.className = "who";
+      const title = document.createElement("span");
+      title.className = "title";
+      title.textContent = fmtDate(b.created);
+      const file = document.createElement("span");
+      file.className = "file";
+      file.textContent = `${b.name} · ${fmtBytes(b.size)} · ${fmtAgo(b.created)}${b.checksum ? "" : " · no checksum"}`;
+      who.append(title, file);
+
+      const badge = document.createElement("span");
+      badge.className = "kind";
+      if (b.keep) {
+        badge.dataset.kind = "kept";
+        badge.textContent = "Kept";
+      } else {
+        const soon = new Date(b.expires) - Date.now() < 2 * DAY_MS;
+        badge.dataset.kind = soon ? "expiring" : "";
+        badge.textContent = `Removed ${fmtUntil(b.expires)}`;
+        badge.title = `The nightly cleanup removes it after ${fmtDate(b.expires)}.`;
+      }
+
+      const actions = document.createElement("span");
+      actions.className = "actions";
+      const keep = button("Keep", "keep", b.name, "btn-secondary");
+      keep.setAttribute("aria-pressed", String(b.keep));
+      keep.setAttribute("aria-label", `Keep the ${fmtDate(b.created)} backup for safe keeping`);
+      keep.disabled = !can;
+      keep.addEventListener("click", () => setKeep(b, !b.keep));
+
+      const download = document.createElement("a");
+      download.className = "btn btn-secondary";
+      download.textContent = "Download";
+      download.dataset.name = b.name;
+      download.dataset.op = "download";
+      download.setAttribute("aria-label", `Download the ${fmtDate(b.created)} backup`);
+      if (can) {
+        download.href = `/api/backups/${encodeURIComponent(b.name)}`;
+        download.download = b.name;
+      } else {
+        download.setAttribute("aria-disabled", "true");
+      }
+
+      const del = button("Delete", "delete", b.name, "btn-danger");
+      del.setAttribute("aria-label", `Delete the ${fmtDate(b.created)} backup`);
+      del.disabled = !can || b.keep;
+      if (b.keep) del.title = "Kept backups can't be deleted. Remove the flag first.";
+      del.addEventListener("click", () => deleteBackup(b));
+
+      actions.append(keep, download, del);
+      li.append(who, badge, actions);
+      return li;
+    }),
+  );
+
+  if (refocus) {
+    const again = [...$("backup-list").querySelectorAll("[data-name]")].find(
+      (n) => n.dataset.name === refocus[0] && n.dataset.op === refocus[1] && !n.disabled,
+    );
+    (again ?? document.querySelector(".backups-card")).focus();
+  }
+}
+
+function button(text, op, name, kind) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = `btn ${kind}`;
+  b.textContent = text;
+  b.dataset.name = name;
+  b.dataset.op = op;
+  return b;
+}
+
+// Runs one backup request, then refreshes the list. The row buttons stay
+// enabled meanwhile, so focus stays put; a second click is ignored.
+async function backupRequest(doing, path, body, done) {
+  if (backupBusy) return;
+  backupBusy = true;
+  renderBackups();
+  setBackupNote(doing);
+  try {
+    await post(path, body);
+    setBackupNote(done);
+  } catch (err) {
+    setBackupNote(err.message, true);
+  } finally {
+    backupBusy = false;
+  }
+  await refreshBackups();
+}
+
+function setKeep(b, keep) {
+  const when = fmtDate(b.created);
+  backupRequest(
+    keep ? "Keeping it…" : "Removing the flag…",
+    `/api/backups/${encodeURIComponent(b.name)}/keep`,
+    { keep },
+    keep
+      ? `Kept the ${when} backup. The cleanup won't remove it.`
+      : `The ${when} backup is no longer kept, so the cleanup removes it once it's ${data.backups?.keep_days ?? 10} days old.`,
+  );
+}
+
+async function deleteBackup(b) {
+  const when = fmtDate(b.created);
+  if (!(await ask("Delete this backup?", `The ${when} backup (${fmtBytes(b.size)}) is removed for good.`, "Delete"))) return;
+  backupRequest("Deleting…", `/api/backups/${encodeURIComponent(b.name)}/delete`, null, `Deleted the ${when} backup.`);
+}
+
+$("backup-run").addEventListener("click", () =>
+  backupRequest("Starting a backup…", "/api/backups/run", null, "Backup started. It shows up here when it's done, usually within a few minutes."),
+);
+
 // ---------- Scroll spy ----------
 
 // Highlights the last section whose top has scrolled above a line 30% down
@@ -593,11 +822,13 @@ function start() {
   refreshStatus();
   refreshDeploy();
   refreshPlugins();
+  refreshBackups();
   refreshMe().then(refreshLogs);
   timers = [
     setInterval(refreshStatus, STATUS_MS),
     setInterval(refreshDeploy, DEPLOY_MS),
     setInterval(refreshPlugins, PLUGINS_MS),
+    setInterval(refreshBackups, BACKUPS_MS),
     setInterval(refreshLogs, LOG_MS),
     setInterval(tick, 1000),
   ];
@@ -607,6 +838,7 @@ function stop() {
   timers.forEach(clearInterval);
   timers = [];
   clearTimeout(fastTimer);
+  clearTimeout(backupTimer);
 }
 
 // Don't poll while the tab is in the background.

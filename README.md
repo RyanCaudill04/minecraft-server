@@ -132,8 +132,8 @@ every night at about 04:30. It ships in the release, so mc-agent installs and
 updates it like the web apps. It never starts, stops or waits on
 `minecraft.service`. Each run writes
 `~/backups/minecraft/world-YYYYmmdd-HHMMSS.tar.gz` with a `.sha256` file next
-to it, checks the archive, and keeps the newest backup of each of the last 7
-days and of each of the last 4 weeks. An archive holds `world`,
+to it, checks the archive, and removes backups 10 days old or older, except
+ones flagged for safe keeping. An archive holds `world`,
 `world_nether`, `world_the_end` and the runtime files git doesn't track
 (`server.properties`, `ops.json`, `whitelist.json`, the ban lists and
 `usercache.json`).
@@ -149,17 +149,30 @@ To let backups run while people are playing, turn on RCON as described in
 server folder's `server.properties`.
 
 Settings such as retention and an off-Pi copy go in `~/.config/minecraft/host.env`,
-the same file that sets `SERVER_DIR`; the script's header lists them all. For
-example:
+the same file that sets `SERVER_DIR`; the script's header lists them all.
+admin reads `BACKUP_DIR` and `BACKUP_KEEP_DAYS` from it too, so both agree.
+For example:
 
 ```bash
-BACKUP_KEEP_DAILY=7
-BACKUP_KEEP_WEEKLY=8
+BACKUP_KEEP_DAYS=14
 BACKUP_COPY_TO=user@nas:backups/minecraft/
 ```
 
-Run one now with `systemctl --user start mc-backup` and read its log with
-`journalctl --user -u mc-backup`.
+### Managing backups from admin
+
+The Backups section of admin.ryancaudill.dev lists every backup with its
+size and when the cleanup will remove it. From there you can:
+
+- **Keep** a backup for safe keeping. The cleanup never removes it, and it
+  can't be deleted until the flag is removed. The flag is a
+  `<archive>.keep` file next to the archive.
+- **Download** or **delete** one.
+- **Back up now**, which starts `mc-backup.service` the same way the timer
+  does.
+
+Or from a shell: run one with `systemctl --user start mc-backup`, read its log
+with `journalctl --user-unit mc-backup`, and keep one with
+`touch ~/backups/minecraft/world-YYYYmmdd-HHMMSS.tar.gz.keep`.
 
 ### Restoring
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Backs up the Minecraft world to a timestamped .tar.gz, checks the archive,
-# and prunes old ones. Run nightly by mc-backup.timer; safe to run by hand.
+# and removes backups older than BACKUP_KEEP_DAYS unless they're kept. Run nightly by mc-backup.timer; safe to run by hand.
 #
 # Getting a consistent copy:
 #   - Paper asleep (LazyMC stopped it): nothing writes the world, so it is
@@ -20,8 +20,9 @@
 # services. Each BACKUP_* name also works with an MC_ prefix, which wins:
 #   SERVER_DIR             server folder (default ~/minecraft_server; MC_SERVER_DIR wins)
 #   BACKUP_DIR             where archives go (default ~/backups/minecraft)
-#   BACKUP_KEEP_DAILY      newest backup of each of the last N days (default 7)
-#   BACKUP_KEEP_WEEKLY     newest backup of each of the last M weeks (default 4)
+#   BACKUP_KEEP_DAYS       remove backups this many days old (default 10), except
+#                          ones kept for safe keeping (a <archive>.keep file,
+#                          which admin's Backups section adds and removes)
 #   BACKUP_WAIT            seconds to wait for Paper to sleep without RCON (default 1800)
 #   BACKUP_COPY_TO         optional rsync destination for an off-Pi copy, e.g.
 #                          user@nas:backups/minecraft/ (new archives only; it is
@@ -40,8 +41,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 server_dir=${MC_SERVER_DIR:-${SERVER_DIR:-$HOME/minecraft_server}}
 backup_dir=${MC_BACKUP_DIR:-${BACKUP_DIR:-$HOME/backups/minecraft}}
-keep_daily=${MC_BACKUP_KEEP_DAILY:-${BACKUP_KEEP_DAILY:-7}}
-keep_weekly=${MC_BACKUP_KEEP_WEEKLY:-${BACKUP_KEEP_WEEKLY:-4}}
+keep_days=${MC_BACKUP_KEEP_DAYS:-${BACKUP_KEEP_DAYS:-10}}
 wait_secs=${MC_BACKUP_WAIT:-${BACKUP_WAIT:-1800}}
 margin_kb=${MC_BACKUP_MIN_FREE_KB:-${BACKUP_MIN_FREE_KB:-1048576}}
 copy_to=${MC_BACKUP_COPY_TO:-${BACKUP_COPY_TO:-}}
@@ -52,10 +52,13 @@ stamp=${MC_BACKUP_TIME:-$(date +%Y%m%d-%H%M%S)}
 log() { echo "mc-backup: $*"; }
 die() { echo "mc-backup: $*" >&2; exit 1; }
 
-for n in "$keep_daily" "$keep_weekly" "$wait_secs" "$margin_kb"; do
+for n in "$keep_days" "$wait_secs" "$margin_kb"; do
   [[ $n =~ ^[0-9]+$ ]] || die "retention and wait settings must be whole numbers, got '$n'"
 done
-((keep_daily >= 1)) || die "BACKUP_KEEP_DAILY must be at least 1, or the new backup would be pruned"
+((keep_days >= 1)) || die "BACKUP_KEEP_DAYS must be at least 1"
+if [[ -n ${MC_BACKUP_KEEP_DAILY:-}${BACKUP_KEEP_DAILY:-}${MC_BACKUP_KEEP_WEEKLY:-}${BACKUP_KEEP_WEEKLY:-} ]]; then
+  log "warning: BACKUP_KEEP_DAILY and BACKUP_KEEP_WEEKLY are no longer used; backups last BACKUP_KEEP_DAYS ($keep_days) days unless kept"
+fi
 [[ $stamp =~ ^[0-9]{8}-[0-9]{6}$ ]] || die "timestamp '$stamp' is not YYYYmmdd-HHMMSS"
 
 props=$server_dir/server.properties
@@ -228,38 +231,36 @@ days_since_epoch() {
   echo $((era * 146097 + doe - 719468))
 }
 
-# Prune: walking from newest to oldest, keep the newest backup of each of
-# the last keep_daily days and of each of the last keep_weekly weeks
-# (Monday to Sunday). Only files named like this script's archives are
-# touched.
-daily=0 weekly=0 last_day="" last_week="" pruned=0
+# stamp_secs YYYYmmdd-HHMMSS prints seconds since the epoch for a local
+# timestamp, counting wall-clock time the way admin does (no DST shift).
+stamp_secs() {
+  local t=$1
+  echo $(($(days_since_epoch "${t:0:8}") * 86400 + 10#${t:9:2} * 3600 + 10#${t:11:2} * 60 + 10#${t:13:2}))
+}
+
+# Clean up: remove every backup that is keep_days old or older, except ones
+# kept for safe keeping and the one just written. Only files named like
+# this script's archives are touched.
+now=$(stamp_secs "$stamp")
+max_age=$((keep_days * 86400))
+kept=0 pruned=0
 while IFS= read -r file; do
-  day=${file#"$level"-}
-  day=${day:0:8}
-  week=$((($(days_since_epoch "$day") + 3) / 7)) # 1970-01-01 was a Thursday
-  keep=false
-  if [[ $day != "$last_day" ]]; then
-    last_day=$day
-    if ((daily < keep_daily)); then
-      keep=true
-      daily=$((daily + 1))
-    fi
+  t=${file%.tar.gz}
+  t=${t: -15}
+  if [[ $file == "$name" || -e $backup_dir/$file.keep ]] || ((now - $(stamp_secs "$t") < max_age)); then
+    kept=$((kept + 1))
+    continue
   fi
-  if [[ $week != "$last_week" ]]; then
-    last_week=$week
-    if ((weekly < keep_weekly)); then
-      keep=true
-      weekly=$((weekly + 1))
-    fi
-  fi
-  if ! $keep; then
-    rm -f "$backup_dir/$file" "$backup_dir/$file.sha256"
-    log "pruned $file"
-    pruned=$((pruned + 1))
-  fi
+  rm -f "$backup_dir/$file" "$backup_dir/$file.sha256"
+  log "removed $file (older than $keep_days days)"
+  pruned=$((pruned + 1))
 done < <(cd "$backup_dir" && find . -maxdepth 1 -type f -name "$level-*.tar.gz" | sed 's|^\./||' |
   grep -E "^$level-[0-9]{8}-[0-9]{6}\.tar\.gz$" | sort -r)
-log "kept $daily daily and $weekly weekly backups, pruned $pruned"
+# A keep flag whose archive was removed by hand keeps nothing.
+while IFS= read -r flag; do
+  [[ -e $backup_dir/${flag%.keep} ]] || rm -f "$backup_dir/$flag"
+done < <(cd "$backup_dir" && find . -maxdepth 1 -type f -name "$level-*.tar.gz.keep" | sed 's|^\./||')
+log "kept $kept backups, removed $pruned older than $keep_days days"
 
 if [[ -n $copy_to ]]; then
   # Failing here still leaves the local backup in place.

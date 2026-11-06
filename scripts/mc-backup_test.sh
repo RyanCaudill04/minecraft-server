@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for deploy/backup/mc-backup.sh against a throwaway fake server
-# folder: a backup restores to the same files, retention over several weeks
-# of fake dates, and the Paper-running cases with and without RCON.
+# folder: a backup restores to the same files, the 10-day cleanup and keep
+# flags over weeks of fake dates, and the Paper-running cases with and
+# without RCON.
 #
 # Usage: scripts/mc-backup_test.sh
 set -euo pipefail
@@ -73,32 +74,48 @@ else
   fail "asleep: backup failed"
 fi
 
-# 2. Retention: one backup a day from Sep 1 to Oct 10 2026 (a Saturday),
-# plus a second one on Oct 10, keeping 7 daily and 4 weekly.
+# 2. Retention: one backup a day at 04:30 from Oct 1 to Oct 20 2026, with
+# Oct 3 kept for safe keeping, and a stray flag for an archive that's gone.
+# Each run removes backups 10 days old or older.
 out=$tmp/retention
-for day in $(seq 0 39); do
-  stamp=$(date -u -j -v+"${day}"d -f %Y%m%d 20260901 +%Y%m%d 2>/dev/null || date -u -d "20260901 +$day days" +%Y%m%d)
-  run "$out" "$stamp-043000" MC_BACKUP_KEEP_DAILY=7 MC_BACKUP_KEEP_WEEKLY=4 || fail "retention: backup $stamp failed"
+mkdir -p "$out"
+for day in $(seq 0 19); do
+  stamp=$(date -u -j -v+"${day}"d -f %Y%m%d 20261001 +%Y%m%d 2>/dev/null || date -u -d "20261001 +$day days" +%Y%m%d)
+  run "$out" "$stamp-043000" MC_BACKUP_KEEP_DAYS=10 || fail "retention: backup $stamp failed"
+  [[ $stamp == 20261003 ]] && touch "$out/world-20261003-043000.tar.gz.keep"
 done
-run "$out" 20261010-120000 MC_BACKUP_KEEP_DAILY=7 MC_BACKUP_KEEP_WEEKLY=4 || fail "retention: second Oct 10 backup failed"
-# Newest of each of the last 7 days (Oct 4-10), then the newest of each
-# older week: Oct 4 already covers its week, then Sep 27 and Sep 20.
-want="world-20260920-043000.tar.gz
-world-20260927-043000.tar.gz
-world-20261004-043000.tar.gz
-world-20261005-043000.tar.gz
-world-20261006-043000.tar.gz
-world-20261007-043000.tar.gz
-world-20261008-043000.tar.gz
-world-20261009-043000.tar.gz
-world-20261010-120000.tar.gz"
+touch "$out/world-20260101-043000.tar.gz.keep"
+# Just under 10 days after Oct 11 04:30, then exactly 10 days.
+run "$out" 20261021-042959 MC_BACKUP_KEEP_DAYS=10 || fail "retention: Oct 21 04:29 backup failed"
+[[ -f $out/world-20261011-043000.tar.gz ]] || fail "retention: removed a backup under 10 days old"
+run "$out" 20261021-043000 MC_BACKUP_KEEP_DAYS=10 || fail "retention: Oct 21 04:30 backup failed"
+want="world-20261003-043000.tar.gz
+world-20261012-043000.tar.gz
+world-20261013-043000.tar.gz
+world-20261014-043000.tar.gz
+world-20261015-043000.tar.gz
+world-20261016-043000.tar.gz
+world-20261017-043000.tar.gz
+world-20261018-043000.tar.gz
+world-20261019-043000.tar.gz
+world-20261020-043000.tar.gz
+world-20261021-042959.tar.gz
+world-20261021-043000.tar.gz"
 got=$(cd "$out" && printf '%s\n' *.tar.gz | sort)
 [[ $got == "$want" ]] || fail "retention: kept $(echo "$got" | tr '\n' ' ')"
-[[ $(cd "$out" && printf '%s\n' *.sha256 | wc -l | tr -d ' ') == 9 ]] || fail "retention: checksum files weren't pruned with their archives"
-# Files that aren't backups are never pruned.
+[[ $(cd "$out" && printf '%s\n' *.sha256 | wc -l | tr -d ' ') == 12 ]] || fail "retention: checksum files weren't removed with their archives"
+[[ -f $out/world-20261003-043000.tar.gz.keep ]] || fail "retention: removed the keep flag of a kept backup"
+[[ ! -e $out/world-20260101-043000.tar.gz.keep ]] || fail "retention: left a flag for a missing archive"
+# Files that aren't backups are never removed, however old.
 touch "$out/notes.txt" "$out/world-old-copy.tar.gz"
-run "$out" 20261011-043000 || fail "retention: Oct 11 backup failed"
-[[ -f $out/notes.txt && -f $out/world-old-copy.tar.gz ]] || fail "retention: pruned a file that isn't a backup"
+run "$out" 20261201-043000 || fail "retention: Dec 1 backup failed"
+[[ -f $out/notes.txt && -f $out/world-old-copy.tar.gz ]] || fail "retention: removed a file that isn't a backup"
+# The default is 10 days too, and only the kept and the new backup are left.
+got=$(cd "$out" && printf '%s\n' world-2*.tar.gz | sort | tr '\n' ' ')
+[[ $got == "world-20261003-043000.tar.gz world-20261201-043000.tar.gz " ]] || fail "retention: default kept $got"
+# The old daily and weekly settings only warn.
+run "$out" 20261202-043000 BACKUP_KEEP_DAILY=7 || fail "retention: an old setting failed the backup"
+grep -q "BACKUP_KEEP_DAILY and BACKUP_KEEP_WEEKLY are no longer used" "$tmp/log" || fail "retention: no warning for an old setting"
 
 # 3. Paper running without RCON: wait, then give up without an archive.
 out=$tmp/no-rcon
@@ -171,7 +188,7 @@ grep -q "not enough free space" "$tmp/log" || fail "space: no clear message"
 
 # 5e. The shared host.env names work when the MC_ ones aren't set.
 out=$tmp/hostenv
-if (unset MC_SERVER_DIR; run "$out" 20261031-074000 SERVER_DIR="$server" BACKUP_KEEP_DAILY=1); then
+if (unset MC_SERVER_DIR; run "$out" 20261031-074000 SERVER_DIR="$server" BACKUP_KEEP_DAYS=1); then
   [[ -f $out/world-20261031-074000.tar.gz ]] || fail "host.env names: no archive"
 else
   fail "host.env names: backup failed"
