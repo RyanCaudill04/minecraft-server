@@ -12,7 +12,7 @@ backup=$dir/../deploy/backup/mc-backup.sh
 tmp=$(mktemp -d)
 fake_paper=
 cleanup() {
-  [[ -n $fake_paper ]] && kill "$fake_paper" 2>/dev/null
+  [[ -n $fake_paper ]] && kill -CONT "$fake_paper" 2>/dev/null && kill "$fake_paper" 2>/dev/null
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -48,6 +48,8 @@ start_paper() {
   sleep 0.2
 }
 stop_paper() {
+  # A frozen process only acts on SIGTERM once it's thawed.
+  kill -CONT "$fake_paper" 2>/dev/null || true
   kill "$fake_paper" 2>/dev/null || true
   wait "$fake_paper" 2>/dev/null || true
   fake_paper=
@@ -122,6 +124,19 @@ out=$tmp/no-rcon
 start_paper
 if run "$out" 20261031-050000 MC_BACKUP_WAIT=0; then fail "no rcon: should fail while Paper runs"; fi
 [[ ! -e $out/world-20261031-050000.tar.gz ]] || fail "no rcon: wrote an archive"
+
+# 3b. Paper frozen by LazyMC (SIGSTOP) counts as asleep: copied as-is
+# without RCON or waiting, even with RCON on (a frozen Paper never answers).
+cp "$tmp/log" "$tmp/log.before-frozen"
+# Freezes the Paper case 3 started, and thaws it for the cases after.
+kill -STOP "$fake_paper"
+printf 'level-name=world\nenable-rcon=true\nrcon.port=25575\nrcon.password=hunter2\n' >"$server/server.properties"
+out=$tmp/frozen
+run "$out" 20261031-053000 MC_BACKUP_WAIT=0 MC_RCON=/nonexistent || fail "frozen: backup failed"
+[[ -f $out/world-20261031-053000.tar.gz ]] || fail "frozen: no archive"
+[[ $(grep -c "(asleep)" "$tmp/log") == $(grep -c "(asleep)" "$tmp/log.before-frozen") ]] && fail "frozen: wasn't copied as asleep"
+kill -CONT "$fake_paper"
+printf 'level-name=world\nenable-rcon=false\nrcon.port=25575\nrcon.password=\n' >"$server/server.properties"
 
 # 4. Paper running with RCON: saving is paused around the copy.
 fake_rcon=$tmp/fake-rcon

@@ -224,3 +224,47 @@ func TestFree(t *testing.T) {
 		t.Error("Free on a missing folder reported ok")
 	}
 }
+
+func TestOnlyNightlyBackupsExpire(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, "survival-20261101-043000.tar.gz", "world-20261101-043000.tar.gz",
+		"pre-migrate-20261101-221234.tar.gz")
+	list, err := (&Store{Dir: dir, Level: "survival"}).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range list {
+		if want := b.Name == "survival-20261101-043000.tar.gz"; b.Expires.IsZero() == want {
+			t.Errorf("%s: expires %v; only the level's nightly backups expire", b.Name, b.Expires)
+		}
+	}
+	// With no level set, it's "world".
+	list, _ = (&Store{Dir: dir}).List()
+	for _, b := range list {
+		if want := b.Name == "world-20261101-043000.tar.gz"; b.Expires.IsZero() == want {
+			t.Errorf("default level, %s: expires %v", b.Name, b.Expires)
+		}
+	}
+}
+
+func TestLevelName(t *testing.T) {
+	dir := t.TempDir()
+	props := filepath.Join(dir, "server.properties")
+	for text, want := range map[string]string{
+		"level-name=survival\nmotd=x\n":           "survival",
+		"#level-name=old\nlevel-name=new\n":       "new",
+		"level-name=a\nlevel-name=b\n":            "b",
+		"level-name=\n":                           "world",
+		"other-level-name=x\nmotd=level-name=y\n": "world",
+	} {
+		if err := os.WriteFile(props, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := LevelName(props); got != want {
+			t.Errorf("LevelName(%q) = %q, want %q", text, got, want)
+		}
+	}
+	if got := LevelName(filepath.Join(dir, "missing")); got != "world" {
+		t.Errorf("LevelName(missing) = %q, want world", got)
+	}
+}

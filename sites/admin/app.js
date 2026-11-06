@@ -888,6 +888,10 @@ function renderBackupList(list, can) {
       if (b.keep) {
         badge.dataset.kind = "kept";
         badge.textContent = "Kept";
+      } else if (!b.expires) {
+        // Not a nightly backup (e.g. pre-migrate): the cleanup leaves it.
+        badge.textContent = "Not auto-removed";
+        badge.title = "Only the nightly backups are cleaned up. Delete this one when you no longer need it.";
       } else {
         const soon = new Date(b.expires) - Date.now() < 2 * DAY_MS;
         badge.dataset.kind = soon ? "expiring" : "";
