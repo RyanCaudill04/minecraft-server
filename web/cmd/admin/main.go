@@ -22,9 +22,14 @@
 //	POST /api/backups/run     start mc-backup.service now
 //	POST /api/backups/{name}/keep    {"keep": true} flags it for safe keeping
 //	POST /api/backups/{name}/delete  remove one that isn't kept
+//	GET  /api/players         the whitelist and ops list, from the server
+//	                          folder, and whether the whitelist is on
+//	POST /api/players/{list}/{action}  {"name": "..."}: whitelist add or
+//	                          remove, or ops add (op) or remove (deop),
+//	                          over RCON
 //
-// Logs, the console, the controls, downloads and every backup change need
-// the user the Access token names. POSTs must also be
+// Logs, the console, the controls, downloads, the player lists and every
+// change need the user the Access token names. POSTs must also be
 // same-origin and carry the X-Admin-Request: 1 header, and each one is
 // logged with the user's email.
 //
@@ -186,6 +191,8 @@ func newHandler(a *app) http.Handler {
 	mux.Handle("POST /api/backups/run", a.writes(a.runBackup))
 	mux.Handle("POST /api/backups/{name}/keep", a.writes(a.keepBackup))
 	mux.Handle("POST /api/backups/{name}/delete", a.writes(a.deleteBackup))
+	mux.HandleFunc("GET /api/players", a.signedIn(a.players))
+	mux.Handle("POST /api/players/{list}/{action}", a.writes(a.changePlayer))
 	mux.Handle("GET /", site.Static(a.dir, a.sharedDir))
 	return mux
 }
@@ -337,7 +344,7 @@ func main() {
 	dir := flag.String("dir", "", "folder with the page's static files (required)")
 	sharedDir := flag.String("shared", "", "folder with the files all sites share, served at /shared/ (required)")
 	appsDir := flag.String("apps", filepath.Join(home, "apps"), "folder mc-agent installs releases into")
-	serverDir := flag.String("server", filepath.Join(home, "minecraft_server"), "Minecraft server folder, holding plugins/")
+	serverDir := flag.String("server", filepath.Join(home, "minecraft_server"), "Minecraft server folder, holding plugins/, whitelist.json and ops.json")
 	addr := flag.String("addr", "127.0.0.1:8081", "host:port to listen on")
 	paper := flag.String("paper", "127.0.0.1:25566", "Paper's address (answers only while awake)")
 	lazymc := flag.String("lazymc", "127.0.0.1:25565", "LazyMC's address (answers while Paper sleeps)")

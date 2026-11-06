@@ -114,6 +114,8 @@ type controlServer struct {
 	// backupDir is the backup folder and backup the fake mc-backup.service.
 	backupDir string
 	backup    *fakeControl
+	// serverDir is the Minecraft server folder.
+	serverDir string
 }
 
 // syncBuffer is admin's log output, safe to read while handlers write.
@@ -144,7 +146,7 @@ func newControlServer(t *testing.T, user string) *controlServer {
 	ctl := &fakeControl{state: control.State{Active: "active", Sub: "running"}}
 	rs := rcontest.New(t, "pw")
 	mc := &fakeServer{}
-	backupDir := t.TempDir()
+	backupDir, serverDir := t.TempDir(), t.TempDir()
 	backup := &fakeControl{state: control.State{Active: "inactive", Sub: "dead"}}
 
 	out := &syncBuffer{}
@@ -152,7 +154,7 @@ func newControlServer(t *testing.T, user string) *controlServer {
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	a := &app{
-		dir: dir, sharedDir: shared, appsDir: apps,
+		dir: dir, sharedDir: shared, appsDir: apps, serverDir: serverDir,
 		checker: &mcstatus.Checker{PaperAddr: "paper", LazymcAddr: "lazymc", Timeout: time.Second, Ping: mc.ping},
 		control: ctl,
 		wake:    mc.wake,
@@ -166,7 +168,7 @@ func newControlServer(t *testing.T, user string) *controlServer {
 	}
 	ts := httptest.NewServer(newHandler(a))
 	t.Cleanup(ts.Close)
-	return &controlServer{Server: ts, mc: mc, ctl: ctl, rcon: rs, logs: logs, out: out, backupDir: backupDir, backup: backup}
+	return &controlServer{Server: ts, mc: mc, ctl: ctl, rcon: rs, logs: logs, out: out, backupDir: backupDir, backup: backup, serverDir: serverDir}
 }
 
 // post sends a same-origin POST the way the page does, with extra headers
