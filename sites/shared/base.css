@@ -133,6 +133,66 @@ p { margin: 0; }
 }
 .nav a:hover { background: var(--border); color: var(--text); }
 .nav a.active { background: var(--accent-soft); color: var(--accent); }
+
+/* A group: a toggle that shows or hides links to its subsections. */
+.nav-group {
+  --nav-ease: cubic-bezier(0.77, 0, 0.175, 1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nav-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s var(--ease), color 0.2s var(--ease);
+}
+.nav-toggle:hover { background: var(--border); color: var(--text); }
+.nav-toggle.active { color: var(--accent); }
+/* The chevron points right when closed and turns to point down. */
+.nav .nav-chevron {
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  opacity: 0.4;
+  transition: rotate 0.2s var(--ease), opacity 0.2s var(--ease);
+}
+.nav-toggle:hover .nav-chevron { opacity: 1; }
+.nav-toggle[aria-expanded="true"] .nav-chevron { rotate: 90deg; }
+/* The links are revealed as the group grows from no height to its full
+   height, pushing anything below down, the same way closing. Height can't
+   animate to auto, so a one-row grid grows from 0fr to 1fr. A closed group
+   is inert (set by app.js), so its links can't be focused. */
+.nav-sub {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s var(--nav-ease);
+}
+.nav-toggle[aria-expanded="true"] + .nav-sub { grid-template-rows: 1fr; }
+.nav-sub-inner { min-height: 0; overflow: hidden; }
+/* The links slide in with the growing edge, like a drawer: the list starts
+   a full height above and moves down as the group opens, on the same curve,
+   so its bottom edge tracks the group's. */
+.nav-sub-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transform: translateY(-100%);
+  transition: transform 0.25s var(--nav-ease);
+}
+.nav-toggle[aria-expanded="true"] + .nav-sub .nav-sub-list { transform: none; }
+/* Inside the clipped group, draw the focus ring inside the link. */
+.nav-sub a { padding-left: 38px; outline-offset: -2px; }
 .nav svg {
   flex: none;
   width: 18px;
@@ -299,6 +359,20 @@ p { margin: 0; }
   }
   .nav a { padding: 6px 10px; white-space: nowrap; }
   .nav svg { display: none; }
+  /* In the top bar, the group's links follow its toggle in the row and
+     the group grows sideways instead. */
+  .nav-group { display: contents; }
+  .nav-sub {
+    flex: none;
+    grid-template-rows: none;
+    grid-template-columns: 0fr;
+    transition: grid-template-columns 0.25s var(--nav-ease);
+  }
+  .nav-toggle[aria-expanded="true"] + .nav-sub { grid-template-rows: none; grid-template-columns: 1fr; }
+  .nav-sub-inner { min-width: 0; }
+  .nav-sub-list { flex-direction: row; width: max-content; transform: translateX(-100%); }
+  .nav-toggle { width: auto; flex: none; gap: 4px; padding: 6px 10px; white-space: nowrap; }
+  .nav .nav-chevron { display: block; width: 14px; height: 14px; margin-left: 0; }
   .content { padding: 24px 16px 72px; }
   html { scroll-padding-top: 110px; }
 }

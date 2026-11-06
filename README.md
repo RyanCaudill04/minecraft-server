@@ -200,7 +200,11 @@ so nothing new listens on the Pi.
   radius 5,000 blocks around 0,0 (~300 regions, at most about 40–100 MB).
   Without it, a full render covers every generated chunk, including a whole
   Chunky pregen. Move the center to spawn, and widen it as people build
-  farther out.
+  farther out. The nether has its own circle of radius 625, the same ground
+  as the overworld's 5,000 since a nether block is 8 overworld blocks.
+- **Worlds:** play's Map section previews the overworld and the nether,
+  each once squaremap lists it in `tiles/settings.json`. Their names come
+  from `display-name` in the config.
 - **Privacy:** every build inside the limit is visible to anyone with the
   URL. Live player positions are off in squaremap's config, and play always
   answers `tiles/players.json` with an empty list. Showing positions would

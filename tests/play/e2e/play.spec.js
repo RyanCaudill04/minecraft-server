@@ -200,6 +200,78 @@ test("scroll spy follows the sections", async ({ page }) => {
   await expect(link("overview")).toHaveClass(/active/);
 });
 
+test("the Map group opens to its worlds and follows the scroll", async ({ page }) => {
+  await open(page);
+  const toggle = page.locator("#map-toggle");
+  const nether = page.locator('.nav a[href="#map-nether"]');
+  const group = page.locator("#map-nav");
+  // A closed group is collapsed and inert, so its links can't be focused.
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(group).toHaveAttribute("inert", "");
+  expect((await group.boundingBox()).height).toBe(0);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(group).not.toHaveAttribute("inert");
+  await nether.click();
+  await expect(nether).toHaveClass(/active/);
+  await expect(toggle).toHaveClass(/active/);
+  await expect(page.locator('.nav a[href="#map-overworld"]')).not.toHaveClass(/active/);
+
+  await toggle.click();
+  await expect(group).toHaveAttribute("inert", "");
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expect(toggle).not.toHaveClass(/active/);
+});
+
+test.describe("map previews", () => {
+  const card = (page, world) => page.locator(`.map-card[data-world="${world}"]`);
+
+  // Stands in for squaremap: its settings list the given worlds, and its
+  // page is a stub.
+  async function fakeSquaremap(page, worlds) {
+    await page.route("**/map/tiles/settings.json", (route) =>
+      route.fulfill({ json: { worlds: worlds.map((name) => ({ name })) } }),
+    );
+    await page.route((url) => url.pathname === "/map/", (route) =>
+      route.fulfill({ contentType: "text/html", body: "<!doctype html><title>map</title>" }),
+    );
+  }
+
+  test("each world gets its own preview without squaremap's controls", async ({ page }) => {
+    await fakeSquaremap(page, ["minecraft_overworld", "minecraft_the_nether"]);
+    await open(page);
+    for (const world of ["minecraft_overworld", "minecraft_the_nether"]) {
+      // The frames load lazily, once they're near the window.
+      await card(page, world).scrollIntoViewIfNeeded();
+      await expect(card(page, world)).toHaveAttribute("data-ready", "true");
+      const src = new URL(await card(page, world).locator("iframe").getAttribute("src"), "http://x");
+      expect(src.pathname).toBe("/map/");
+      expect(src.searchParams.get("world")).toBe(world);
+      for (const p of ["show_controls", "show_sidebar", "show_coordinates", "show_link_button"]) {
+        expect(src.searchParams.get(p), p).toBe("false");
+      }
+      await expect(card(page, world).locator("a.btn")).toHaveAttribute("href", `/map/?world=${world}`);
+    }
+  });
+
+  test("a world squaremap hasn't rendered keeps its placeholder", async ({ page }) => {
+    await fakeSquaremap(page, ["minecraft_overworld"]);
+    await open(page);
+    await card(page, "minecraft_the_nether").scrollIntoViewIfNeeded();
+    await expect(card(page, "minecraft_overworld")).toHaveAttribute("data-ready", "true");
+    await expect(card(page, "minecraft_the_nether")).toHaveAttribute("data-ready", "false");
+    await expect(card(page, "minecraft_the_nether").locator("iframe")).not.toHaveAttribute("src");
+    await expect(card(page, "minecraft_the_nether").locator(".map-placeholder")).toBeVisible();
+  });
+
+  test("no map at all shows both placeholders", async ({ page }) => {
+    await open(page);
+    await expect(page.locator(".map-placeholder:visible")).toHaveCount(2);
+    await expect(page.locator(".map-card iframe[src]")).toHaveCount(0);
+  });
+});
+
 test("copy button copies the address", async ({ context, page }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await open(page);
