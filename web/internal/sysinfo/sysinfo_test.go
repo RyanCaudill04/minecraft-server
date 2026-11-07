@@ -15,11 +15,23 @@ MemFree:          512000 kB
 MemAvailable:    2884292 kB
 Buffers:           64000 kB
 Cached:          1800000 kB
+SwapTotal:        204796 kB
+SwapFree:         200000 kB
 HugePages_Total:       0
 `
 	loadavg = "0.52 1.25 2.50 1/389 12345\n"
 	uptime  = "93784.56 300000.12\n"
 	temp    = "54768\n"
+	config  = `# a made-up config.txt
+dtparam=audio=on
+arm_freq=1800 # comment
+[pi5]
+arm_freq=2400
+over_voltage_delta=50000
+dtparam=fan_temp0=45000,fan_temp0_speed=125,i2c_arm=on
+[all]
+temp_soft_limit=70
+`
 )
 
 // writeFiles writes files (relative path to contents) under a new root.
@@ -44,6 +56,11 @@ func fullRoot(t *testing.T) string {
 		"proc/meminfo":                         meminfo,
 		"proc/loadavg":                         loadavg,
 		"proc/uptime":                          uptime,
+		"sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq":                      "1500000\n",
+		"sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq":                      "2400000\n",
+		"sys/devices/platform/soc@107c000000/soc@107c000000:firmware/get_throttled": "50005\n",
+		"sys/devices/platform/cooling_fan/hwmon/hwmon3/fan1_input":                  "2890\n",
+		"boot/firmware/config.txt":                                                  config,
 	})
 }
 
@@ -64,7 +81,10 @@ func TestRead(t *testing.T) {
 	if h.TempC == nil || *h.TempC != 54.768 {
 		t.Errorf("temp = %v, want 54.768", h.TempC)
 	}
-	wantMem := Memory{Total: 3884292 * 1024, Used: 1000000 * 1024, Available: 2884292 * 1024}
+	wantMem := Memory{
+		Total: 3884292 * 1024, Used: 1000000 * 1024, Available: 2884292 * 1024,
+		SwapTotal: 204796 * 1024, SwapUsed: 4796 * 1024,
+	}
 	if h.Memory == nil || *h.Memory != wantMem {
 		t.Errorf("memory = %+v, want %+v", h.Memory, wantMem)
 	}
@@ -80,6 +100,31 @@ func TestRead(t *testing.T) {
 	if h.CPUs < 1 {
 		t.Errorf("cpus = %d", h.CPUs)
 	}
+	if h.CPUMHz == nil || *h.CPUMHz != 1500 || h.CPUMaxMHz == nil || *h.CPUMaxMHz != 2400 {
+		t.Errorf("clock = %v of %v MHz, want 1500 of 2400", h.CPUMHz, h.CPUMaxMHz)
+	}
+	wantThrottle := Throttle{
+		Now:       ThrottleFlags{UnderVoltage: true, Throttled: true},
+		SinceBoot: ThrottleFlags{UnderVoltage: true, Throttled: true},
+		Raw:       0x50005,
+	}
+	if h.Throttle == nil || *h.Throttle != wantThrottle {
+		t.Errorf("throttle = %+v, want %+v", h.Throttle, wantThrottle)
+	}
+	if h.FanRPM == nil || *h.FanRPM != 2890 {
+		t.Errorf("fan = %v, want 2890", h.FanRPM)
+	}
+	wantFirmware := []FirmwareSetting{
+		{Key: "arm_freq", Value: "1800"},
+		{Key: "arm_freq", Value: "2400", Section: "pi5"},
+		{Key: "over_voltage_delta", Value: "50000", Section: "pi5"},
+		{Key: "fan_temp0", Value: "45000", Section: "pi5"},
+		{Key: "fan_temp0_speed", Value: "125", Section: "pi5"},
+		{Key: "temp_soft_limit", Value: "70"},
+	}
+	if !reflect.DeepEqual(h.Firmware, wantFirmware) {
+		t.Errorf("firmware = %+v, want %+v", h.Firmware, wantFirmware)
+	}
 }
 
 func TestReadMissing(t *testing.T) {
@@ -91,10 +136,10 @@ func TestReadMissing(t *testing.T) {
 		Errs:     func(name string, err error) { missing = append(missing, name) },
 	}
 	h := r.Read()
-	if h.TempC != nil || h.Memory != nil || h.Load != nil || h.UptimeSeconds != nil || h.Disk != nil {
+	if !reflect.DeepEqual(h, Health{CPUs: h.CPUs}) {
 		t.Errorf("Read with no sources = %+v, want every reading nil", h)
 	}
-	want := []string{"temperature", "memory", "load", "uptime", "disk"}
+	want := []string{"temperature", "memory", "load", "uptime", "cpu clock", "throttling", "fan", "config.txt", "disk"}
 	if !reflect.DeepEqual(missing, want) {
 		t.Errorf("reported %q, want %q", missing, want)
 	}
@@ -151,6 +196,7 @@ func TestParseErrors(t *testing.T) {
 		"MemTotal: lots kB\nMemAvailable: 10 kB\n",
 		"MemTotal: 10 MB\nMemAvailable: 10 kB\n",
 		"MemTotal: 10 kB\nMemAvailable: 20 kB\n",
+		"MemTotal: 10 kB\nMemAvailable: 5 kB\nSwapTotal: 1 kB\nSwapFree: 2 kB\n",
 	} {
 		if v, err := ReadMeminfo(file(body)); err == nil {
 			t.Errorf("ReadMeminfo(%q) = %+v, want an error", body, v)
