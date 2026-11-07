@@ -1,0 +1,23 @@
+# System unit (not a user unit): runs "pi-firmware boot" as root at every
+# boot. It puts back the CPU governor admin set, and settles a trial of
+# new firmware settings: on a trial boot it checks the Pi and reboots back
+# to config.txt if a check fails. Installed by hand (README.md).
+
+[Unit]
+Description=Pi firmware settings: governor and trial boot check
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/sbin/pi-firmware boot
+# It writes only the boot partition, its own state and its lock file.
+StateDirectory=pi-firmware
+ProtectSystem=strict
+ReadWritePaths=/boot/firmware /run
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

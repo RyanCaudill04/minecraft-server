@@ -173,6 +173,8 @@ jobs:
           done
           curl -fsS http://127.0.0.1:8081/api/status | grep -q '"state":"offline"'
           curl -fsS http://127.0.0.1:8081/api/deploy | grep -q '"active":""'
+          # Off a Pi 5, with no owner set, the Pi settings are read-only.
+          curl -fsS http://127.0.0.1:8081/api/pi | grep -q '"can_change":false'
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8081/api/status)" = 405
       - name: static sites smoke test
         if: needs.changes.outputs.admin == 'true'
