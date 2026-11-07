@@ -6,7 +6,8 @@
 // never by mc-agent, so code that runs as root never deploys itself from
 // main. admin runs it through one sudoers rule (deploy/pi-firmware) that
 // names each subcommand, and pi-firmware-boot.service runs "boot" at every
-// boot. Nothing from a request reaches its arguments: "stage" and
+// boot and "clean-stop" at every clean shutdown. Nothing from a request
+// reaches its arguments: "stage" and
 // "governor" read their one JSON value from stdin, and it's checked again
 // here, not trusted from admin.
 //
@@ -16,11 +17,14 @@
 //	reboot-trial  reboot once onto tryboot.txt
 //	reboot        reboot normally
 //	governor      {"governor": "performance"} on stdin: set it now and at boot
-//	boot          at boot: apply the governor, check or settle a trial
+//	boot          at boot: the governor, probation, and checking a trial
+//	clean-stop    at a clean shutdown: the boot ended cleanly
 //	version       print the version
 //
 // It exits 2 when it refuses, with a message for the person on stderr,
-// and 1 when something fails.
+// and 1 when something fails, except "boot", which reports errors but
+// never fails, so its unit stays active and its clean-stop still runs at
+// shutdown.
 package main
 
 import (
@@ -31,7 +35,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -46,19 +49,24 @@ var version = "dev"
 
 const (
 	maxInput   = 4 << 10
-	healthURL  = "http://127.0.0.1:8081/healthz" // admin
 	lazymcAddr = "127.0.0.1:25565"
-	healthWait = 5 * time.Minute
-	loadFor    = time.Minute
+	// The trial's CPU check: every core hashes loadSize bytes, well
+	// beyond the caches, for loadFor.
+	loadFor    = 3 * time.Minute
+	loadSize   = 256 << 20
 	runTimeout = 30 * time.Second
 )
 
-// commands are the only programs Host may run, by full path.
-var commands = map[string]string{"systemctl": "/usr/bin/systemctl"}
+// commands are the only programs pi-firmware runs, by full path.
+var commands = map[string]string{
+	"systemctl": "/usr/bin/systemctl",
+	// get_throttled's sysfs file is gone from the 6.12 Pi kernels.
+	"vcgencmd": "/usr/bin/vcgencmd",
+}
 
 func main() {
 	if len(os.Args) != 2 {
-		fail(2, "usage: pi-firmware stage|discard|keep|reboot-trial|reboot|governor|boot|version")
+		fail(2, "usage: pi-firmware stage|discard|keep|reboot-trial|reboot|governor|boot|clean-stop|version")
 	}
 	cmd := os.Args[1]
 	if cmd == "version" {
@@ -95,9 +103,17 @@ func main() {
 			err = h.SetGovernor(g.Governor)
 		}
 	case "boot":
-		h.Healthy, h.HealthWait = healthy, healthWait
-		h.Load = func(ctx context.Context) error { return pifirmware.CPUCheck(ctx, loadFor) }
-		err = h.Boot(ctx)
+		// pi-firmware-boot.service sets the user whose minecraft.service
+		// a trial boot keeps stopped.
+		h.User = os.Getenv("PI_FIRMWARE_USER")
+		h.Throttled = throttled
+		h.Load = func(ctx context.Context) error { return pifirmware.CPUCheck(ctx, loadFor, loadSize) }
+		if err := h.Boot(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "pi-firmware: boot: "+err.Error())
+		}
+		return
+	case "clean-stop":
+		err = h.CleanStop()
 	default:
 		fail(2, "pi-firmware: unknown command "+cmd)
 	}
@@ -163,21 +179,13 @@ func serverUp() bool {
 	return true
 }
 
-// healthy reports whether admin answers its health check.
-func healthy(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+// throttled reads the firmware's get_throttled bits.
+func throttled(ctx context.Context) (uint32, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", healthURL, nil)
+	out, err := exec.CommandContext(ctx, commands["vcgencmd"], "get_throttled").Output()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("admin answered %s", resp.Status)
-	}
-	return nil
+	return pifirmware.ParseThrottled(string(out))
 }

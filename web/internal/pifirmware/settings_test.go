@@ -77,18 +77,20 @@ arm_64bit=1
 `
 
 func TestBlockRoundTrip(t *testing.T) {
-	for _, trial := range []bool{false, true} {
-		s := Settings{ArmFreq: new(2600), OverVoltageDelta: new(25000), TempLimit: new(80), Fan: defaultFan()}
-		out, err := Splice([]byte(stock), Block(s, trial))
+	for _, s := range []Settings{
+		{},
+		{ArmFreq: new(2600), OverVoltageDelta: new(25000), TempLimit: new(80), Fan: defaultFan()},
+	} {
+		out, err := Splice([]byte(stock), Block(s))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !strings.HasPrefix(string(out), stock) {
 			t.Errorf("the rest of config.txt changed:\n%s", out)
 		}
-		got, found, gotTrial, err := ParseBlock(out)
-		if err != nil || !found || gotTrial != trial {
-			t.Fatalf("ParseBlock = found %v, trial %v, %v", found, gotTrial, err)
+		got, found, err := ParseBlock(out)
+		if err != nil || !found {
+			t.Fatalf("ParseBlock = found %v, %v", found, err)
 		}
 		if !reflect.DeepEqual(got, s) {
 			t.Errorf("ParseBlock = %+v, want %+v", got, s)
@@ -106,23 +108,21 @@ dtparam=fan_temp0=50000,fan_temp0_hyst=5000,fan_temp0_speed=75
 dtparam=fan_temp1=60000,fan_temp1_hyst=5000,fan_temp1_speed=125
 dtparam=fan_temp2=67500,fan_temp2_hyst=5000,fan_temp2_speed=175
 dtparam=fan_temp3=75000,fan_temp3_hyst=5000,fan_temp3_speed=250
+force_turbo=0
 kernel_watchdog_timeout=60
 # END admin
 `
-	if got := string(Block(s, true)); got != want {
+	if got := string(Block(s)); got != want {
 		t.Errorf("Block =\n%s\nwant\n%s", got, want)
-	}
-	if b := Block(Settings{}, false); b != nil {
-		t.Errorf("Block(empty) = %q, want nil", b)
 	}
 }
 
 func TestSpliceReplacesAndRemoves(t *testing.T) {
-	first, err := Splice([]byte(stock), Block(Settings{ArmFreq: new(2600)}, false))
+	first, err := Splice([]byte(stock), Block(Settings{ArmFreq: new(2600)}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Splice(first, Block(Settings{TempLimit: new(75)}, false))
+	second, err := Splice(first, Block(Settings{TempLimit: new(75)}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,14 +141,14 @@ func TestSpliceReplacesAndRemoves(t *testing.T) {
 		t.Errorf("Splice(stock, nil) = %q", same)
 	}
 	// A file without a final newline still gets a clean block.
-	out, _ := Splice([]byte("arm_64bit=1"), Block(Settings{ArmFreq: new(2600)}, false))
+	out, _ := Splice([]byte("arm_64bit=1"), Block(Settings{ArmFreq: new(2600)}))
 	if !strings.HasPrefix(string(out), "arm_64bit=1\n\n# BEGIN admin\n") {
 		t.Errorf("Splice without a final newline = %q", out)
 	}
 }
 
 func TestSpliceRefusesOddFiles(t *testing.T) {
-	block := Block(Settings{ArmFreq: new(2600)}, false)
+	block := Block(Settings{ArmFreq: new(2600)})
 	cases := map[string]string{
 		"two blocks":     stock + string(block) + string(block),
 		"no end":         stock + "# BEGIN admin\n[all]\n",
@@ -170,8 +170,10 @@ func TestSpliceRefusesOddFiles(t *testing.T) {
 // Anything in the block that Block wouldn't have written is refused, so
 // a hand edit (or an injected line) is never kept or copied on.
 func TestParseBlockRefusesHandEdits(t *testing.T) {
+	// Each body is otherwise a valid block, with the two lines every block
+	// has.
 	wrap := func(body string) []byte {
-		return []byte(stock + "# BEGIN admin\n[all]\n" + body + "# END admin\n")
+		return []byte(stock + "# BEGIN admin\n[all]\n" + body + "force_turbo=0\nkernel_watchdog_timeout=60\n# END admin\n")
 	}
 	for name, body := range map[string]string{
 		"other key":      "force_turbo=1\n",
@@ -195,13 +197,21 @@ func TestParseBlockRefusesHandEdits(t *testing.T) {
 		if name == "no [all]" {
 			b = []byte(stock + "# BEGIN admin\narm_freq=2600\n# END admin\n")
 		}
-		if _, _, _, err := ParseBlock(b); err == nil {
+		if _, _, err := ParseBlock(b); err == nil {
 			t.Errorf("%s: ParseBlock = nil error", name)
 		} else if name != "no [all]" && !errors.Is(err, ErrHandEdited) {
 			t.Errorf("%s: ParseBlock = %v, want ErrHandEdited", name, err)
 		}
 	}
-	if _, found, _, err := ParseBlock([]byte(stock)); found || err != nil {
+	for name, b := range map[string]string{
+		"no force_turbo": stock + "# BEGIN admin\n[all]\nkernel_watchdog_timeout=60\n# END admin\n",
+		"no watchdog":    stock + "# BEGIN admin\n[all]\nforce_turbo=0\n# END admin\n",
+	} {
+		if _, _, err := ParseBlock([]byte(b)); !errors.Is(err, ErrHandEdited) {
+			t.Errorf("%s: ParseBlock = %v, want ErrHandEdited", name, err)
+		}
+	}
+	if _, found, err := ParseBlock([]byte(stock)); found || err != nil {
 		t.Errorf("ParseBlock(no block) = found %v, %v", found, err)
 	}
 }

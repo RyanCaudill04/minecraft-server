@@ -14,13 +14,17 @@ import (
 	"time"
 )
 
-// fakePi is a folder laid out like a Pi 5's /boot/firmware, /proc, /sys
-// and /var, with synthetic files, and a record of the commands run.
+var testNow = time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+
+// fakePi is a folder laid out like a Pi 5's /boot/firmware, /proc, /sys,
+// /etc and /var, with synthetic files, and a record of the commands run.
 type fakePi struct {
 	*Host
-	t    *testing.T
-	mu   sync.Mutex
-	runs [][]string
+	t        *testing.T
+	mu       sync.Mutex
+	runs     [][]string
+	serverOn bool
+	runErr   error
 }
 
 func newFakePi(t *testing.T) *fakePi {
@@ -29,23 +33,34 @@ func newFakePi(t *testing.T) *fakePi {
 	p := &fakePi{t: t}
 	p.Host = &Host{
 		Root: root,
-		Now:  func() time.Time { return time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC) },
+		Now:  func() time.Time { return testNow },
 		Run: func(_ context.Context, name string, args ...string) error {
 			p.mu.Lock()
 			defer p.mu.Unlock()
 			p.runs = append(p.runs, append([]string{name}, args...))
-			return nil
+			if len(args) >= 4 && args[3] == "stop" {
+				p.serverOn = false
+			}
+			return p.runErr
 		},
+		Throttled: func(context.Context) (uint32, error) { return 0, nil },
+		Load:      func(context.Context) error { time.Sleep(20 * time.Millisecond); return nil },
+		PollEvery: 2 * time.Millisecond,
+		ServerUp: func() bool {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			return p.serverOn
+		},
+		User: "pi",
 	}
 	p.write(modelPath, "Raspberry Pi 5 Model B Rev 1.0\x00")
 	p.write(ConfigPath, stock)
 	p.write(watchdogState, "active\n")
 	p.write(bootUnitLink, "")
-	for _, cpu := range []string{"policy0"} {
-		p.write("sys/devices/system/cpu/cpufreq/"+cpu+"/scaling_governor", "ondemand\n")
-		p.write("sys/devices/system/cpu/cpufreq/"+cpu+"/scaling_available_governors", "conservative ondemand userspace powersave performance schedutil \n")
-	}
-	p.write("sys/devices/platform/soc@107c000000/soc@107c000000:firmware/get_throttled", "0\n")
+	pol := "sys/devices/system/cpu/cpufreq/policy0/"
+	p.write(pol+"scaling_governor", "ondemand\n")
+	p.write(pol+"scaling_available_governors", "conservative ondemand userspace powersave performance schedutil \n")
+	p.write(pol+"scaling_cur_freq", "3000000\n")
 	p.setTrialBoot(false)
 	return p
 }
@@ -84,22 +99,84 @@ func (p *fakePi) setTrialBoot(on bool) {
 	p.write(trybootFlag, string(b))
 }
 
+func (p *fakePi) setServer(on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.serverOn = on
+}
+
 func (p *fakePi) commands() [][]string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return slices.Clone(p.runs)
 }
 
-func (p *fakePi) phase() Phase {
+// reboots returns the reboot commands run.
+func (p *fakePi) reboots() [][]string {
+	var out [][]string
+	for _, c := range p.commands() {
+		if len(c) >= 2 && c[1] == "reboot" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func (p *fakePi) state() *Trial {
 	p.t.Helper()
 	tr, err := p.readState()
 	if err != nil {
 		p.t.Fatal(err)
 	}
-	if tr == nil {
-		return ""
+	return tr
+}
+
+func (p *fakePi) phase() Phase {
+	p.t.Helper()
+	if tr := p.state(); tr != nil {
+		return tr.Phase
 	}
-	return tr.Phase
+	return ""
+}
+
+// startTrial stages s, reboots onto it and boots the trial: Boot runs in
+// the background, since a trial boot's Boot waits for Keep. done gets
+// Boot's error.
+func (p *fakePi) startTrial(s Settings) (done chan error) {
+	p.t.Helper()
+	if err := p.Stage(s); err != nil {
+		p.t.Fatal(err)
+	}
+	if err := p.RebootTrial(context.Background()); err != nil {
+		p.t.Fatal(err)
+	}
+	p.setTrialBoot(true)
+	done = make(chan error, 1)
+	go func() { done <- p.Boot(context.Background()) }()
+	return done
+}
+
+// waitPhase waits for the trial to reach one of phases.
+func (p *fakePi) waitPhase(phases ...Phase) {
+	p.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !slices.Contains(phases, p.phase()) {
+		if time.Now().After(deadline) {
+			p.t.Fatalf("phase %q, want one of %q", p.phase(), phases)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func wait(t *testing.T, done chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("Boot didn't return")
+		return nil
+	}
 }
 
 func refused(err error) bool {
@@ -110,102 +187,109 @@ func refused(err error) bool {
 var oc = Settings{ArmFreq: new(2600), OverVoltageDelta: new(25000)}
 
 // The whole happy path: stage, reboot onto tryboot.txt, pass the check,
-// keep. config.txt changes only at Keep, after a backup.
+// keep. config.txt changes only at Keep, after a backup, and gets the
+// watchdog and force_turbo=0 lines too.
 func TestTrialKept(t *testing.T) {
 	p := newFakePi(t)
-	ctx := context.Background()
-
 	if err := p.Stage(oc); err != nil {
 		t.Fatal(err)
 	}
 	if p.read(ConfigPath) != stock {
 		t.Fatal("Stage changed config.txt")
 	}
-	st := p.Status()
-	if st.Pending == nil || !reflect.DeepEqual(*st.Pending, oc) || !st.Saved.Empty() {
+	if st := p.Status(); st.Pending == nil || !reflect.DeepEqual(*st.Pending, oc) || !st.Saved.Empty() {
 		t.Fatalf("after Stage: pending %+v, saved %+v", st.Pending, st.Saved)
 	}
-
-	if err := p.RebootTrial(ctx); err != nil {
+	if err := p.RebootTrial(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := p.commands(); !reflect.DeepEqual(got, [][]string{{"systemctl", "reboot", "0 tryboot"}}) {
 		t.Fatalf("ran %q", got)
 	}
-	if p.phase() != PhaseRebooting {
-		t.Fatalf("phase %q", p.phase())
-	}
 
-	// The firmware boots tryboot.txt once.
 	p.setTrialBoot(true)
-	checked := false
-	p.Healthy = func(context.Context) error { checked = true; return nil }
-	p.HealthWait = time.Second
-	if err := p.Boot(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if !checked || p.phase() != PhasePassed {
-		t.Fatalf("after Boot: checked %v, phase %q", checked, p.phase())
-	}
-	// Nothing else may be staged or booted until it's kept or dropped.
+	done := make(chan error, 1)
+	go func() { done <- p.Boot(context.Background()) }()
+	p.waitPhase(PhasePassed)
+
+	// Nothing else may be staged, dropped or booted until it's kept.
 	if err := p.Stage(Settings{ArmFreq: new(2800)}); !refused(err) {
 		t.Errorf("Stage during a trial = %v, want refused", err)
 	}
-	if err := p.RebootTrial(ctx); !refused(err) {
+	if err := p.RebootTrial(context.Background()); !refused(err) {
 		t.Errorf("RebootTrial during a trial = %v, want refused", err)
 	}
 
 	if err := p.Keep(); err != nil {
 		t.Fatal(err)
 	}
+	if err := wait(t, done); err != nil {
+		t.Fatalf("Boot = %v", err)
+	}
 	if p.exists(TrybootPath) {
 		t.Error("Keep left tryboot.txt")
 	}
 	config := p.read(ConfigPath)
-	if !strings.HasPrefix(config, stock) || strings.Contains(config, "kernel_watchdog_timeout") {
+	if !strings.HasPrefix(config, stock) || !strings.Contains(config, "\nkernel_watchdog_timeout=60\n") || !strings.Contains(config, "\nforce_turbo=0\n") {
 		t.Errorf("config.txt after Keep:\n%s", config)
 	}
-	if s, _, _, _ := ParseBlock([]byte(config)); !reflect.DeepEqual(s, oc) {
+	if s, _, _ := ParseBlock([]byte(config)); !reflect.DeepEqual(s, oc) {
 		t.Errorf("config.txt has %+v, want %+v", s, oc)
 	}
-	if got := p.read(filepath.Join(BackupDir, "config-20261107T120000Z.txt")); got != stock {
+	tr := p.state()
+	if tr.Phase != PhaseKept || tr.Backup != "config-20261107T120000Z.txt" || tr.Resets != 0 {
+		t.Errorf("state after Keep = %+v", tr)
+	}
+	if got := p.read(filepath.Join(BackupDir, tr.Backup)); got != stock {
 		t.Errorf("backup = %q, want the old config.txt", got)
 	}
-	if p.phase() != PhaseKept {
-		t.Errorf("phase %q", p.phase())
+	if st := p.Status(); !st.ProbationUntil.Equal(testNow.Add(Probation)) {
+		t.Errorf("probation until %v", st.ProbationUntil)
 	}
-	if len(p.commands()) != 1 {
-		t.Errorf("ran %q after the trial reboot", p.commands()[1:])
+	if len(p.reboots()) != 1 {
+		t.Errorf("rebooted %q", p.reboots())
 	}
 }
 
 // A check that fails on the trial boot drops tryboot.txt and reboots
 // back onto config.txt, which is never touched.
 func TestTrialFailsCheck(t *testing.T) {
+	// afterFirst returns v from every get_throttled read but the first,
+	// so the trouble shows during the load.
+	afterFirst := func(v uint32) func(context.Context) (uint32, error) {
+		var mu sync.Mutex
+		calls := 0
+		return func(context.Context) (uint32, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			calls++
+			if calls > 1 {
+				return v, nil
+			}
+			return 0, nil
+		}
+	}
 	for name, setup := range map[string]func(p *fakePi){
-		"admin down": func(p *fakePi) {
-			p.Healthy = func(context.Context) error { return errors.New("connection refused") }
+		"under-voltage before": func(p *fakePi) {
+			p.Throttled = func(context.Context) (uint32, error) { return 0x50000, nil }
 		},
-		"under-voltage": func(p *fakePi) {
-			p.write("sys/devices/platform/soc@107c000000/soc@107c000000:firmware/get_throttled", "0x50000\n")
+		"throttled during the load": func(p *fakePi) { p.Throttled = afterFirst(throttled) },
+		"capped recently":           func(p *fakePi) { p.Throttled = afterFirst(freqCapped << sinceShift) },
+		"no throttle reading": func(p *fakePi) {
+			p.Throttled = func(context.Context) (uint32, error) { return 0, errors.New("vcgencmd: not found") }
 		},
-		"cpu": func(p *fakePi) {
+		"wrong hash": func(p *fakePi) {
 			p.Load = func(context.Context) error { return errors.New("a CPU computed a wrong hash") }
+		},
+		"clock too low": func(p *fakePi) {
+			p.write("sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq", "2400000\n")
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := newFakePi(t)
-			ctx := context.Background()
-			if err := p.Stage(oc); err != nil {
-				t.Fatal(err)
-			}
-			if err := p.RebootTrial(ctx); err != nil {
-				t.Fatal(err)
-			}
-			p.setTrialBoot(true)
-			p.HealthWait = 50 * time.Millisecond
 			setup(p)
-			if err := p.Boot(ctx); err != nil {
+			done := p.startTrial(oc)
+			if err := wait(t, done); err != nil {
 				t.Fatal(err)
 			}
 			if p.phase() != PhaseFailed {
@@ -218,8 +302,8 @@ func TestTrialFailsCheck(t *testing.T) {
 				t.Error("config.txt changed")
 			}
 			want := [][]string{{"systemctl", "reboot", "0 tryboot"}, {"systemctl", "reboot"}}
-			if got := p.commands(); !reflect.DeepEqual(got, want) {
-				t.Errorf("ran %q, want %q", got, want)
+			if got := p.reboots(); !reflect.DeepEqual(got, want) {
+				t.Errorf("rebooted %q, want %q", got, want)
 			}
 			if err := p.Keep(); !refused(err) {
 				t.Errorf("Keep after a failed trial = %v, want refused", err)
@@ -228,10 +312,89 @@ func TestTrialFailsCheck(t *testing.T) {
 	}
 }
 
-// The firmware's own fallback: the trial hung or reset, so the next boot
-// is a normal one on config.txt. Boot records that and clears up.
-func TestTrialResetFallsBack(t *testing.T) {
-	for _, phase := range []Phase{PhaseRebooting, PhaseChecking, PhasePassed} {
+// The check runs the load under the performance governor, and puts the
+// saved one back after.
+func TestCheckUsesPerformance(t *testing.T) {
+	p := newFakePi(t)
+	gov := "sys/devices/system/cpu/cpufreq/policy0/scaling_governor"
+	var mu sync.Mutex
+	var during string
+	p.Load = func(context.Context) error {
+		b, _ := os.ReadFile(filepath.Join(p.Root, gov))
+		mu.Lock()
+		during = string(b)
+		mu.Unlock()
+		return nil
+	}
+	done := p.startTrial(oc)
+	p.waitPhase(PhasePassed)
+	mu.Lock()
+	defer mu.Unlock()
+	if during != "performance" || p.read(gov) != "ondemand" {
+		t.Errorf("governor during the load %q, after %q", during, p.read(gov))
+	}
+	p.Keep()
+	wait(t, done)
+}
+
+// Paper never runs on settings that haven't been kept: the trial boot
+// stops minecraft.service whenever it's up, and stops holding it after
+// Keep.
+func TestTrialHoldsServerOff(t *testing.T) {
+	p := newFakePi(t)
+	done := p.startTrial(oc)
+	p.setServer(true) // the user manager starts it at boot
+	p.waitPhase(PhasePassed)
+	deadline := time.Now().Add(5 * time.Second)
+	for p.ServerUp() {
+		if time.Now().After(deadline) {
+			t.Fatal("the server was never stopped")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	stop := []string{"systemctl", "--user", "-M", "pi@", "stop", "minecraft.service"}
+	if !slices.ContainsFunc(p.commands(), func(c []string) bool { return slices.Equal(c, stop) }) {
+		t.Errorf("ran %q, want %q", p.commands(), stop)
+	}
+	if err := p.Keep(); err != nil {
+		t.Fatal(err)
+	}
+	wait(t, done)
+	p.setServer(true)
+	time.Sleep(20 * time.Millisecond)
+	if !p.ServerUp() {
+		t.Error("the server was stopped after Keep")
+	}
+}
+
+// A trial that passed but isn't kept goes back by itself.
+func TestTrialExpiresWithoutKeep(t *testing.T) {
+	p := newFakePi(t)
+	p.KeepWindow = 30 * time.Millisecond
+	done := p.startTrial(oc)
+	if err := wait(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if p.phase() != PhaseExpired || p.exists(TrybootPath) {
+		t.Errorf("phase %q, tryboot.txt %v", p.phase(), p.exists(TrybootPath))
+	}
+	if got := p.reboots(); len(got) != 2 || !slices.Equal(got[1], []string{"systemctl", "reboot"}) {
+		t.Errorf("rebooted %q", got)
+	}
+}
+
+// The firmware's own fallback: the trial hung or reset, or the Pi
+// rebooted before Keep, so the next boot is a normal one on config.txt.
+// Boot records that and clears up.
+func TestTrialSettlesOnNormalBoot(t *testing.T) {
+	for phase, want := range map[Phase]Phase{
+		PhaseRebooting: PhaseFailed,
+		PhaseChecking:  PhaseFailed,
+		PhasePassed:    PhaseExpired,
+		PhaseDiscarded: PhaseReverted,
+		PhaseKept:      PhaseKept,
+		PhaseFailed:    PhaseFailed,
+	} {
 		p := newFakePi(t)
 		if err := p.Stage(oc); err != nil {
 			t.Fatal(err)
@@ -242,12 +405,11 @@ func TestTrialResetFallsBack(t *testing.T) {
 		if err := p.Boot(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		want := PhaseFailed
-		if phase == PhasePassed {
-			want = PhaseExpired
+		if p.phase() != want || p.read(ConfigPath) != stock {
+			t.Errorf("from %s: phase %q, want %q", phase, p.phase(), want)
 		}
-		if p.phase() != want || p.exists(TrybootPath) || p.read(ConfigPath) != stock {
-			t.Errorf("from %s: phase %q, tryboot.txt %v", phase, p.phase(), p.exists(TrybootPath))
+		if phase != PhaseKept && phase != PhaseFailed && p.exists(TrybootPath) {
+			t.Errorf("from %s: tryboot.txt is still there", phase)
 		}
 		if len(p.commands()) != 0 {
 			t.Errorf("from %s: ran %q", phase, p.commands())
@@ -255,52 +417,200 @@ func TestTrialResetFallsBack(t *testing.T) {
 	}
 }
 
-func TestDiscardDuringTrial(t *testing.T) {
+// Keep wrote config.txt, then the power went before the state said so:
+// the next boot sees the settings in config.txt and puts them on
+// probation, rather than calling them not kept.
+func TestPowerCutDuringKeep(t *testing.T) {
 	p := newFakePi(t)
+	p.write(ConfigPath, string(must(Splice([]byte(stock), Block(oc)))))
+	p.write(filepath.Join(BackupDir, "config-20261107T115900Z.txt"), stock)
+	if err := p.writeState(&Trial{Phase: PhasePassed, Settings: oc, Backup: "config-20261107T115900Z.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if tr := p.state(); tr.Phase != PhaseKept || tr.Backup != "config-20261107T115900Z.txt" {
+		t.Errorf("state = %+v", tr)
+	}
+}
+
+// Kept settings that reset the Pi uncleanly twice within the probation
+// put the old config.txt back and reboot onto it. A clean shutdown
+// doesn't count, and neither does a reset after the probation.
+func TestProbation(t *testing.T) {
 	ctx := context.Background()
-	if err := p.Stage(oc); err != nil {
-		t.Fatal(err)
+	kept := func(p *fakePi, at time.Time) {
+		p.write(ConfigPath, string(must(Splice([]byte(stock), Block(oc)))))
+		p.write(filepath.Join(BackupDir, "config-old.txt"), stock)
+		if err := p.writeState(&Trial{Phase: PhaseKept, Settings: oc, At: at, Backup: "config-old.txt"}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := p.RebootTrial(ctx); err != nil {
-		t.Fatal(err)
-	}
-	p.setTrialBoot(true)
+
+	p := newFakePi(t)
+	kept(p, testNow.Add(-24*time.Hour))
+	// First boot after Keep: no marker yet, so it's clean.
 	if err := p.Boot(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// A clean shutdown, then a boot: still clean.
+	if err := p.CleanStop(); err != nil {
+		t.Fatal(err)
+	}
+	p.Boot(ctx)
+	if tr := p.state(); tr.Resets != 0 {
+		t.Fatalf("clean boots counted: %+v", tr)
+	}
+	// Two unclean resets (no CleanStop in between).
+	p.Boot(ctx)
+	if tr := p.state(); tr.Resets != 1 || tr.Phase != PhaseKept || len(p.reboots()) != 0 {
+		t.Fatalf("after one reset: %+v, rebooted %q", tr, p.reboots())
+	}
+	p.Boot(ctx)
+	if tr := p.state(); tr.Phase != PhaseRolledBack {
+		t.Fatalf("after two resets: %+v", tr)
+	}
+	if p.read(ConfigPath) != stock {
+		t.Error("the old config.txt wasn't put back")
+	}
+	if got := p.reboots(); !reflect.DeepEqual(got, [][]string{{"systemctl", "reboot"}}) {
+		t.Errorf("rebooted %q", got)
+	}
+
+	// After the probation, resets don't count.
+	p = newFakePi(t)
+	kept(p, testNow.Add(-Probation-time.Hour))
+	p.Boot(ctx)
+	p.Boot(ctx)
+	p.Boot(ctx)
+	if tr := p.state(); tr.Phase != PhaseKept || tr.Resets != 0 {
+		t.Errorf("after the probation: %+v", tr)
+	}
+
+	// A backup name from the state never leaves the backup folder.
+	p = newFakePi(t)
+	kept(p, testNow.Add(-time.Hour))
+	tr := p.state()
+	tr.Backup = "../config.txt"
+	p.writeState(tr)
+	p.Boot(ctx)
+	p.Boot(ctx)
+	p.Boot(ctx)
+	if tr := p.state(); tr.Phase != PhaseKept || len(p.reboots()) != 0 {
+		t.Errorf("with a bad backup name: %+v, rebooted %q", tr, p.reboots())
+	}
+}
+
+func TestGoBack(t *testing.T) {
+	p := newFakePi(t)
+	done := p.startTrial(oc)
+	p.waitPhase(PhasePassed)
 	if err := p.Discard(); err != nil {
 		t.Fatal(err)
 	}
 	if p.exists(TrybootPath) || p.phase() != PhaseDiscarded {
 		t.Errorf("tryboot.txt %v, phase %q", p.exists(TrybootPath), p.phase())
 	}
+	// Going back: nothing else until the reboot finishes it.
 	if err := p.Keep(); !refused(err) {
-		t.Errorf("Keep after Discard = %v, want refused", err)
+		t.Errorf("Keep after Go back = %v, want refused", err)
 	}
-	// Staging again is allowed once it's dropped.
+	if err := p.Stage(Settings{TempLimit: new(80)}); !refused(err) {
+		t.Errorf("Stage after Go back = %v, want refused", err)
+	}
+	if err := p.Discard(); !refused(err) {
+		t.Errorf("Discard after Go back = %v, want refused", err)
+	}
+	// Boot keeps holding the server off until the reboot.
+	select {
+	case err := <-done:
+		t.Fatalf("Boot returned %v while going back", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	// The reboot, and the next boot settles it.
+	p.setTrialBoot(false)
+	if err := p.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p.phase() != PhaseReverted {
+		t.Errorf("phase %q, want reverted", p.phase())
+	}
 	if err := p.Stage(Settings{TempLimit: new(80)}); err != nil {
-		t.Errorf("Stage after Discard: %v", err)
+		t.Errorf("Stage after going back: %v", err)
+	}
+	// The first Boot is still waiting: it ends once the state isn't
+	// passed or discarded.
+	wait(t, done)
+}
+
+// Go back during the check, and the check fails anyway: it still reboots
+// back, rather than leave failing settings running.
+func TestGoBackDuringFailingCheck(t *testing.T) {
+	p := newFakePi(t)
+	p.Load = func(context.Context) error {
+		if err := p.Discard(); err != nil {
+			t.Error(err)
+		}
+		return errors.New("a CPU computed a wrong hash")
+	}
+	done := p.startTrial(oc)
+	if err := wait(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if p.phase() != PhaseFailed || len(p.reboots()) != 2 {
+		t.Errorf("phase %q, rebooted %q", p.phase(), p.reboots())
+	}
+}
+
+// Between RebootTrial and the reboot, nothing may change tryboot.txt;
+// RebootTrial itself may be tried again. A reboot that never happened
+// is settled as failed by the next normal boot.
+func TestRebootPending(t *testing.T) {
+	p := newFakePi(t)
+	p.runErr = errors.New("systemctl: access denied")
+	if err := p.Stage(oc); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RebootTrial(context.Background()); err == nil || refused(err) {
+		t.Fatalf("RebootTrial = %v, want the systemctl error", err)
+	}
+	if err := p.Stage(Settings{TempLimit: new(80)}); !refused(err) {
+		t.Errorf("Stage while a reboot is pending = %v", err)
+	}
+	if err := p.Discard(); !refused(err) {
+		t.Errorf("Discard while a reboot is pending = %v", err)
+	}
+	if err := p.RebootTrial(context.Background()); err == nil || refused(err) {
+		t.Errorf("retry = %v, want the systemctl error again", err)
+	}
+	if err := p.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p.phase() != PhaseFailed {
+		t.Errorf("phase %q", p.phase())
+	}
+}
+
+// A trial boot the boot unit never checked shows as a problem, and Go
+// back clears it.
+func TestUncheckedTrial(t *testing.T) {
+	p := newFakePi(t)
+	p.Stage(oc)
+	p.RebootTrial(context.Background())
+	p.setTrialBoot(true) // booted, but Boot never ran
+	if st := p.Status(); len(st.Problems) == 0 {
+		t.Error("Status didn't report the unchecked trial")
+	}
+	if err := p.Discard(); err != nil || p.phase() != PhaseDiscarded {
+		t.Errorf("Discard = %v, phase %q", err, p.phase())
 	}
 }
 
 func TestRefusals(t *testing.T) {
 	ctx := context.Background()
 
-	// The server must be stopped, checked by the helper too.
 	p := newFakePi(t)
-	p.ServerUp = func() bool { return true }
-	p.Stage(oc)
-	if err := p.RebootTrial(ctx); !refused(err) {
-		t.Errorf("RebootTrial with the server up = %v, want refused", err)
-	}
-	if err := p.Reboot(ctx); !refused(err) {
-		t.Errorf("Reboot with the server up = %v, want refused", err)
-	}
-	if len(p.commands()) != 0 {
-		t.Errorf("ran %q", p.commands())
-	}
-
-	p = newFakePi(t)
 	p.write(modelPath, "Raspberry Pi 4 Model B Rev 1.4\x00")
 	if err := p.Stage(oc); !refused(err) {
 		t.Errorf("Stage on a Pi 4 = %v, want refused", err)
@@ -317,14 +627,31 @@ func TestRefusals(t *testing.T) {
 		t.Errorf("Keep without a trial = %v, want refused", err)
 	}
 
-	// No watchdog, no trial: a hang couldn't reset itself.
+	// The server must be stopped, checked by the helper too.
 	p = newFakePi(t)
-	p.write(watchdogState, "inactive\n")
-	if err := p.Stage(oc); err != nil {
-		t.Fatal(err)
+	p.Stage(oc)
+	p.setServer(true)
+	if err := p.RebootTrial(ctx); !refused(err) {
+		t.Errorf("RebootTrial with the server up = %v, want refused", err)
 	}
-	if err := p.RebootTrial(ctx); !refused(err) || len(p.commands()) != 0 {
-		t.Errorf("RebootTrial without a watchdog = %v, ran %q", err, p.commands())
+	if err := p.Reboot(ctx); !refused(err) {
+		t.Errorf("Reboot with the server up = %v, want refused", err)
+	}
+	if len(p.commands()) != 0 {
+		t.Errorf("ran %q", p.commands())
+	}
+
+	// No watchdog or no boot unit: nothing is staged or tried.
+	for name, rel := range map[string]string{"watchdog": watchdogState, "boot unit": bootUnitLink} {
+		p = newFakePi(t)
+		os.Remove(filepath.Join(p.Root, rel))
+		if err := p.Stage(oc); !refused(err) || p.exists(TrybootPath) {
+			t.Errorf("Stage without the %s = %v", name, err)
+		}
+		p.write(TrybootPath, string(must(Splice([]byte(stock), Block(oc)))))
+		if err := p.RebootTrial(ctx); !refused(err) || len(p.commands()) != 0 {
+			t.Errorf("RebootTrial without the %s = %v", name, err)
+		}
 	}
 
 	// A tryboot.txt admin didn't write is left alone.
@@ -343,6 +670,13 @@ func TestRefusals(t *testing.T) {
 	if st := p.Status(); len(st.Problems) == 0 {
 		t.Error("Status didn't report the hand-edited block")
 	}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 // Symlinks planted where admin's files go are never followed.
@@ -375,7 +709,7 @@ func TestBackupsKeepNewest(t *testing.T) {
 	p.Now = func() time.Time { return now }
 	for i := range 8 {
 		now = now.Add(time.Hour)
-		if err := p.backup([]byte{byte('a' + i)}); err != nil {
+		if _, err := p.backup([]byte{byte('a' + i)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -424,8 +758,14 @@ func TestGovernor(t *testing.T) {
 func TestStatusOnAFreshPi(t *testing.T) {
 	p := newFakePi(t)
 	st := p.Status()
-	if !st.Supported || !st.Watchdog || st.TrialBoot || st.Pending != nil || st.Trial != nil || len(st.Problems) != 0 {
+	if !st.Supported || !st.Watchdog || !st.BootCheck || st.TrialBoot || st.Pending != nil || st.Trial != nil || len(st.Problems) != 0 {
 		t.Errorf("Status = %+v", st)
+	}
+	// Kept settings arm the watchdog: without it, that's a problem.
+	p.write(ConfigPath, string(must(Splice([]byte(stock), Block(oc)))))
+	p.write(watchdogState, "inactive\n")
+	if st := p.Status(); len(st.Problems) != 1 {
+		t.Errorf("problems = %q", st.Problems)
 	}
 	// Not a Pi at all: still answers, with nothing supported.
 	empty := &Host{Root: t.TempDir()}
@@ -435,101 +775,59 @@ func TestStatusOnAFreshPi(t *testing.T) {
 	}
 }
 
-func TestCPUCheck(t *testing.T) {
-	if err := CPUCheck(context.Background(), 50*time.Millisecond); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// A reboot that fails to start keeps the "rebooting" state (systemctl
-// may have queued it anyway), and can be tried again. If the Pi then
-// boots normally, Boot records that the trial never ran.
-func TestRebootTrialFailsToStart(t *testing.T) {
-	p := newFakePi(t)
-	p.Run = func(context.Context, string, ...string) error { return errors.New("systemctl: access denied") }
-	if err := p.Stage(oc); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.RebootTrial(context.Background()); err == nil {
-		t.Fatal("RebootTrial = nil, want the systemctl error")
-	}
-	if err := p.RebootTrial(context.Background()); err == nil || refused(err) {
-		t.Fatalf("retry = %v, want the systemctl error again", err)
-	}
-	if err := p.Boot(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if p.phase() != PhaseFailed {
-		t.Errorf("phase %q", p.phase())
-	}
-}
-
-// Go back, then reboot: the next boot settles it, so the page stops
-// asking for a reboot.
-func TestDiscardThenReboot(t *testing.T) {
-	p := newFakePi(t)
-	ctx := context.Background()
-	p.Stage(oc)
-	p.RebootTrial(ctx)
-	p.setTrialBoot(true)
-	p.Boot(ctx)
-	if err := p.Discard(); err != nil {
-		t.Fatal(err)
-	}
-	p.setTrialBoot(false)
-	if err := p.Boot(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if p.phase() != PhaseReverted {
-		t.Errorf("phase %q, want reverted", p.phase())
-	}
-}
-
-// Without the boot unit nothing would check a trial, so it isn't started.
-// A trial boot the unit never checked shows as a problem, and can be
-// dropped.
-func TestTrialNeedsBootCheck(t *testing.T) {
-	p := newFakePi(t)
-	os.Remove(filepath.Join(p.Root, bootUnitLink))
-	p.Stage(oc)
-	if err := p.RebootTrial(context.Background()); !refused(err) || len(p.commands()) != 0 {
-		t.Errorf("RebootTrial without the boot unit = %v", err)
-	}
-
-	p = newFakePi(t)
-	p.Stage(oc)
-	p.RebootTrial(context.Background())
-	p.setTrialBoot(true) // booted, but Boot never ran
-	if st := p.Status(); len(st.Problems) == 0 {
-		t.Error("Status didn't report the unchecked trial")
-	}
-	if err := p.Discard(); err != nil || p.phase() != PhaseDiscarded {
-		t.Errorf("Discard = %v, phase %q", err, p.phase())
-	}
-}
-
-// Go back during the check, and the check fails anyway: it still reboots
-// back, rather than leave failing settings running.
-func TestDiscardDuringFailingCheck(t *testing.T) {
-	p := newFakePi(t)
-	ctx := context.Background()
-	p.Stage(oc)
-	p.RebootTrial(ctx)
-	p.setTrialBoot(true)
-	p.Load = func(context.Context) error {
-		if err := p.Discard(); err != nil {
-			t.Error(err)
+func TestParseThrottled(t *testing.T) {
+	for in, want := range map[string]uint32{"throttled=0x0\n": 0, "throttled=0x50005": 0x50005} {
+		if got, err := ParseThrottled(in); err != nil || got != want {
+			t.Errorf("ParseThrottled(%q) = %#x, %v", in, got, err)
 		}
-		return errors.New("a CPU computed a wrong hash")
 	}
-	if err := p.Boot(ctx); err != nil {
+	for _, bad := range []string{"", "0x5", "throttled=zz", "error=1"} {
+		if _, err := ParseThrottled(bad); err == nil {
+			t.Errorf("ParseThrottled(%q) = nil error", bad)
+		}
+	}
+}
+
+func TestCPUCheck(t *testing.T) {
+	if err := CPUCheck(context.Background(), 50*time.Millisecond, 1<<20); err != nil {
 		t.Fatal(err)
 	}
-	if p.phase() != PhaseFailed {
-		t.Errorf("phase %q", p.phase())
+}
+
+func TestStopServerNeedsAValidUser(t *testing.T) {
+	p := newFakePi(t)
+	for _, u := range []string{"", "root@host", "-H", "a b"} {
+		p.User = u
+		if err := p.stopServer(context.Background()); err == nil {
+			t.Errorf("stopServer as %q = nil", u)
+		}
 	}
-	want := [][]string{{"systemctl", "reboot", "0 tryboot"}, {"systemctl", "reboot"}}
-	if got := p.commands(); !reflect.DeepEqual(got, want) {
-		t.Errorf("ran %q, want %q", got, want)
+	if len(p.commands()) != 0 {
+		t.Errorf("ran %q", p.commands())
+	}
+}
+
+// If the server can't be kept off, the trial fails rather than let Paper
+// run on settings that haven't passed.
+func TestTrialFailsIfServerWontStop(t *testing.T) {
+	p := newFakePi(t)
+	run := p.Run
+	p.Run = func(ctx context.Context, name string, args ...string) error {
+		if len(args) >= 4 && args[3] == "stop" {
+			return errors.New("Failed to connect to bus")
+		}
+		return run(ctx, name, args...)
+	}
+	done := p.startTrial(oc)
+	p.setServer(true)
+	// Boot reports the failed stop, and reboots back anyway.
+	if err := wait(t, done); err == nil || !strings.Contains(err.Error(), "bus") {
+		t.Errorf("Boot = %v, want the stop error", err)
+	}
+	if tr := p.state(); tr.Phase != PhaseFailed || !strings.Contains(tr.Message, "kept running") {
+		t.Errorf("state = %+v", tr)
+	}
+	if got := p.reboots(); len(got) != 2 {
+		t.Errorf("rebooted %q", got)
 	}
 }

@@ -10,7 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,10 +25,14 @@ const (
 	TrybootPath = "boot/firmware/tryboot.txt"
 	// BackupDir is on the boot partition, so the backups can be read from
 	// any computer if the Pi ever needs its SD card pulled.
-	BackupDir     = "boot/firmware/admin-backup"
-	StateDir      = "var/lib/pi-firmware"
-	statePath     = StateDir + "/state.json"
-	governorPath  = StateDir + "/governor"
+	BackupDir    = "boot/firmware/admin-backup"
+	StateDir     = "var/lib/pi-firmware"
+	statePath    = StateDir + "/state.json"
+	governorPath = StateDir + "/governor"
+	// markerPath is there while the Pi runs: Boot writes it and CleanStop,
+	// at a clean shutdown, removes it. Finding it at boot means the last
+	// boot ended in a crash, a watchdog reset or a power cut.
+	markerPath    = StateDir + "/running"
 	lockPath      = "run/pi-firmware.lock"
 	modelPath     = "proc/device-tree/model"
 	trybootFlag   = "proc/device-tree/chosen/bootloader/tryboot"
@@ -36,15 +40,31 @@ const (
 	// bootUnitLink exists while pi-firmware-boot.service is enabled.
 	bootUnitLink = "etc/systemd/system/multi-user.target.wants/pi-firmware-boot.service"
 	cpufreqGlob  = "sys/devices/system/cpu/cpufreq/policy*"
-	throttleGlob = "sys/devices/platform/soc*/*firmware/get_throttled"
 )
 
 const (
 	keepBackups = 5
 	maxFile     = 64 << 10 // config.txt is a few KB
-	// underVoltageSinceBoot is get_throttled's bit for an under-voltage
-	// since boot.
-	underVoltageSinceBoot = 1 << 16
+
+	// Probation is how long after Keep the Pi is watched for unclean
+	// resets, and ProbationResets how many put the old config.txt back.
+	Probation       = 14 * 24 * time.Hour
+	ProbationResets = 2
+	// KeepWindow is how long a trial that passed waits for Keep before it
+	// goes back by itself.
+	KeepWindow = 30 * time.Minute
+)
+
+// get_throttled's bits: now in the low ones, since boot (or, with the
+// kernel's hwmon driver polling, the last couple of seconds) 16 higher.
+const (
+	underVoltage = 1 << 0
+	freqCapped   = 1 << 1
+	throttled    = 1 << 2
+	sinceShift   = 16
+	// badBits fail a trial: under-voltage, a capped clock or throttling,
+	// now or recently.
+	badBits = (underVoltage | freqCapped | throttled) | (underVoltage|freqCapped|throttled)<<sinceShift
 )
 
 // Governors are the CPU governors admin may pick, in the order it shows
@@ -56,14 +76,15 @@ type Phase string
 
 // The phases, in the order they usually happen.
 const (
-	PhaseRebooting Phase = "rebooting" // the Pi is rebooting onto tryboot.txt
-	PhaseChecking  Phase = "checking"  // it booted on tryboot.txt; Boot is checking it
-	PhasePassed    Phase = "passed"    // the checks passed; it waits for Keep
-	PhaseFailed    Phase = "failed"    // a check failed, or the Pi reset: back on config.txt
-	PhaseKept      Phase = "kept"      // Keep copied them into config.txt
-	PhaseDiscarded Phase = "discarded" // Discard dropped them; a reboot goes back
-	PhaseExpired   Phase = "expired"   // it rebooted before Keep: back on config.txt
-	PhaseReverted  Phase = "reverted"  // rebooted after Discard: back on config.txt
+	PhaseRebooting  Phase = "rebooting"   // the Pi is rebooting onto tryboot.txt
+	PhaseChecking   Phase = "checking"    // it booted on tryboot.txt; Boot is checking it
+	PhasePassed     Phase = "passed"      // the checks passed; it waits for Keep
+	PhaseFailed     Phase = "failed"      // a check failed, or the Pi reset: back on config.txt
+	PhaseKept       Phase = "kept"        // Keep copied them into config.txt; on probation
+	PhaseDiscarded  Phase = "discarded"   // Go back during the trial; a reboot goes back
+	PhaseExpired    Phase = "expired"     // not kept in time, or rebooted before Keep: back on config.txt
+	PhaseReverted   Phase = "reverted"    // rebooted after Go back: back on config.txt
+	PhaseRolledBack Phase = "rolled_back" // kept, then reset too often: old config.txt restored
 )
 
 // Trial is the last trial of new settings, saved in StateDir.
@@ -72,6 +93,11 @@ type Trial struct {
 	Message  string    `json:"message,omitzero"`
 	Settings Settings  `json:"settings"`
 	At       time.Time `json:"at"`
+	// Backup is the config.txt backup Keep made, which probation puts
+	// back if the kept settings reset the Pi.
+	Backup string `json:"backup,omitzero"`
+	// Resets counts unclean boots during probation.
+	Resets int `json:"resets,omitzero"`
 }
 
 // Status is what admin shows. Nothing in it needs root to read.
@@ -86,14 +112,16 @@ type Status struct {
 	// TrialBoot is true while the Pi is running on tryboot.txt.
 	TrialBoot bool   `json:"trial_boot"`
 	Trial     *Trial `json:"trial,omitzero"`
+	// ProbationUntil is when kept settings stop being watched for resets.
+	ProbationUntil time.Time `json:"probation_until,omitzero"`
 	// Governor is the CPU governor now, and Governors the ones offered.
 	Governor  string   `json:"governor,omitzero"`
 	Governors []string `json:"governors"`
 	// Watchdog is true while something (systemd) serves the hardware
-	// watchdog, which a trial boot needs.
+	// watchdog, which every admin block arms.
 	Watchdog bool `json:"watchdog"`
 	// BootCheck is true while pi-firmware-boot.service is enabled, which
-	// checks a trial boot and settles it.
+	// checks a trial boot and watches kept settings.
 	BootCheck bool `json:"boot_check"`
 	// Problems are things that need fixing on the Pi by hand, such as a
 	// hand-edited admin block.
@@ -116,23 +144,27 @@ type Host struct {
 	// Root is where the paths above are found; "" is /. Tests use a
 	// folder of synthetic files.
 	Root string
-	// Run runs a command (systemctl reboot). It must not use a shell.
+	// Run runs a command (systemctl). It must not use a shell.
 	Run func(ctx context.Context, name string, args ...string) error
 	// Now is the time; time.Now if nil.
 	Now func() time.Time
 
-	// Boot's checks on a trial boot. Healthy reports whether admin
-	// answers; Boot retries it for HealthWait. Load runs the CPU check
-	// (CPUCheck). A nil check is skipped.
-	Healthy    func(ctx context.Context) error
-	HealthWait time.Duration
-	Load       func(ctx context.Context) error
+	// Throttled returns the firmware's get_throttled bits (vcgencmd).
+	// Load runs the CPU check (CPUCheck). The trial check polls Throttled
+	// and the clock every PollEvery (default a second) while Load runs.
+	Throttled func(ctx context.Context) (uint32, error)
+	Load      func(ctx context.Context) error
+	PollEvery time.Duration
+	// KeepWindow overrides the package's KeepWindow (tests).
+	KeepWindow time.Duration
 
-	// ServerUp reports whether the Minecraft server is running. Reboot and
-	// RebootTrial refuse while it is, here as well as in admin, since
-	// anything running as admin's user can reach the sudo rule. nil
-	// skips the check.
+	// ServerUp reports whether the Minecraft server (LazyMC) is running.
+	// Reboot and RebootTrial refuse while it is, and a trial boot stops
+	// it, as User, so Paper never runs on settings that haven't passed.
+	// nil means it's never up.
 	ServerUp func() bool
+	// User is the Unix user whose minecraft.service a trial boot stops.
+	User string
 }
 
 func (h *Host) path(rel string) string {
@@ -150,6 +182,19 @@ func (h *Host) now() time.Time {
 	return time.Now()
 }
 
+func (h *Host) serverUp() bool { return h.ServerUp != nil && h.ServerUp() }
+
+// validUser matches a Unix user name, before it goes into "-M user@".
+var validUser = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
+// stopServer stops the user's minecraft.service, so Paper saves first.
+func (h *Host) stopServer(ctx context.Context) error {
+	if !validUser.MatchString(h.User) {
+		return fmt.Errorf("no valid user to stop minecraft.service as (PI_FIRMWARE_USER is %q)", h.User)
+	}
+	return h.Run(ctx, "systemctl", "--user", "-M", h.User+"@", "stop", "minecraft.service")
+}
+
 // Status reads the settings and the trial's state. Problems with any one
 // part are in Status.Problems rather than an error, so the rest still
 // shows.
@@ -159,15 +204,16 @@ func (h *Host) Status() Status {
 
 	st.Model = h.model()
 	st.Supported = isPi5(st.Model)
+	savedBlock := false
 	if b, err := readFile(h.path(ConfigPath)); err != nil {
 		problem(fmt.Errorf("couldn't read config.txt: %w", err))
-	} else if s, _, _, err := ParseBlock(b); err != nil {
+	} else if s, found, err := ParseBlock(b); err != nil {
 		problem(err)
 	} else {
-		st.Saved = s
+		st.Saved, savedBlock = s, found
 	}
 	if b, err := readFile(h.path(TrybootPath)); err == nil {
-		s, found, _, err := ParseBlock(b)
+		s, found, err := ParseBlock(b)
 		switch {
 		case err != nil:
 			problem(fmt.Errorf("tryboot.txt: %w", err))
@@ -179,17 +225,23 @@ func (h *Host) Status() Status {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		problem(fmt.Errorf("couldn't read tryboot.txt: %w", err))
 	}
-	st.TrialBoot = h.trialBoot()
+	st.TrialBoot = h.TrialBoot()
 	if t, err := h.readState(); err != nil {
 		problem(err)
 	} else {
 		st.Trial = t
+	}
+	if t := st.Trial; t != nil && t.Phase == PhaseKept && h.now().Before(t.At.Add(Probation)) {
+		st.ProbationUntil = t.At.Add(Probation)
 	}
 	st.Governor, st.Governors = h.governors()
 	st.Watchdog = h.watchdog()
 	st.BootCheck = h.bootCheck()
 	if st.TrialBoot && st.Trial != nil && st.Trial.Phase == PhaseRebooting {
 		problem(errors.New("the Pi booted the trial settings, but pi-firmware-boot.service hasn't checked them: see its log, or go back"))
+	}
+	if savedBlock && !st.Watchdog {
+		problem(errors.New("config.txt arms the hardware watchdog, but systemd isn't serving it, so the Pi may reset soon after every boot: reinstall watchdog.conf (deploy/pi-firmware/README.md)"))
 	}
 	return st
 }
@@ -218,9 +270,9 @@ func (h *Host) supported() error {
 	return nil
 }
 
-// trialBoot reports whether the firmware booted from tryboot.txt: the
+// TrialBoot reports whether the firmware booted from tryboot.txt: the
 // device tree's tryboot property is a big-endian 1.
-func (h *Host) trialBoot() bool {
+func (h *Host) TrialBoot() bool {
 	b, err := readFile(h.path(trybootFlag))
 	return err == nil && len(b) == 4 && binary.BigEndian.Uint32(b) == 1
 }
@@ -254,197 +306,17 @@ func (h *Host) governors() (string, []string) {
 	return strings.TrimSpace(string(cur)), offered
 }
 
-// busy reports whether a trial is waiting for Keep or still being
-// checked, which blocks starting another.
-func (h *Host) busy(t *Trial) bool {
-	return h.trialBoot() && t != nil && (t.Phase == PhaseChecking || t.Phase == PhasePassed)
-}
-
-// Stage writes s to tryboot.txt, ready for RebootTrial. config.txt isn't
-// touched.
-func (h *Host) Stage(s Settings) error {
-	unlock, err := h.lock()
+// curKHz is the first cpufreq policy's current clock, in kHz.
+func (h *Host) curKHz() (int, error) {
+	policies, _ := filepath.Glob(h.path(cpufreqGlob))
+	if len(policies) == 0 {
+		return 0, errors.New("no cpufreq policies")
+	}
+	b, err := readFile(filepath.Join(policies[0], "scaling_cur_freq"))
 	if err != nil {
-		return err
+		return 0, err
 	}
-	defer unlock()
-	if err := h.supported(); err != nil {
-		return err
-	}
-	if err := s.Validate(); err != nil {
-		return refuse("%s.", err)
-	}
-	t, err := h.readState()
-	if err != nil {
-		return err
-	}
-	if h.busy(t) {
-		return refuse("The Pi is trying other settings right now. Keep them or go back first.")
-	}
-	config, err := h.readConfig()
-	if err != nil {
-		return err
-	}
-	out, err := Splice(config, Block(s, true))
-	if err != nil {
-		return refuse("%s.", err)
-	}
-	return writeAtomic(h.path(TrybootPath), out, 0o644)
-}
-
-// Discard removes the settings waiting in tryboot.txt. During a trial
-// boot it means "go back": the next reboot uses config.txt.
-func (h *Host) Discard() error {
-	unlock, err := h.lock()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	t, err := h.readState()
-	if err != nil {
-		return err
-	}
-	if err := removeFile(h.path(TrybootPath)); err != nil {
-		return err
-	}
-	if h.trialBoot() && t != nil && (h.busy(t) || t.Phase == PhaseRebooting) {
-		t.Phase, t.At = PhaseDiscarded, h.now()
-		t.Message = "Going back: reboot to return to the saved settings."
-		return h.writeState(t)
-	}
-	return nil
-}
-
-// Keep saves the settings a trial boot passed with into config.txt,
-// after backing config.txt up, and removes tryboot.txt.
-func (h *Host) Keep() error {
-	unlock, err := h.lock()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	t, err := h.readState()
-	if err != nil {
-		return err
-	}
-	if !h.trialBoot() || t == nil || t.Phase != PhasePassed {
-		return refuse("Only settings that passed a trial boot can be kept.")
-	}
-	tb, err := readFile(h.path(TrybootPath))
-	if err != nil {
-		return refuse("tryboot.txt is gone, so there's nothing to keep.")
-	}
-	s, found, trial, err := ParseBlock(tb)
-	if err != nil || !found || !trial {
-		return refuse("tryboot.txt isn't the one admin wrote, so it can't be kept.")
-	}
-	if !reflect.DeepEqual(s, t.Settings) {
-		return refuse("tryboot.txt changed since the trial boot, so it can't be kept.")
-	}
-	config, err := h.readConfig()
-	if err != nil {
-		return err
-	}
-	out, err := Splice(config, Block(s, false))
-	if err != nil {
-		return refuse("%s.", err)
-	}
-	if err := h.backup(config); err != nil {
-		return fmt.Errorf("backing up config.txt: %w", err)
-	}
-	if err := writeAtomic(h.path(ConfigPath), out, 0o644); err != nil {
-		return err
-	}
-	if err := removeFile(h.path(TrybootPath)); err != nil {
-		return err
-	}
-	t.Phase, t.At, t.Message = PhaseKept, h.now(), "Saved to config.txt. Every boot uses these settings now."
-	return h.writeState(t)
-}
-
-// RebootTrial reboots the Pi once onto tryboot.txt. It refuses unless
-// tryboot.txt is admin's and the hardware watchdog is running, so a trial
-// that hangs resets itself back onto config.txt.
-func (h *Host) RebootTrial(ctx context.Context) error {
-	unlock, err := h.lock()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	if err := h.supported(); err != nil {
-		return err
-	}
-	t, err := h.readState()
-	if err != nil {
-		return err
-	}
-	if h.busy(t) {
-		return refuse("The Pi is trying other settings right now. Keep them or go back first.")
-	}
-	tb, err := readFile(h.path(TrybootPath))
-	if errors.Is(err, fs.ErrNotExist) {
-		return refuse("No settings are waiting for a trial. Save some first.")
-	} else if err != nil {
-		return err
-	}
-	s, found, trial, err := ParseBlock(tb)
-	if err != nil || !found || !trial {
-		return refuse("tryboot.txt isn't the one admin wrote, so admin won't boot it.")
-	}
-	if h.ServerUp != nil && h.ServerUp() {
-		return refuse(serverUpMsg)
-	}
-	if !h.bootCheck() {
-		return refuse("pi-firmware-boot.service isn't enabled, so nothing would check the trial boot. Set it up first (deploy/pi-firmware/README.md).")
-	}
-	if !h.watchdog() {
-		return refuse("The hardware watchdog isn't running, so a trial that hangs couldn't reset itself. Set it up first (deploy/pi-firmware/README.md).")
-	}
-	if err := h.writeState(&Trial{Phase: PhaseRebooting, Settings: s, At: h.now(),
-		Message: "Rebooting to try the new settings."}); err != nil {
-		return err
-	}
-	// systemctl passes "0 tryboot" to the reboot system call: partition 0
-	// (the default), and the one-shot tryboot flag.
-	// If it fails, the state stays "rebooting": systemctl can fail after
-	// queuing the reboot, and the trial boot must still be checked. Boot
-	// marks it failed on the next normal boot, and it can be retried.
-	return h.Run(ctx, "systemctl", "reboot", "0 tryboot")
-}
-
-// Reboot reboots the Pi normally, onto config.txt.
-func (h *Host) Reboot(ctx context.Context) error {
-	unlock, err := h.lock()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	if h.ServerUp != nil && h.ServerUp() {
-		return refuse(serverUpMsg)
-	}
-	return h.Run(ctx, "systemctl", "reboot")
-}
-
-const serverUpMsg = "Stop the server first, so Paper saves the world before the Pi reboots."
-
-// SetGovernor switches every CPU to the governor now, and saves it for
-// Boot to apply again after a reboot.
-func (h *Host) SetGovernor(name string) error {
-	unlock, err := h.lock()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	if _, offered := h.governors(); !slices.Contains(offered, name) {
-		return refuse("%q isn't a governor admin offers on this Pi.", name)
-	}
-	if err := h.applyGovernor(name); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(h.path(StateDir), 0o755); err != nil {
-		return err
-	}
-	return writeAtomic(h.path(governorPath), []byte(name+"\n"), 0o644)
+	return strconv.Atoi(strings.TrimSpace(string(b)))
 }
 
 func (h *Host) applyGovernor(name string) error {
@@ -472,142 +344,33 @@ func (h *Host) applyGovernor(name string) error {
 	return nil
 }
 
-// Boot runs once at every boot, as root. It applies the saved governor,
-// then settles the trial: on a trial boot it checks the Pi and reboots
-// back to config.txt if a check fails; on a normal boot after a trial
-// that never finished, it records that the Pi went back.
-func (h *Host) Boot(ctx context.Context) error {
-	var errs []error
-	if b, err := readFile(h.path(governorPath)); err == nil {
-		name := strings.TrimSpace(string(b))
-		if _, offered := h.governors(); slices.Contains(offered, name) {
-			errs = append(errs, h.applyGovernor(name))
-		}
+// ParseThrottled reads vcgencmd get_throttled's output, such as
+// "throttled=0x50005".
+func ParseThrottled(out string) (uint32, error) {
+	s, ok := strings.CutPrefix(strings.TrimSpace(out), "throttled=")
+	if !ok {
+		return 0, fmt.Errorf("unexpected get_throttled output %q", out)
 	}
-	return errors.Join(append(errs, h.settleTrial(ctx))...)
+	v, err := strconv.ParseUint(strings.TrimPrefix(s, "0x"), 16, 32)
+	if err != nil {
+		return 0, fmt.Errorf("unexpected get_throttled output %q", out)
+	}
+	return uint32(v), nil
 }
 
-func (h *Host) settleTrial(ctx context.Context) error {
-	unlock, err := h.lock()
-	if err != nil {
-		return err
+// describeThrottle says which of get_throttled's bad bits are set.
+func describeThrottle(v uint32) string {
+	var parts []string
+	if v&(underVoltage|underVoltage<<sinceShift) != 0 {
+		parts = append(parts, "under-voltage")
 	}
-	t, err := h.readState()
-	if err != nil {
-		unlock()
-		return err
+	if v&(freqCapped|freqCapped<<sinceShift) != 0 {
+		parts = append(parts, "clock capped")
 	}
-	if !h.trialBoot() {
-		defer unlock()
-		if t == nil {
-			return nil
-		}
-		switch t.Phase {
-		case PhaseRebooting, PhaseChecking:
-			t.Phase = PhaseFailed
-			t.Message = "The Pi didn't finish the trial boot (it hung, crashed or reset), so it's back on the saved settings."
-		case PhasePassed:
-			t.Phase = PhaseExpired
-			t.Message = "The Pi rebooted before the trial settings were kept, so it's back on the saved settings."
-		case PhaseDiscarded:
-			t.Phase = PhaseReverted
-			t.Message = "Went back: the Pi is on the saved settings again."
-		default:
-			return nil
-		}
-		t.At = h.now()
-		return errors.Join(removeFile(h.path(TrybootPath)), h.writeState(t))
+	if v&(throttled|throttled<<sinceShift) != 0 {
+		parts = append(parts, "throttled")
 	}
-
-	if t == nil || t.Phase != PhaseRebooting {
-		// A trial boot admin didn't start: leave it to whoever did.
-		unlock()
-		return nil
-	}
-	t.Phase, t.At, t.Message = PhaseChecking, h.now(), "Booted with the new settings. Checking the Pi…"
-	err = h.writeState(t)
-	unlock()
-	if err != nil {
-		return err
-	}
-
-	checkErr := h.check(ctx)
-
-	unlock, err = h.lock()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	if t, err = h.readState(); err != nil {
-		return err
-	}
-	if t == nil {
-		return nil
-	}
-	if t.Phase == PhaseDiscarded && checkErr != nil {
-		// Go back was chosen while the check ran, and the check failed
-		// too: don't leave the failing settings running until someone
-		// reboots.
-		t.Phase, t.At = PhaseFailed, h.now()
-		t.Message = fmt.Sprintf("The new settings failed a check (%v), so the Pi rebooted back to the saved settings.", checkErr)
-		if err := h.writeState(t); err != nil {
-			return err
-		}
-		return h.Run(ctx, "systemctl", "reboot")
-	}
-	if t.Phase != PhaseChecking {
-		return nil // discarded while the check ran, and it passed
-	}
-	t.At = h.now()
-	if checkErr == nil {
-		t.Phase = PhasePassed
-		t.Message = "The new settings passed their checks. Keep them, or go back."
-		return h.writeState(t)
-	}
-	t.Phase = PhaseFailed
-	t.Message = fmt.Sprintf("The new settings failed a check (%v), so the Pi rebooted back to the saved settings.", checkErr)
-	if err := errors.Join(removeFile(h.path(TrybootPath)), h.writeState(t)); err != nil {
-		return err
-	}
-	return h.Run(ctx, "systemctl", "reboot")
-}
-
-// check is a trial boot's health check: admin answers, there's been no
-// under-voltage, and the CPU gets through a full load.
-func (h *Host) check(ctx context.Context) error {
-	if h.Healthy != nil {
-		ctx, cancel := context.WithTimeout(ctx, h.HealthWait)
-		err := h.Healthy(ctx)
-		for err != nil {
-			select {
-			case <-ctx.Done():
-				cancel()
-				return fmt.Errorf("admin didn't answer within %s: %w", h.HealthWait, err)
-			case <-time.After(time.Second):
-			}
-			err = h.Healthy(ctx)
-		}
-		cancel()
-	}
-	if paths, _ := filepath.Glob(h.path(throttleGlob)); len(paths) > 0 {
-		b, err := readFile(paths[0])
-		if err != nil {
-			return fmt.Errorf("reading get_throttled: %w", err)
-		}
-		v, err := strconv.ParseUint(strings.TrimPrefix(strings.TrimSpace(string(b)), "0x"), 16, 32)
-		if err != nil {
-			return fmt.Errorf("reading get_throttled: %w", err)
-		}
-		if v&underVoltageSinceBoot != 0 {
-			return errors.New("under-voltage since boot")
-		}
-	}
-	if h.Load != nil {
-		if err := h.Load(ctx); err != nil {
-			return fmt.Errorf("CPU check: %w", err)
-		}
-	}
-	return nil
+	return strings.Join(parts, ", ")
 }
 
 // readConfig reads config.txt, refusing one whose admin block isn't
@@ -617,30 +380,31 @@ func (h *Host) readConfig() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, _, _, err := ParseBlock(config); err != nil {
+	if _, _, err := ParseBlock(config); err != nil {
 		return nil, refuse("%s.", strings.TrimSuffix(err.Error(), "."))
 	}
 	return config, nil
 }
 
-// backup copies config to BackupDir, keeping the newest few.
-func (h *Host) backup(config []byte) error {
+// backup copies config to BackupDir, keeping the newest few, and returns
+// the backup's name.
+func (h *Host) backup(config []byte) (string, error) {
 	dir := h.path(BackupDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return "", err
 	}
 	if fi, err := os.Lstat(dir); err != nil {
-		return err
+		return "", err
 	} else if !fi.IsDir() {
-		return fmt.Errorf("%s isn't a folder", dir)
+		return "", fmt.Errorf("%s isn't a folder", dir)
 	}
 	name := "config-" + h.now().UTC().Format("20060102T150405Z") + ".txt"
 	if err := writeAtomic(filepath.Join(dir, name), config, 0o644); err != nil {
-		return err
+		return "", err
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var old []string
 	for _, e := range entries {
@@ -651,10 +415,10 @@ func (h *Host) backup(config []byte) error {
 	slices.Sort(old)
 	for _, n := range old[:max(0, len(old)-keepBackups)] {
 		if err := os.Remove(filepath.Join(dir, n)); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return nil
+	return name, nil
 }
 
 func (h *Host) readState() (*Trial, error) {

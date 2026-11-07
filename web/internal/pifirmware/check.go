@@ -10,13 +10,20 @@ import (
 	"time"
 )
 
-// CPUCheck keeps every CPU busy for d, hashing the same buffer over and
-// over and checking each answer. An overclock that isn't stable shows up
-// as a wrong answer here, or as a crash, which the watchdog catches.
-func CPUCheck(ctx context.Context, d time.Duration) error {
-	buf := make([]byte, 1<<20)
+// CPUCheck keeps every CPU busy for d, each hashing the same size bytes
+// over and over and checking each answer. size should be well beyond the
+// caches (a few hundred MB), so memory is exercised too. An overclock
+// that isn't stable shows up as a wrong answer here, or as a crash, which
+// the watchdog catches.
+func CPUCheck(ctx context.Context, d time.Duration, size int) error {
+	buf := make([]byte, size)
+	// xorshift, so the data isn't a repeating pattern.
+	x := uint64(0x9e3779b97f4a7c15)
 	for i := range buf {
-		buf[i] = byte(i * 31)
+		x ^= x << 13
+		x ^= x >> 7
+		x ^= x << 17
+		buf[i] = byte(x)
 	}
 	want := sha256.Sum256(buf)
 

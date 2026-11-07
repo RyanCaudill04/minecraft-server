@@ -169,20 +169,21 @@ const (
 	blockNote   = "# Written by pi-firmware from admin. Change these from admin, not by hand."
 )
 
-// TrialWatchdog is how long, in seconds, the OS has to start serving the
-// hardware watchdog on a trial boot (kernel_watchdog_timeout). Only
-// tryboot.txt gets it, so a trial that hangs while booting resets back to
-// config.txt.
-const TrialWatchdog = 60
+// WatchdogTimeout is how long, in seconds, the OS has to start serving
+// the hardware watchdog after the firmware hands it over
+// (kernel_watchdog_timeout). Every admin block sets it, in tryboot.txt and
+// in config.txt after Keep, so settings that hang the Pi, even early in
+// boot, reset it instead. systemd must serve the watchdog
+// (deploy/pi-firmware/watchdog.conf), or the Pi resets after every boot.
+const WatchdogTimeout = 60
 
 // Block renders s as the admin block, ready to splice into config.txt.
-// trial adds the watchdog line tryboot.txt needs. Every line is built here
-// from numbers, so nothing from a request is copied into the file. Block
-// returns nil when there's nothing to write.
-func Block(s Settings, trial bool) []byte {
-	if s.Empty() && !trial {
-		return nil
-	}
+// Every line is built here from numbers, so nothing from a request is
+// copied into the file. Besides s, the block always arms the watchdog and
+// sets force_turbo=0: with force_turbo=1 from elsewhere in the file, any
+// over_voltage_delta would set the SoC's permanent warranty bit, and the
+// block's line comes last, so it wins.
+func Block(s Settings) []byte {
 	var b bytes.Buffer
 	b.WriteString(beginMarker + "\n" + blockNote + "\n[all]\n")
 	if s.ArmFreq != nil {
@@ -200,9 +201,8 @@ func Block(s Settings, trial bool) []byte {
 				i, st.Temp, i, st.Hyst, i, st.Speed)
 		}
 	}
-	if trial {
-		fmt.Fprintf(&b, "kernel_watchdog_timeout=%d\n", TrialWatchdog)
-	}
+	b.WriteString("force_turbo=0\n")
+	fmt.Fprintf(&b, "kernel_watchdog_timeout=%d\n", WatchdogTimeout)
 	b.WriteString(endMarker + "\n")
 	return b.Bytes()
 }
@@ -287,13 +287,13 @@ func Splice(config, block []byte) ([]byte, error) {
 }
 
 // ParseBlock reads the settings back from config's admin block. found is
-// false if there isn't one. trial reports whether it has the trial-only
-// watchdog line. Anything Block wouldn't have written is ErrHandEdited.
-func ParseBlock(config []byte) (s Settings, found, trial bool, err error) {
+// false if there isn't one. Anything Block wouldn't have written, including
+// a block without its force_turbo=0 and watchdog lines, is ErrHandEdited.
+func ParseBlock(config []byte) (s Settings, found bool, err error) {
 	lines := splitLines(config)
 	begin, end, err := blockSpan(lines)
 	if err != nil || begin < 0 {
-		return Settings{}, false, false, err
+		return Settings{}, false, err
 	}
 	var fan FanCurve
 	fanSeen := 0
@@ -306,26 +306,26 @@ func ParseBlock(config []byte) (s Settings, found, trial bool, err error) {
 		}
 		if !sawAll {
 			if l != "[all]" {
-				return Settings{}, true, false, ErrHandEdited
+				return Settings{}, true, ErrHandEdited
 			}
 			sawAll = true
 			continue
 		}
 		key, value, ok := strings.Cut(l, "=")
 		if !ok {
-			return Settings{}, true, false, ErrHandEdited
+			return Settings{}, true, ErrHandEdited
 		}
 		if key != "dtparam" {
 			if seen[key] {
-				return Settings{}, true, false, ErrHandEdited
+				return Settings{}, true, ErrHandEdited
 			}
 			seen[key] = true
 		}
 		switch key {
-		case "arm_freq", "over_voltage_delta", "temp_limit", "kernel_watchdog_timeout":
+		case "arm_freq", "over_voltage_delta", "temp_limit", "kernel_watchdog_timeout", "force_turbo":
 			v, err := strconv.Atoi(value)
 			if err != nil || strconv.Itoa(v) != value {
-				return Settings{}, true, false, ErrHandEdited
+				return Settings{}, true, ErrHandEdited
 			}
 			switch key {
 			case "arm_freq":
@@ -335,10 +335,13 @@ func ParseBlock(config []byte) (s Settings, found, trial bool, err error) {
 			case "temp_limit":
 				s.TempLimit = &v
 			case "kernel_watchdog_timeout":
-				if v != TrialWatchdog {
-					return Settings{}, true, false, ErrHandEdited
+				if v != WatchdogTimeout {
+					return Settings{}, true, ErrHandEdited
 				}
-				trial = true
+			case "force_turbo":
+				if v != 0 {
+					return Settings{}, true, ErrHandEdited
+				}
 			}
 		case "dtparam":
 			var i int
@@ -346,30 +349,33 @@ func ParseBlock(config []byte) (s Settings, found, trial bool, err error) {
 			n, err := fmt.Sscanf(value, "fan_temp%d=%d,fan_temp%d_hyst=%d,fan_temp%d_speed=%d",
 				&i, &st.Temp, new(int), &st.Hyst, new(int), &st.Speed)
 			if err != nil || n != 6 || i != fanSeen || i > 3 {
-				return Settings{}, true, false, ErrHandEdited
+				return Settings{}, true, ErrHandEdited
 			}
 			// Render it again: Sscanf skips spaces and ignores the step
 			// numbers it reads into new(int), so the line must match
 			// exactly what Block writes.
 			want := fmt.Sprintf("fan_temp%d=%d,fan_temp%d_hyst=%d,fan_temp%d_speed=%d", i, st.Temp, i, st.Hyst, i, st.Speed)
 			if value != want {
-				return Settings{}, true, false, ErrHandEdited
+				return Settings{}, true, ErrHandEdited
 			}
 			fan[i] = st
 			fanSeen++
 		default:
-			return Settings{}, true, false, ErrHandEdited
+			return Settings{}, true, ErrHandEdited
 		}
+	}
+	if !seen["force_turbo"] || !seen["kernel_watchdog_timeout"] {
+		return Settings{}, true, ErrHandEdited
 	}
 	switch fanSeen {
 	case 0:
 	case 4:
 		s.Fan = &fan
 	default:
-		return Settings{}, true, false, ErrHandEdited
+		return Settings{}, true, ErrHandEdited
 	}
 	if err := s.Validate(); err != nil {
-		return Settings{}, true, false, fmt.Errorf("%w (%v)", ErrHandEdited, err)
+		return Settings{}, true, fmt.Errorf("%w (%v)", ErrHandEdited, err)
 	}
-	return s, true, trial, nil
+	return s, true, nil
 }
