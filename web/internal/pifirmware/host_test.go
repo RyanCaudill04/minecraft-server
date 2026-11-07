@@ -40,6 +40,7 @@ func newFakePi(t *testing.T) *fakePi {
 	p.write(modelPath, "Raspberry Pi 5 Model B Rev 1.0\x00")
 	p.write(ConfigPath, stock)
 	p.write(watchdogState, "active\n")
+	p.write(bootUnitLink, "")
 	for _, cpu := range []string{"policy0"} {
 		p.write("sys/devices/system/cpu/cpufreq/"+cpu+"/scaling_governor", "ondemand\n")
 		p.write("sys/devices/system/cpu/cpufreq/"+cpu+"/scaling_available_governors", "conservative ondemand userspace powersave performance schedutil \n")
@@ -285,7 +286,21 @@ func TestDiscardDuringTrial(t *testing.T) {
 func TestRefusals(t *testing.T) {
 	ctx := context.Background()
 
+	// The server must be stopped, checked by the helper too.
 	p := newFakePi(t)
+	p.ServerUp = func() bool { return true }
+	p.Stage(oc)
+	if err := p.RebootTrial(ctx); !refused(err) {
+		t.Errorf("RebootTrial with the server up = %v, want refused", err)
+	}
+	if err := p.Reboot(ctx); !refused(err) {
+		t.Errorf("Reboot with the server up = %v, want refused", err)
+	}
+	if len(p.commands()) != 0 {
+		t.Errorf("ran %q", p.commands())
+	}
+
+	p = newFakePi(t)
 	p.write(modelPath, "Raspberry Pi 4 Model B Rev 1.4\x00")
 	if err := p.Stage(oc); !refused(err) {
 		t.Errorf("Stage on a Pi 4 = %v, want refused", err)
@@ -423,5 +438,98 @@ func TestStatusOnAFreshPi(t *testing.T) {
 func TestCPUCheck(t *testing.T) {
 	if err := CPUCheck(context.Background(), 50*time.Millisecond); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A reboot that fails to start keeps the "rebooting" state (systemctl
+// may have queued it anyway), and can be tried again. If the Pi then
+// boots normally, Boot records that the trial never ran.
+func TestRebootTrialFailsToStart(t *testing.T) {
+	p := newFakePi(t)
+	p.Run = func(context.Context, string, ...string) error { return errors.New("systemctl: access denied") }
+	if err := p.Stage(oc); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RebootTrial(context.Background()); err == nil {
+		t.Fatal("RebootTrial = nil, want the systemctl error")
+	}
+	if err := p.RebootTrial(context.Background()); err == nil || refused(err) {
+		t.Fatalf("retry = %v, want the systemctl error again", err)
+	}
+	if err := p.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p.phase() != PhaseFailed {
+		t.Errorf("phase %q", p.phase())
+	}
+}
+
+// Go back, then reboot: the next boot settles it, so the page stops
+// asking for a reboot.
+func TestDiscardThenReboot(t *testing.T) {
+	p := newFakePi(t)
+	ctx := context.Background()
+	p.Stage(oc)
+	p.RebootTrial(ctx)
+	p.setTrialBoot(true)
+	p.Boot(ctx)
+	if err := p.Discard(); err != nil {
+		t.Fatal(err)
+	}
+	p.setTrialBoot(false)
+	if err := p.Boot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p.phase() != PhaseReverted {
+		t.Errorf("phase %q, want reverted", p.phase())
+	}
+}
+
+// Without the boot unit nothing would check a trial, so it isn't started.
+// A trial boot the unit never checked shows as a problem, and can be
+// dropped.
+func TestTrialNeedsBootCheck(t *testing.T) {
+	p := newFakePi(t)
+	os.Remove(filepath.Join(p.Root, bootUnitLink))
+	p.Stage(oc)
+	if err := p.RebootTrial(context.Background()); !refused(err) || len(p.commands()) != 0 {
+		t.Errorf("RebootTrial without the boot unit = %v", err)
+	}
+
+	p = newFakePi(t)
+	p.Stage(oc)
+	p.RebootTrial(context.Background())
+	p.setTrialBoot(true) // booted, but Boot never ran
+	if st := p.Status(); len(st.Problems) == 0 {
+		t.Error("Status didn't report the unchecked trial")
+	}
+	if err := p.Discard(); err != nil || p.phase() != PhaseDiscarded {
+		t.Errorf("Discard = %v, phase %q", err, p.phase())
+	}
+}
+
+// Go back during the check, and the check fails anyway: it still reboots
+// back, rather than leave failing settings running.
+func TestDiscardDuringFailingCheck(t *testing.T) {
+	p := newFakePi(t)
+	ctx := context.Background()
+	p.Stage(oc)
+	p.RebootTrial(ctx)
+	p.setTrialBoot(true)
+	p.Load = func(context.Context) error {
+		if err := p.Discard(); err != nil {
+			t.Error(err)
+		}
+		return errors.New("a CPU computed a wrong hash")
+	}
+	if err := p.Boot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p.phase() != PhaseFailed {
+		t.Errorf("phase %q", p.phase())
+	}
+	want := [][]string{{"systemctl", "reboot", "0 tryboot"}, {"systemctl", "reboot"}}
+	if got := p.commands(); !reflect.DeepEqual(got, want) {
+		t.Errorf("ran %q, want %q", got, want)
 	}
 }

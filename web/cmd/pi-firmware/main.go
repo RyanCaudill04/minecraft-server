@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -46,6 +47,7 @@ var version = "dev"
 const (
 	maxInput   = 4 << 10
 	healthURL  = "http://127.0.0.1:8081/healthz" // admin
+	lazymcAddr = "127.0.0.1:25565"
 	healthWait = 5 * time.Minute
 	loadFor    = time.Minute
 	runTimeout = 30 * time.Second
@@ -68,7 +70,7 @@ func main() {
 	}
 	syscall.Umask(0o022)
 
-	h := &pifirmware.Host{Run: run}
+	h := &pifirmware.Host{Run: run, ServerUp: serverUp}
 	ctx := context.Background()
 	var err error
 	switch cmd {
@@ -147,6 +149,18 @@ func run(ctx context.Context, name string, args ...string) error {
 		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, bytes.TrimSpace(out))
 	}
 	return nil
+}
+
+// serverUp reports whether LazyMC (minecraft.service) answers on the
+// Minecraft port. It holds the port whenever the server is running, even
+// while Paper sleeps.
+func serverUp() bool {
+	c, err := net.DialTimeout("tcp", lazymcAddr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
 }
 
 // healthy reports whether admin answers its health check.

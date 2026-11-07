@@ -255,7 +255,8 @@ func splitLines(b []byte) []string {
 
 // Splice returns config with its admin block replaced by block, or the
 // block added at the end if there isn't one. A nil block removes it.
-// Every other line is kept as it is.
+// Every other line is kept as it is, except that line endings become \n
+// (the firmware reads both).
 func Splice(config, block []byte) ([]byte, error) {
 	lines := splitLines(config)
 	begin, end, err := blockSpan(lines)

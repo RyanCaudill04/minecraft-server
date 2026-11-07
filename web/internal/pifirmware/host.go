@@ -33,8 +33,10 @@ const (
 	modelPath     = "proc/device-tree/model"
 	trybootFlag   = "proc/device-tree/chosen/bootloader/tryboot"
 	watchdogState = "sys/class/watchdog/watchdog0/state"
-	cpufreqGlob   = "sys/devices/system/cpu/cpufreq/policy*"
-	throttleGlob  = "sys/devices/platform/soc*/*firmware/get_throttled"
+	// bootUnitLink exists while pi-firmware-boot.service is enabled.
+	bootUnitLink = "etc/systemd/system/multi-user.target.wants/pi-firmware-boot.service"
+	cpufreqGlob  = "sys/devices/system/cpu/cpufreq/policy*"
+	throttleGlob = "sys/devices/platform/soc*/*firmware/get_throttled"
 )
 
 const (
@@ -61,6 +63,7 @@ const (
 	PhaseKept      Phase = "kept"      // Keep copied them into config.txt
 	PhaseDiscarded Phase = "discarded" // Discard dropped them; a reboot goes back
 	PhaseExpired   Phase = "expired"   // it rebooted before Keep: back on config.txt
+	PhaseReverted  Phase = "reverted"  // rebooted after Discard: back on config.txt
 )
 
 // Trial is the last trial of new settings, saved in StateDir.
@@ -89,6 +92,9 @@ type Status struct {
 	// Watchdog is true while something (systemd) serves the hardware
 	// watchdog, which a trial boot needs.
 	Watchdog bool `json:"watchdog"`
+	// BootCheck is true while pi-firmware-boot.service is enabled, which
+	// checks a trial boot and settles it.
+	BootCheck bool `json:"boot_check"`
 	// Problems are things that need fixing on the Pi by hand, such as a
 	// hand-edited admin block.
 	Problems []string `json:"problems,omitzero"`
@@ -121,6 +127,12 @@ type Host struct {
 	Healthy    func(ctx context.Context) error
 	HealthWait time.Duration
 	Load       func(ctx context.Context) error
+
+	// ServerUp reports whether the Minecraft server is running. Reboot and
+	// RebootTrial refuse while it is, here as well as in admin, since
+	// anything running as admin's user can reach the sudo rule. nil
+	// skips the check.
+	ServerUp func() bool
 }
 
 func (h *Host) path(rel string) string {
@@ -175,6 +187,10 @@ func (h *Host) Status() Status {
 	}
 	st.Governor, st.Governors = h.governors()
 	st.Watchdog = h.watchdog()
+	st.BootCheck = h.bootCheck()
+	if st.TrialBoot && st.Trial != nil && st.Trial.Phase == PhaseRebooting {
+		problem(errors.New("the Pi booted the trial settings, but pi-firmware-boot.service hasn't checked them: see its log, or go back"))
+	}
 	return st
 }
 
@@ -207,6 +223,11 @@ func (h *Host) supported() error {
 func (h *Host) trialBoot() bool {
 	b, err := readFile(h.path(trybootFlag))
 	return err == nil && len(b) == 4 && binary.BigEndian.Uint32(b) == 1
+}
+
+func (h *Host) bootCheck() bool {
+	_, err := os.Lstat(h.path(bootUnitLink))
+	return err == nil
 }
 
 func (h *Host) watchdog() bool {
@@ -286,7 +307,7 @@ func (h *Host) Discard() error {
 	if err := removeFile(h.path(TrybootPath)); err != nil {
 		return err
 	}
-	if h.busy(t) {
+	if h.trialBoot() && t != nil && (h.busy(t) || t.Phase == PhaseRebooting) {
 		t.Phase, t.At = PhaseDiscarded, h.now()
 		t.Message = "Going back: reboot to return to the saved settings."
 		return h.writeState(t)
@@ -370,6 +391,12 @@ func (h *Host) RebootTrial(ctx context.Context) error {
 	if err != nil || !found || !trial {
 		return refuse("tryboot.txt isn't the one admin wrote, so admin won't boot it.")
 	}
+	if h.ServerUp != nil && h.ServerUp() {
+		return refuse(serverUpMsg)
+	}
+	if !h.bootCheck() {
+		return refuse("pi-firmware-boot.service isn't enabled, so nothing would check the trial boot. Set it up first (deploy/pi-firmware/README.md).")
+	}
 	if !h.watchdog() {
 		return refuse("The hardware watchdog isn't running, so a trial that hangs couldn't reset itself. Set it up first (deploy/pi-firmware/README.md).")
 	}
@@ -379,6 +406,9 @@ func (h *Host) RebootTrial(ctx context.Context) error {
 	}
 	// systemctl passes "0 tryboot" to the reboot system call: partition 0
 	// (the default), and the one-shot tryboot flag.
+	// If it fails, the state stays "rebooting": systemctl can fail after
+	// queuing the reboot, and the trial boot must still be checked. Boot
+	// marks it failed on the next normal boot, and it can be retried.
 	return h.Run(ctx, "systemctl", "reboot", "0 tryboot")
 }
 
@@ -389,8 +419,13 @@ func (h *Host) Reboot(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
+	if h.ServerUp != nil && h.ServerUp() {
+		return refuse(serverUpMsg)
+	}
 	return h.Run(ctx, "systemctl", "reboot")
 }
+
+const serverUpMsg = "Stop the server first, so Paper saves the world before the Pi reboots."
 
 // SetGovernor switches every CPU to the governor now, and saves it for
 // Boot to apply again after a reboot.
@@ -474,6 +509,9 @@ func (h *Host) settleTrial(ctx context.Context) error {
 		case PhasePassed:
 			t.Phase = PhaseExpired
 			t.Message = "The Pi rebooted before the trial settings were kept, so it's back on the saved settings."
+		case PhaseDiscarded:
+			t.Phase = PhaseReverted
+			t.Message = "Went back: the Pi is on the saved settings again."
 		default:
 			return nil
 		}
@@ -503,8 +541,22 @@ func (h *Host) settleTrial(ctx context.Context) error {
 	if t, err = h.readState(); err != nil {
 		return err
 	}
-	if t == nil || t.Phase != PhaseChecking {
-		return nil // discarded while the check ran
+	if t == nil {
+		return nil
+	}
+	if t.Phase == PhaseDiscarded && checkErr != nil {
+		// Go back was chosen while the check ran, and the check failed
+		// too: don't leave the failing settings running until someone
+		// reboots.
+		t.Phase, t.At = PhaseFailed, h.now()
+		t.Message = fmt.Sprintf("The new settings failed a check (%v), so the Pi rebooted back to the saved settings.", checkErr)
+		if err := h.writeState(t); err != nil {
+			return err
+		}
+		return h.Run(ctx, "systemctl", "reboot")
+	}
+	if t.Phase != PhaseChecking {
+		return nil // discarded while the check ran, and it passed
 	}
 	t.At = h.now()
 	if checkErr == nil {

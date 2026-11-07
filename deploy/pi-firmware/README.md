@@ -40,11 +40,13 @@ Install the helper, root-owned:
 sudo install -o root -g root -m 0755 ~/apps/current/bin/pi-firmware /usr/local/sbin/pi-firmware
 ```
 
-Let admin's user run it (and only its subcommands) through sudo. `visudo`
-checks the file before it's installed:
+Let admin's user run it (and only its subcommands) through sudo. The rule
+is written straight into a root-owned file, which sudo ignores while its
+name has a dot in it, and `visudo` checks that file before it's renamed
+into use, so nothing can change it in between:
 
 ```bash
-sed "s/PIUSER/$USER/" ~/apps/current/deploy/pi-firmware/sudoers > /tmp/pi-firmware.sudoers && sudo visudo -cf /tmp/pi-firmware.sudoers && sudo install -o root -g root -m 0440 /tmp/pi-firmware.sudoers /etc/sudoers.d/pi-firmware && rm /tmp/pi-firmware.sudoers
+sed "s/PIUSER/$USER/" ~/apps/current/deploy/pi-firmware/sudoers | sudo tee /etc/sudoers.d/pi-firmware.new >/dev/null && sudo chmod 0440 /etc/sudoers.d/pi-firmware.new && sudo visudo -cf /etc/sudoers.d/pi-firmware.new && sudo mv /etc/sudoers.d/pi-firmware.new /etc/sudoers.d/pi-firmware
 ```
 
 Install the boot check:
@@ -71,6 +73,19 @@ restart admin:
 ```bash
 systemctl --user restart admin
 ```
+
+## What the sudo rule allows
+
+The rule is for the Unix user, not for admin, so anything running as that
+user (play, Paper and its plugins, mc-agent, the backup) can run these
+subcommands too, without admin's owner check or typed confirmation. The
+helper still checks every value against the ranges, refuses to reboot
+while the Minecraft server holds its port, and only ever keeps settings
+that passed a trial boot. The worst such a process can do is reboot the
+Pi while the server is stopped, or try settings within the ranges.
+
+Installing the helper copies it from the release folder, which that user
+can write, so install it right after a deploy you trust.
 
 If the account also has blanket passwordless sudo (Raspberry Pi OS sets
 this up for the first user in `/etc/sudoers.d/010_pi-nopasswd`), anything

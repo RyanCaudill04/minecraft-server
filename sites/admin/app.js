@@ -1294,6 +1294,7 @@ const PI_TRIAL = {
   kept: { title: "Kept", level: "ok" },
   discarded: { title: "Going back", level: "busy" },
   expired: { title: "Trial not kept", level: "warn" },
+  reverted: { title: "Went back", level: "ok" },
 };
 
 const FAN_STEPS = 4;
@@ -1373,7 +1374,9 @@ function readPiForm(limits) {
     for (let i = 0; i < FAN_STEPS; i++) {
       const step = `Fan step ${i + 1}`;
       const temp = piNumber(`pi-fan-${i}-temp`, `${step}'s "on at"`, limits.fan_temp, 1000, " °C");
-      const off = piNumber(`pi-fan-${i}-off`, `${step}'s "off below"`, limits.fan_temp, 1000, " °C");
+      // "Off below" has no range of its own: only its gap below "on at"
+      // (the hysteresis) is checked, as the server does.
+      const off = piNumber(`pi-fan-${i}-off`, `${step}'s "off below"`, { min: 0, max: 100_000 }, 1000, " °C");
       const speed = piNumber(`pi-fan-${i}-speed`, `${step}'s speed`, limits.fan_speed);
       const error = temp.error || off.error || speed.error;
       if (error) return { error };
@@ -1423,7 +1426,7 @@ function renderPi() {
   const phase = trial?.phase;
   // A trial that is being checked, or waits for Keep, holds everything
   // else until it's settled.
-  const trialBusy = !!p?.trial_boot && (phase === "checking" || phase === "passed");
+  const trialBusy = !!p?.trial_boot && ["rebooting", "checking", "passed"].includes(phase);
   const can = !!p?.can_change && !!p?.supported && !piBusy;
 
   let locked = p?.locked || "";
@@ -1451,8 +1454,12 @@ function renderPi() {
     $("pi-trial-title").textContent = `${info.title} · ${fmtDate(trial.at)}`;
     $("pi-trial-text").textContent = `${trial.message} Tried: ${describePi(trial.settings)}.`;
   }
+  // Keep only once it passed; Go back any time during the trial boot,
+  // including while it's checked or if the check never ran.
   const deciding = !!p?.trial_boot && phase === "passed";
-  $("pi-keep").hidden = $("pi-back").hidden = !deciding;
+  const backable = !!p?.trial_boot && ["rebooting", "checking", "passed"].includes(phase);
+  $("pi-keep").hidden = !deciding;
+  $("pi-back").hidden = !backable;
   $("pi-keep").disabled = $("pi-back").disabled = !can;
 
   $("pi-saved").textContent = p ? describePi(p.saved) : "–";
@@ -1496,6 +1503,8 @@ function renderPi() {
   let why = "";
   if (!p?.pending) why = "Save settings first; then reboot to try them.";
   else if (trialBusy) why = "Keep or go back first.";
+  else if (!p.boot_check)
+    why = "pi-firmware-boot.service isn't enabled, so nothing would check the trial boot. See deploy/pi-firmware/README.md.";
   else if (!p.watchdog)
     why = "The hardware watchdog isn't running, so a trial that hangs couldn't reset itself. See deploy/pi-firmware/README.md.";
   else if (!serverStopped()) why = "Stop the server first (Server section), so Paper saves the world.";
@@ -1540,7 +1549,7 @@ function confirmReboot(trial) {
   $("pi-confirm-title").textContent = trial ? "Reboot to try the new settings?" : "Reboot the Pi?";
   $("pi-confirm-message").textContent =
     (trial
-      ? `The Pi reboots once with ${describePi(data.pi?.pending)}, then checks itself for about two minutes. If it hangs or a check fails, it reboots back to the saved settings.`
+      ? `The Pi reboots once with ${describePi(data.pi?.pending)}, then checks itself, which takes a few minutes. If it hangs or a check fails, it reboots back to the saved settings.`
       : "The Pi reboots onto its saved settings.") +
     ` admin is gone for a minute or two. Type "${REBOOT_WORD}" to confirm.`;
   word.value = "";
@@ -1559,6 +1568,13 @@ function confirmReboot(trial) {
 $("pi-confirm-word").addEventListener("input", (e) => {
   $("pi-confirm-ok").disabled = e.target.value.trim() !== REBOOT_WORD;
 });
+// Enter in the box would submit with the dialog's first button, Cancel:
+// confirm instead once the word is typed.
+$("pi-confirm-word").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  if (e.target.value.trim() === REBOOT_WORD) $("pi-confirm").close("ok");
+});
 
 async function rebootPi(trial) {
   const confirm = await confirmReboot(trial);
@@ -1568,7 +1584,7 @@ async function rebootPi(trial) {
     "/api/pi/reboot",
     { confirm, trial },
     trial
-      ? "Rebooting. admin is back in a minute or two, then the Pi checks itself for about two more."
+      ? "Rebooting. admin is back in a minute or two, then the Pi checks itself for a few more."
       : "Rebooting. admin is back in a minute or two.",
   );
 }
