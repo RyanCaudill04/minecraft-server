@@ -69,7 +69,7 @@ process, use `pgrep -x <name>`. Leave nothing running when you report.
 git push origin HEAD:<branch>
 ```
 
-Fast-forward only: never `--force`, never `main`. Retry network errors up
+Fast-forward only: never `--force`, never `main` or `dev`. Retry network errors up
 to 4 times, waiting 2, 4, 8 and 16 seconds. On a permission refusal (for
 example 403), stop: don't try another route, leave the worktree in place and
 report it.

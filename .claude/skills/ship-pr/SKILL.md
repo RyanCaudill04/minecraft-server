@@ -1,6 +1,6 @@
 ---
 name: ship-pr
-description: Ship a change in this repo from branch to pull request - branch from main, run the same checks CI runs, write commits and the PR body in the repo's style, pick the labels that decide the release kind, and watch CI. Use whenever you're about to commit, push or open a PR here.
+description: Ship a change in this repo from branch to pull request - branch from dev, open the PR into dev, run the same checks CI runs, write commits and the PR body in the repo's style, pick the labels that decide the release kind, and watch CI. Use whenever you're about to commit, push or open a PR here.
 ---
 
 # Branch to PR
