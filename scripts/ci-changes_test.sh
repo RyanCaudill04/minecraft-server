@@ -28,6 +28,7 @@ check "shared Go code"    'web/internal/world/world.go\n'          'play admin d
 check "go.mod"            'web/go.mod\n'                           'play admin deploy'
 check "admin site"        'sites/admin/index.html\n'               'admin deploy'
 check "admin command"     'web/cmd/admin/main.go\n'                'admin deploy'
+check "admin tests"       'tests/admin/status.test.js\n'          'admin'
 check "shared stylesheet" 'sites/shared/base.css\n'                'play admin deploy'
 check "serve command"     'web/cmd/serve/main.go\n'                'admin deploy'
 check "portfolio"         'sites/portfolio/index.html\n'           'admin deploy'

@@ -39,7 +39,7 @@ shared='^web/(internal/|go\.mod$|go\.sum$)|^sites/shared/'
 play=false admin=false mc_server=false infra=false deploy=false
 
 touched "$shared|^web/cmd/play/|^sites/play/|^tests/play/" && play=true
-touched "$shared|^web/cmd/(admin|serve)/|^sites/(admin|portfolio)/" && admin=true
+touched "$shared|^web/cmd/(admin|serve)/|^sites/(admin|portfolio)/|^tests/admin/" && admin=true
 touched '^(lazymc\.toml|start\.sh|server\.properties\.example|server\.jar|eula\.txt|bukkit\.yml|spigot\.yml|commands\.yml|ops\.json|whitelist\.json|banned-[a-z]+\.json)$|^(config|plugins|versions)/|^deploy/server\.json$|^scripts/fetch-server\.sh$|^web/cmd/mc-players/' && mc_server=true
 touched '^(deploy|scripts|\.github)/' && infra=true
 grep -qE '^(web|sites|deploy)/|^scripts/build-release\.sh$|^\.github/workflows/' <<<"$shipped" && deploy=true
