@@ -49,6 +49,7 @@
               <div class="nav-sub-list">
                 <a href="#map-overworld">Overworld</a>
                 <a href="#map-nether">Nether</a>
+                <a href="#map-end">End</a>
               </div>
             </div>
           </div>
@@ -173,6 +174,24 @@
             <div class="map-foot">
               <p class="muted">Live preview of the nether.</p>
               <a class="btn btn-primary" href="/map/?world=minecraft_the_nether">Open the nether map</a>
+            </div>
+          </article>
+        </section>
+
+        <section class="subsection" id="map-end" aria-labelledby="map-end-title">
+          <h3 id="map-end-title">End</h3>
+          <article class="card map-card" data-world="minecraft_the_end" data-ready="false">
+            <div class="map-stage">
+              <div class="map-placeholder">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2zM7.5 3.5v11M12.5 5.5v11"/></svg>
+                <p>The End map isn't ready yet.</p>
+                <p class="muted">It appears once the server has rendered the End.</p>
+              </div>
+              <iframe title="Preview of the End map" tabindex="-1" aria-hidden="true" loading="lazy"></iframe>
+            </div>
+            <div class="map-foot">
+              <p class="muted">Live preview of the End.</p>
+              <a class="btn btn-primary" href="/map/?world=minecraft_the_end">Open the End map</a>
             </div>
           </article>
         </section>

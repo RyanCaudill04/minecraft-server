@@ -44,7 +44,8 @@ world-settings:
     player-tracker:
       enabled: false
   # Each world's section overrides "default" only for the keys it sets.
-  # play's map section shows the overworld and the nether by these names.
+  # play's map section shows the overworld, the nether and the End by these
+  # names.
   minecraft:overworld:
     map:
       display-name: Overworld
@@ -61,3 +62,10 @@ world-settings:
           center-x: 0
           center-z: 0
           radius: 625
+  minecraft:the_end:
+    map:
+      display-name: End
+      order: 2
+      # End blocks are the same size as the overworld's, so it keeps the
+      # default 5,000-block circle: the main island and the outer islands
+      # past 1,000 blocks, where end gateways lead.
