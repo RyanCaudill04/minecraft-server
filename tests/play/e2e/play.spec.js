@@ -238,6 +238,11 @@ test("the Map group opens to its worlds and follows the scroll", async ({ page }
   await expect(nether).toHaveClass(/active/);
   await expect(toggle).toHaveClass(/active/);
   await expect(page.locator('.nav a[href="#map-overworld"]')).not.toHaveClass(/active/);
+  // The End is the last section, so the scroll spy picks it at the bottom.
+  const end = page.locator('.nav a[href="#map-end"]');
+  await end.click();
+  await expect(end).toHaveClass(/active/);
+  await expect(toggle).toHaveClass(/active/);
 
   await toggle.click();
   await expect(group).toHaveAttribute("inert", "");
@@ -260,9 +265,10 @@ test.describe("map previews", () => {
   }
 
   test("each world gets its own preview without squaremap's controls", async ({ page }) => {
-    await fakeSquaremap(page, ["minecraft_overworld", "minecraft_the_nether"]);
+    const worlds = ["minecraft_overworld", "minecraft_the_nether", "minecraft_the_end"];
+    await fakeSquaremap(page, worlds);
     await open(page);
-    for (const world of ["minecraft_overworld", "minecraft_the_nether"]) {
+    for (const world of worlds) {
       // The frames load lazily, once they're near the window.
       await card(page, world).scrollIntoViewIfNeeded();
       await expect(card(page, world)).toHaveAttribute("data-ready", "true");
@@ -286,9 +292,9 @@ test.describe("map previews", () => {
     await expect(card(page, "minecraft_the_nether").locator(".map-placeholder")).toBeVisible();
   });
 
-  test("no map at all shows both placeholders", async ({ page }) => {
+  test("no map at all shows every placeholder", async ({ page }) => {
     await open(page);
-    await expect(page.locator(".map-placeholder:visible")).toHaveCount(2);
+    await expect(page.locator(".map-placeholder:visible")).toHaveCount(3);
     await expect(page.locator(".map-card iframe[src]")).toHaveCount(0);
   });
 });
