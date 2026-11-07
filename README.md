@@ -216,13 +216,13 @@ so nothing new listens on the Pi.
   15–35 MB and a 20,000-block-wide one (~1,600 regions) is about 200–550 MB.
   `du -sh plugins/squaremap/web/tiles` shows the real number.
 - **Area:** `visibility-limits` in the config renders only a circle of
-  radius 5,000 blocks around 0,0 (~300 regions, at most about 40–100 MB).
-  Without it, a full render covers every generated chunk, including a whole
-  Chunky pregen. Move the center to spawn, and widen it as people build
-  farther out. The nether has its own circle of radius 625, the same ground
-  as the overworld's 5,000 since a nether block is 8 overworld blocks. The
-  End keeps the default 5,000, which covers the outer islands that end
-  gateways lead to.
+  radius 10,000 blocks around 0,0 (~1,200 regions, at most about
+  160–400 MB). Without it, a full render covers every generated chunk,
+  including a whole Chunky pregen. Move the center to spawn, and widen it as
+  people build farther out. The nether has its own circle of radius 1,250,
+  the same ground as the overworld's 10,000 since a nether block is 8
+  overworld blocks. The End keeps the default 10,000, which covers the outer
+  islands that end gateways lead to.
 - **Worlds:** play's Map section previews the overworld, the nether and the
   End, each once squaremap lists it in `tiles/settings.json`. Their names come
   from `display-name` in the config.
