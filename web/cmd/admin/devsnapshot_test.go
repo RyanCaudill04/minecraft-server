@@ -14,6 +14,7 @@ import (
 	"github.com/ryancaudill04/minecraft-server/web/internal/backups"
 	"github.com/ryancaudill04/minecraft-server/web/internal/control"
 	"github.com/ryancaudill04/minecraft-server/web/internal/mcstatus"
+	"github.com/ryancaudill04/minecraft-server/web/internal/pifirmware"
 	"github.com/ryancaudill04/minecraft-server/web/internal/ping"
 	"github.com/ryancaudill04/minecraft-server/web/internal/rcon"
 	"github.com/ryancaudill04/minecraft-server/web/internal/rcon/rcontest"
@@ -99,11 +100,66 @@ func TestDevSnapshot(t *testing.T) {
 		logPath:    logs,
 		backups:    &backups.Store{Dir: backupDir, KeepDays: 10},
 		backupUnit: &fakeControl{state: control.State{Active: "inactive", Sub: "dead"}},
-		hostRoot:   writeHost(t),
+		hostRoot:   writePiHost(t, writeHost(t), now),
 		user:       func(*http.Request) string { return devUser },
+		// The Pi settings show as the owner sees them; the Worker refuses
+		// the changes.
+		pi:       func(context.Context, string, []byte) error { return nil },
+		piOwners: []string{devUser},
 	}
 	writeSnapshot(t, newHandler(a), filepath.Join(out, "api"),
-		"status", "health", "deploy", "plugins", "me", "logs", "backups", "players")
+		"status", "health", "deploy", "plugins", "me", "logs", "backups", "players", "pi")
+}
+
+// writePiHost adds a synthetic Pi 5's firmware settings to root: settings
+// kept three days ago and still on probation, newer ones waiting for a
+// trial boot, and the boot check and watchdog set up.
+func writePiHost(t *testing.T, root string, now time.Time) string {
+	t.Helper()
+	stock := "dtparam=audio=on\ncamera_auto_detect=1\n\n[all]\narm_64bit=1\n"
+	kept := pifirmware.Settings{ArmFreq: new(2600), OverVoltageDelta: new(20000), TempLimit: new(80)}
+	fan := pifirmware.Limits.FanDefault
+	fan[0].Temp = 45000
+	pending := pifirmware.Settings{ArmFreq: new(2800), OverVoltageDelta: new(30000), TempLimit: new(80), Fan: &fan}
+	splice := func(s pifirmware.Settings) string {
+		b, err := pifirmware.Splice([]byte(stock), pifirmware.Block(s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	state, err := json.Marshal(pifirmware.Trial{
+		Phase:    pifirmware.PhaseKept,
+		Message:  "Saved to config.txt. For 14 days, if the Pi resets uncleanly 2 times, the old config.txt comes back by itself.",
+		Settings: kept,
+		At:       now.Add(-72 * time.Hour),
+		Backup:   "config-" + now.Add(-72*time.Hour).Format("20060102T150405Z") + ".txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol := "sys/devices/system/cpu/cpufreq/policy0/"
+	for rel, body := range map[string]string{
+		"proc/device-tree/model":                                              "Raspberry Pi 5 Model B Rev 1.1\x00",
+		"proc/device-tree/chosen/bootloader/tryboot":                          "\x00\x00\x00\x00",
+		pifirmware.ConfigPath:                                                 splice(kept),
+		pifirmware.TrybootPath:                                                splice(pending),
+		pifirmware.StateDir + "/state.json":                                   string(state),
+		"sys/class/watchdog/watchdog0/state":                                  "active\n",
+		"etc/systemd/system/multi-user.target.wants/pi-firmware-boot.service": "",
+		pol + "scaling_governor":                                              "ondemand\n",
+		pol + "scaling_available_governors":                                   "conservative ondemand userspace powersave performance schedutil\n",
+		pol + "scaling_cur_freq":                                              "2600000\n",
+	} {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
 }
 
 // activePing answers like an awake Paper with Alice and bob_42 online.

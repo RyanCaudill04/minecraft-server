@@ -29,11 +29,23 @@
 //	POST /api/players/{list}/{action}  {"name": "..."}: whitelist add or
 //	                          remove, or ops add (op) or remove (deop),
 //	                          over RCON
+//	GET  /api/pi              the Pi's firmware settings: saved, waiting for
+//	                          a trial boot, and the last trial's state
+//	POST /api/pi/settings     {"arm_freq": 2600, ...}: write them to
+//	                          tryboot.txt for a trial boot
+//	POST /api/pi/settings/keep     keep settings that passed a trial boot
+//	POST /api/pi/settings/discard  drop them (during a trial: go back)
+//	POST /api/pi/governor     {"governor": "..."}: the CPU governor, now
+//	POST /api/pi/reboot       {"confirm": "reboot", "trial": bool}: reboot,
+//	                          once onto tryboot.txt if trial; the server
+//	                          must be stopped first
 //
 // Logs, the console, the controls, downloads, the player lists and every
 // change need the user the Access token names. POSTs must also be
 // same-origin and carry the X-Admin-Request: 1 header, and each one is
-// logged with the user's email.
+// logged with the user's email. The Pi settings need more: the user must
+// be named in PI_SETTINGS_OWNER, and the root helper installed (see
+// deploy/pi-firmware).
 //
 // The Access application is read from the environment: ACCESS_TEAM_DOMAIN
 // (e.g. myteam.cloudflareaccess.com) and ACCESS_AUD (its audience tag).
@@ -123,6 +135,12 @@ type app struct {
 	// hostRoot is where /proc and /sys are read from for /api/health; ""
 	// is the real root, and tests use a folder of synthetic files.
 	hostRoot string
+	// pi runs the root helper's cmd with input on stdin; nil turns the
+	// Pi settings off. piInstalled reports whether the helper is there
+	// (nil: assume it is), and piOwners are the emails that may use it.
+	pi          func(ctx context.Context, cmd string, input []byte) error
+	piInstalled func() bool
+	piOwners    []string
 	// user returns the verified email of whoever sent r, or "" if there
 	// isn't one. Only a verified user may use the controls. It defaults to
 	// the email the Access check put on the request.
@@ -215,6 +233,16 @@ func newHandler(a *app) http.Handler {
 	mux.Handle("POST /api/backups/{name}/delete", a.writes(a.deleteBackup))
 	mux.HandleFunc("GET /api/players", a.signedIn(a.players))
 	mux.Handle("POST /api/players/{list}/{action}", a.writes(a.changePlayer))
+	mux.HandleFunc("GET /api/pi", a.signedIn(a.piStatus))
+	mux.Handle("POST /api/pi/settings", a.piWrites(a.stagePi))
+	mux.Handle("POST /api/pi/settings/keep", a.piWrites(func(w http.ResponseWriter, r *http.Request, user string) {
+		a.runPi(w, r, user, "keep", nil, http.StatusOK)
+	}))
+	mux.Handle("POST /api/pi/settings/discard", a.piWrites(func(w http.ResponseWriter, r *http.Request, user string) {
+		a.runPi(w, r, user, "discard", nil, http.StatusOK)
+	}))
+	mux.Handle("POST /api/pi/governor", a.piWrites(a.setGovernor))
+	mux.Handle("POST /api/pi/reboot", a.piWrites(a.rebootPi))
 	mux.Handle("GET /", site.Static(a.dir, a.sharedDir))
 	return mux
 }
@@ -422,6 +450,9 @@ func main() {
 		wake: func(ctx context.Context) error {
 			return ping.Wake(ctx, *lazymc, wakeName)
 		},
+		pi:          sudoPi,
+		piInstalled: helperInstalled,
+		piOwners:    owners(os.Getenv("PI_SETTINGS_OWNER")),
 	}
 	if ctl, err := control.NewSystemd(control.Unit, nil); err != nil {
 		log.Fatalf("admin: %v", err)

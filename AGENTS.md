@@ -21,13 +21,15 @@ force-pushing. Details are under "Workflow" and "Dev sites".
 | `web/cmd/admin` | admin.ryancaudill.dev: live status and the active release. Listens on `127.0.0.1:8081`. |
 | `web/cmd/serve` | Plain static file server for the static sites (ryancaudill.dev is `sites/portfolio`, on `127.0.0.1:8080`). |
 | `web/cmd/mc-agent` | The deploy agent on the Pi: `deploy`, `rollback`, `status`, `version`. |
+| `web/cmd/pi-firmware` | Root helper admin runs through sudo to change the Pi 5's clock, voltage, temperature-limit and fan settings, tried with a one-shot tryboot first. Installed by hand, never by mc-agent (`deploy/pi-firmware/README.md`). |
 | `web/cmd/mc-players` | Small CLI that prints who is online with a status ping. |
-| `web/internal/*` | Shared packages: `deploy` (mc-agent's logic), `nbt` and `world` (read world files), `ping` and `mcstatus` (server status), `site` (static files and JSON helpers). |
+| `web/internal/*` | Shared packages: `deploy` (mc-agent's logic), `nbt` and `world` (read world files), `ping` and `mcstatus` (server status), `pifirmware` (the Pi settings), `site` (static files and JSON helpers). |
 | `web/internal/world/worldtest`, `web/internal/nbt/nbttest` | Synthetic test fixtures. Tests never use real player data. |
 | `sites/play`, `sites/admin`, `sites/portfolio` | Each site's `index.html`, `style.css`, `app.js`. |
 | `sites/shared` | `base.css`, served at `/shared/` by play and admin. |
 | `deploy/systemd/` | systemd **user** units installed on the Pi. |
 | `deploy/sites/*.env` | Listen address for each `site@<name>` instance. |
+| `deploy/pi-firmware/` | The helper's sudoers rule, boot unit and watchdog config, installed by hand as root. |
 | `deploy/release.json` | Units, services, timers and health checks mc-agent applies for a release. |
 | `scripts/` | CI change detection, release notes and the release build, each with a `_test.sh` where it has logic. |
 | `.github/workflows/ci.yml` | CI/CD: scoped checks on PRs, one required check `ci-ok`, releases from `main`, and the dev sites from `dev`. |
