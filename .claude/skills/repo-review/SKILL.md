@@ -9,7 +9,7 @@ description: Review a diff, branch or PR in this repo against its own checklist,
 
 - A PR: `gh pr diff <n>` and `gh pr view <n>` (read the body: does the
   change do what it says?).
-- A branch: `git diff origin/main...HEAD`.
+- A branch: `git diff origin/dev...HEAD`.
 - Local work: `git diff` and `git diff --cached`.
 
 Read the surrounding code, not just the hunks: most past bugs were in how a
@@ -95,7 +95,7 @@ touches, using the matching sections below, plus "Repo rules" always.
 
 - No attribution anywhere: no `Co-Authored-By:` trailers, no
   "Generated with ..." lines, no tool or assistant mentions in commits, PR
-  title or body (`git log --format=%B origin/main..HEAD`).
+  title or body (`git log --format=%B origin/dev..HEAD`).
 - Nothing from `docs/`, no `server.properties`, keys or
   `connection.private.md`.
 - No IP addresses, secrets, Access team details, or real player names,

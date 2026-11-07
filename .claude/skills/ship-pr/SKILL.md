@@ -10,9 +10,12 @@ file disagree, `AGENTS.md` wins.
 
 ## Hard rules
 
-- **Branch from an up-to-date `main`. Never commit to `main`, never push to
-  `main`, never force-push `main`.** Pushes to `main` publish releases that
-  the Pi installs within minutes.
+- **Branch from an up-to-date `dev` and open the PR into `dev`. Never
+  commit to, push to or force-push `main` or `dev`.** Rulesets block it
+  anyway. Merging into `dev` deploys the dev sites on Cloudflare, and
+  merging `dev` into `main` publishes a release that the Pi installs
+  within minutes.
+- `main` takes PRs only from `dev` (the `from-dev` check).
 - **No attribution of any kind**, in commits, PR titles, PR bodies, issues
   or comments: no `Co-Authored-By:` trailers, no "Generated with ..." lines,
   no mention of the tool or assistant that helped. The work appears as the
@@ -27,8 +30,8 @@ file disagree, `AGENTS.md` wins.
 ## 1. Branch
 
 ```bash
-git switch main && git pull --ff-only
-git switch -c <short-topic>        # e.g. play-a11y, mc-agent-reliability
+git fetch origin
+git switch -c <short-topic> origin/dev   # e.g. play-a11y, mc-agent-reliability
 ```
 
 ## 2. Make the change, with tests
@@ -79,14 +82,15 @@ No trailers. Check with `git log -1 --format=%B` after committing.
 
 ```bash
 git push -u origin HEAD
-gh pr create --base main --title "<plain sentence, capitalized>" \
+gh pr create --base dev --title "<plain sentence, capitalized>" \
   --label <kind> --label <area> --body-file <file>
 ```
 
 Title: a plain sentence such as "Stop Cloudflare from serving last
 release's static files". Squash merges reuse it, so keep it specific.
 
-**Labels decide the release kind** (`scripts/release-notes.sh`): a PR
+**Labels decide the release kind** (`scripts/release-notes.sh`), read from
+the PRs into `dev` that a merge of `dev` brings into `main`: a PR
 labeled `enhancement` is a feature, else `bug` is a fix, else other; a
 release takes the highest kind among its PRs. Always add exactly one of
 `enhancement` or `bug` unless the change really is neither. Add area labels
@@ -135,9 +139,21 @@ and push.
 
 - Address review comments with new commits (the `pr-comment-fixer` skill
   has the steps); don't rewrite pushed history unless the user asks.
-- A stacked PR needs a rebase onto `main` after its base merges. PRs are
-  squash-merged, so a plain `git rebase origin/main` replays the base
+- A stacked PR needs a rebase onto `dev` after its base merges. PRs are
+  squash-merged, so a plain `git rebase origin/dev` replays the base
   branch's commits again and conflicts. Replay only this branch's own
-  commits: `git fetch origin && git rebase --onto origin/main <base-branch>
+  commits: `git fetch origin && git rebase --onto origin/dev <base-branch>
   && git push --force-with-lease` (only ever on your own branch, and with
   `<base-branch>` still at the commit this branch was built on).
+
+## 7. Ship dev to main (only when the owner asks)
+
+Once what's on `dev` has been checked on the dev sites:
+
+```bash
+gh pr create --base main --head dev --title "Ship dev: <what's in it>" --body "<list of the PRs>"
+```
+
+Merge it with **Create a merge commit**, never a squash, so `main` gets
+`dev`'s commits as they are and the release notes can list the PRs
+inside. It needs no kind label.
