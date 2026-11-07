@@ -215,7 +215,7 @@ func (a *app) rebootPi(w http.ResponseWriter, r *http.Request, user string) {
 // for a password. Exit status 2 is a refusal, with a message for the
 // page on stderr.
 func sudoPi(ctx context.Context, cmd string, input []byte) error {
-	c := exec.CommandContext(ctx, "sudo", "-n", PiHelper, cmd)
+	c := exec.CommandContext(ctx, "/usr/bin/sudo", "-n", PiHelper, cmd)
 	c.Stdin = bytes.NewReader(input)
 	var stderr bytes.Buffer
 	c.Stderr = &stderr
@@ -247,6 +247,16 @@ func cleanMessage(s string) string {
 		return "pi-firmware refused."
 	}
 	return s
+}
+
+// lockedTrial is why the server can't start while the Pi runs settings on
+// trial.
+const lockedTrial = "The Pi is trying new firmware settings, so the server stays off until they're kept or dropped (Pi settings)."
+
+// onTrial reports whether the Pi is running on tryboot.txt, when Paper
+// must stay off. pi-firmware-boot.service stops it too.
+func (a *app) onTrial() bool {
+	return (&pifirmware.Host{Root: a.hostRoot}).TrialBoot()
 }
 
 // helperInstalled reports whether the helper is at PiHelper.

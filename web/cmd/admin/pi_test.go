@@ -44,6 +44,7 @@ func (f *fakeHelper) ran() []string {
 type piServer struct {
 	*controlServer
 	helper *fakeHelper
+	root   string // the synthetic Pi
 }
 
 // newPiServer serves admin as user, with owner allowed to change the Pi,
@@ -66,18 +67,20 @@ func newPiServer(t *testing.T, user string) *piServer {
 
 	helper := &fakeHelper{}
 	ctl := &fakeControl{state: control.State{Active: "inactive", Sub: "dead"}}
+	wake := &fakeServer{state: mcstatus.StateSleeping}
 	a := &app{
 		dir: t.TempDir(), sharedDir: t.TempDir(), appsDir: t.TempDir(), serverDir: t.TempDir(),
 		checker:  &mcstatus.Checker{PaperAddr: "paper", LazymcAddr: "lazymc", Timeout: time.Second, Ping: (&fakeServer{}).ping},
 		control:  ctl,
 		hostRoot: root,
+		wake:     wake.wake,
 		pi:       helper.run,
 		piOwners: []string{"someone@example.com", "Owner@Example.com"},
 		user:     func(*http.Request) string { return user },
 	}
 	ts := httptest.NewServer(newHandler(a))
 	t.Cleanup(ts.Close)
-	return &piServer{controlServer: &controlServer{Server: ts, ctl: ctl, out: out}, helper: helper}
+	return &piServer{controlServer: &controlServer{Server: ts, ctl: ctl, out: out}, helper: helper, root: root}
 }
 
 func (s *piServer) setUnit(active string) {
@@ -255,5 +258,26 @@ func TestOwners(t *testing.T) {
 	}
 	if got := owners(""); got != nil {
 		t.Errorf("owners(\"\") = %q", got)
+	}
+}
+
+// While the Pi runs settings on trial, the server can be stopped but not
+// started, restarted or woken.
+func TestServerStaysOffDuringTrial(t *testing.T) {
+	s := newPiServer(t, owner)
+	flag := filepath.Join(s.root, "proc/device-tree/chosen/bootloader/tryboot")
+	os.MkdirAll(filepath.Dir(flag), 0o755)
+	os.WriteFile(flag, []byte{0, 0, 0, 1}, 0o644)
+	for _, path := range []string{"/api/server/start", "/api/server/restart", "/api/server/wake"} {
+		if code, got := s.post(t, path, ``, nil); code != http.StatusConflict || got["error"] != lockedTrial {
+			t.Errorf("%s = %d %v", path, code, got)
+		}
+	}
+	s.setUnit("active")
+	if code, _ := s.post(t, "/api/server/stop", ``, nil); code != http.StatusAccepted {
+		t.Errorf("stop = %d", code)
+	}
+	if got := s.ctl.done(); len(got) != 1 || got[0] != control.Stop {
+		t.Errorf("actions %q", got)
 	}
 }

@@ -115,6 +115,10 @@ func (a *app) serverAction(w http.ResponseWriter, r *http.Request, user string) 
 		writeError(w, http.StatusServiceUnavailable, "Server control isn't available.")
 		return
 	}
+	if act != control.Stop && a.onTrial() {
+		writeError(w, http.StatusConflict, lockedTrial)
+		return
+	}
 	log.Printf("admin: audit: %s: %s %s", user, act, control.Unit)
 	// Finish asking systemd even if the browser goes away.
 	err := a.control.Do(context.WithoutCancel(r.Context()), act)
@@ -140,6 +144,10 @@ func (a *app) serverAction(w http.ResponseWriter, r *http.Request, user string) 
 func (a *app) wakeServer(w http.ResponseWriter, r *http.Request, user string) {
 	if a.wake == nil {
 		writeError(w, http.StatusServiceUnavailable, "Waking the server isn't available.")
+		return
+	}
+	if a.onTrial() {
+		writeError(w, http.StatusConflict, lockedTrial)
 		return
 	}
 	// Check now, not from the cache: only a sleeping LazyMC should get a

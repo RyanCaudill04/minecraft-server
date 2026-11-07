@@ -1295,6 +1295,7 @@ const PI_TRIAL = {
   discarded: { title: "Going back", level: "busy" },
   expired: { title: "Trial not kept", level: "warn" },
   reverted: { title: "Went back", level: "ok" },
+  rolled_back: { title: "Kept settings rolled back", level: "bad" },
 };
 
 const FAN_STEPS = 4;
@@ -1427,11 +1428,18 @@ function renderPi() {
   // A trial that is being checked, or waits for Keep, holds everything
   // else until it's settled.
   const trialBusy = !!p?.trial_boot && ["rebooting", "checking", "passed"].includes(phase);
+  // Between a trial reboot and the reboot itself, and after Go back until
+  // the reboot that finishes it, the helper refuses changes too.
+  const rebootPending = !p?.trial_boot && phase === "rebooting";
+  const goingBack = !!p?.trial_boot && phase === "discarded";
   const can = !!p?.can_change && !!p?.supported && !piBusy;
+  const setUp = !!p?.boot_check && !!p?.watchdog;
 
   let locked = p?.locked || "";
   if (!p) locked = "Couldn't read the Pi's settings.";
   else if (!p.supported) locked = `These settings are for a Raspberry Pi 5, and this is ${p.model || "an unknown board"}.`;
+  else if (p.can_change && !setUp)
+    locked = "Not set up yet: pi-firmware-boot.service and the hardware watchdog must be running first (deploy/pi-firmware/README.md).";
   $("pi-locked").textContent = locked;
   $("pi-locked").hidden = !locked;
 
@@ -1463,6 +1471,12 @@ function renderPi() {
   $("pi-keep").disabled = $("pi-back").disabled = !can;
 
   $("pi-saved").textContent = p ? describePi(p.saved) : "–";
+  const probation = $("pi-probation");
+  probation.hidden = !p?.probation_until;
+  if (p?.probation_until) {
+    const resets = trial?.resets ?? 0;
+    probation.textContent = `On probation until ${fmtDate(p.probation_until)}: ${resets} unclean reset${resets === 1 ? "" : "s"} so far. Two put the old config.txt back.`;
+  }
   $("pi-pending").textContent = p ? describePi(p.pending) : "–";
   $("pi-pending-title").textContent = trialBusy ? "On trial now" : "Waiting for a trial boot";
 
@@ -1482,7 +1496,7 @@ function renderPi() {
     $("pi-temp-limit-range").textContent = `${l.temp_limit.min}–${l.temp_limit.max}, default ${l.temp_limit.default}`;
     if (!piDirty) fillPiForm(p.pending ?? p.saved, l);
   }
-  const editable = can && !trialBusy;
+  const editable = can && setUp && !trialBusy && !rebootPending && !goingBack;
   for (const id of ["pi-arm-freq", "pi-volts", "pi-temp-limit", "pi-fan-custom"]) $(id).disabled = !editable;
   const fanOn = $("pi-fan-custom").checked;
   for (let i = 0; i < FAN_STEPS; i++) {
@@ -1491,12 +1505,11 @@ function renderPi() {
   $("pi-fan").classList.toggle("off", !fanOn);
   $("pi-save").disabled = !editable;
   $("pi-defaults").disabled = !editable;
-  $("pi-discard").hidden = !p?.pending || trialBusy;
+  $("pi-discard").hidden = !p?.pending || trialBusy || rebootPending || goingBack;
   $("pi-discard").disabled = !editable;
   renderPiWarn();
 
   // Rebooting: onto the waiting settings, or back after Go back.
-  const goingBack = !!p?.trial_boot && phase === "discarded";
   $("pi-reboot").hidden = !goingBack;
   $("pi-reboot").disabled = !can || !serverStopped();
   $("pi-reboot-trial").hidden = goingBack;
@@ -1616,7 +1629,7 @@ $("pi-discard").addEventListener("click", async () => {
 $("pi-keep").addEventListener("click", async () => {
   const ok = await ask(
     "Keep these settings?",
-    "They're copied into config.txt, after a backup, and every boot uses them from now on.",
+    "They're copied into config.txt, after a backup, and every boot uses them from now on. For two weeks the Pi watches for unclean resets: two put the old config.txt back by itself.",
     "Keep",
   );
   if (ok) await piRequest("Keeping…", "/api/pi/settings/keep", {}, "Kept. config.txt was backed up first.");

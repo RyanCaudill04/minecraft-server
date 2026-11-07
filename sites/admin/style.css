@@ -254,6 +254,8 @@ html:has(dialog[open]) { overflow: hidden; }
 
 .pi-now { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
 .pi-now dd { margin: 4px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.pi-now .pi-probation { font-weight: 400; }
+.pi-now .pi-probation[hidden] { display: none; }
 
 .pi-form { display: flex; flex-direction: column; gap: 14px; }
 .pi-form > p { margin: 0; }
