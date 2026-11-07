@@ -3,12 +3,16 @@ package sysinfo
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ReadKHz reads a cpufreq file, which holds kHz, as MHz.
@@ -24,34 +28,41 @@ func ReadKHz(path string) (float64, error) {
 	return float64(khz) / 1000, nil
 }
 
-// throttleGlob finds the firmware's get_throttled file, which is under
-// soc:firmware on a Pi 4 and soc@<address>:firmware on a Pi 5.
-const throttleGlob = "sys/devices/platform/soc*/*firmware/get_throttled"
-
+// readThrottle asks the firmware for its throttling flags with vcgencmd.
+// Kernels before 6.12 also had a get_throttled file in sysfs, but it was
+// removed, so vcgencmd (in the video group) is the way that keeps working.
 func (r *Reader) readThrottle() (Throttle, error) {
-	paths, err := filepath.Glob(r.path(throttleGlob))
+	run := r.Run
+	if run == nil {
+		run = runCommand
+	}
+	out, err := run("vcgencmd", "get_throttled")
 	if err != nil {
-		return Throttle{}, err
+		return Throttle{}, fmt.Errorf("vcgencmd get_throttled: %w", err)
 	}
-	if len(paths) == 0 {
-		return Throttle{}, errors.New("no get_throttled file (not a Raspberry Pi?)")
-	}
-	return ReadThrottled(paths[0])
+	return ParseThrottled(string(out))
 }
 
-// ReadThrottled reads the firmware's get_throttled file: bits in hex, the
-// same number vcgencmd get_throttled prints. Bits 0 to 3 are under-voltage,
+// runCommand runs a short command, giving up after 2 seconds.
+func runCommand(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Output()
+}
+
+// ParseThrottled reads vcgencmd get_throttled's output, such as
+// "throttled=0x50005": bits in hex. Bits 0 to 3 are under-voltage,
 // frequency capped, throttled and soft temperature limit now; bits 16 to
-// 19 are the same since boot.
-func ReadThrottled(path string) (Throttle, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return Throttle{}, err
+// 19 are the same since they were last cleared. The kernel's hwmon driver
+// clears them every 2 seconds, so they mean "just now", not since boot.
+func ParseThrottled(out string) (Throttle, error) {
+	s, ok := strings.CutPrefix(strings.TrimSpace(out), "throttled=")
+	if !ok {
+		return Throttle{}, fmt.Errorf("unexpected get_throttled output %q", out)
 	}
-	s := strings.TrimPrefix(strings.TrimSpace(string(b)), "0x")
-	v, err := strconv.ParseUint(s, 16, 32)
+	v, err := strconv.ParseUint(strings.TrimPrefix(s, "0x"), 16, 32)
 	if err != nil {
-		return Throttle{}, fmt.Errorf("%s: %w", path, err)
+		return Throttle{}, fmt.Errorf("get_throttled: %w", err)
 	}
 	bits := uint32(v)
 	flags := func(shift uint) ThrottleFlags {
@@ -62,7 +73,7 @@ func ReadThrottled(path string) (Throttle, error) {
 			SoftTempLimit: bits&(1<<(shift+3)) != 0,
 		}
 	}
-	return Throttle{Now: flags(0), SinceBoot: flags(16), Raw: bits}, nil
+	return Throttle{Now: flags(0), Recent: flags(16), Raw: bits}, nil
 }
 
 // fanGlob finds the fan's speed on a Pi 5 with the active cooler (the
@@ -94,11 +105,19 @@ func (r *Reader) readFan() (float64, error) {
 type FirmwareSetting struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
-	// Section is the [filter] the line is under, such as "pi5"; "" for the
-	// top of the file or [all]. The firmware only applies a filtered line
-	// on a board it matches.
-	Section string `json:"section,omitzero"`
+	// Model is the board filter the line is under, such as "pi5"; "" for
+	// every board. The firmware only applies it on a board it matches.
+	Model string `json:"model,omitzero"`
+	// Conditional is true when the line is also under another kind of
+	// filter (a serial number, a display, a GPIO pin, tryboot), so it may
+	// not apply. Those filters aren't shown, since some identify the board
+	// or what's plugged into it.
+	Conditional bool `json:"conditional,omitzero"`
 }
+
+// modelFilter matches config.txt's board filters: [pi4], [pi400], [pi5],
+// [pi3+], [pi0w], [cm4], [cm5], [board-type=0x17] and the like.
+var modelFilter = regexp.MustCompile(`^(?:(?:pi|cm)[0-9]+[a-z+]*|board-type=.+)$`)
 
 // firmwareKeys are the config.txt settings worth showing for the Pi's
 // health. dtparam lines are kept for the fan_temp* curve only.
@@ -133,23 +152,32 @@ func (r *Reader) readFirmware() ([]FirmwareSetting, error) {
 //	over_voltage_delta=50000
 //	dtparam=fan_temp0=45000,fan_temp0_speed=125
 //
-// It doesn't follow include lines.
+// Filters of different kinds stack until [all] resets them, and a board
+// filter replaces the board filter before it. Lines under [none] never
+// apply, so they're left out. It doesn't follow include lines.
 func ReadConfigTxt(path string) ([]FirmwareSetting, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	out := []FirmwareSetting{}
-	section := ""
+	model, conditional := "", false
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	for sc.Scan() {
 		line, _, _ := strings.Cut(sc.Text(), "#")
 		line = strings.TrimSpace(line)
 		if f, ok := strings.CutPrefix(line, "["); ok {
-			section = strings.TrimSpace(strings.TrimSuffix(f, "]"))
-			if section == "all" {
-				section = ""
+			switch f = strings.TrimSpace(strings.TrimSuffix(f, "]")); {
+			case f == "all":
+				model, conditional = "", false
+			case f == "none" || modelFilter.MatchString(f):
+				model = f
+			default:
+				conditional = true
 			}
+			continue
+		}
+		if model == "none" {
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
@@ -157,18 +185,24 @@ func ReadConfigTxt(path string) ([]FirmwareSetting, error) {
 			continue
 		}
 		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		add := func(k, v string) {
+			out = append(out, FirmwareSetting{Key: k, Value: v, Model: model, Conditional: conditional})
+		}
 		if key == "dtparam" {
 			for _, p := range strings.Split(value, ",") {
 				k, v, _ := strings.Cut(strings.TrimSpace(p), "=")
 				if strings.HasPrefix(k, "fan_temp") {
-					out = append(out, FirmwareSetting{Key: k, Value: v, Section: section})
+					add(k, v)
 				}
 			}
 			continue
 		}
 		if firmwareKeys[key] {
-			out = append(out, FirmwareSetting{Key: key, Value: value, Section: section})
+			add(key, value)
 		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return out, nil
 }

@@ -41,12 +41,16 @@ func (r *Reader) cgroupDir() (string, error) {
 		}
 		return r.path(path.Join("sys/fs/cgroup", path.Dir(own))), nil
 	}
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("%s: %w", p, err)
+	}
 	return "", fmt.Errorf("%s: no cgroup v2 entry", p)
 }
 
 // services calls f with the cgroup folder of each service in r.Services
-// that is running. A stopped service has no cgroup, so it's skipped
-// quietly; anything else wrong is reported through Errs.
+// that is running. A stopped service has no cgroup folder, so it's skipped
+// quietly; anything else wrong, including a file missing from a folder
+// that's there, is reported through Errs.
 func (r *Reader) services(f func(name, dir string) error) {
 	if len(r.Services) == 0 {
 		return
@@ -60,12 +64,54 @@ func (r *Reader) services(f func(name, dir string) error) {
 			r.ok("service "+name, errors.New("not a unit name"))
 			continue
 		}
-		err := f(name, filepath.Join(parent, name))
+		dir, err := unitCgroup(parent, name)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		r.ok("service "+name, err)
+		if r.ok("service "+name, err) {
+			r.ok("service "+name, f(name, dir))
+		}
 	}
+}
+
+// unitCgroup finds a running unit's cgroup folder in parent. systemd puts
+// each instance of a template unit in a slice of its own, so
+// site@portfolio.service is in app-site.slice/ rather than next to the
+// other units.
+func unitCgroup(parent, name string) (string, error) {
+	dir := filepath.Join(parent, name)
+	if prefix, _, ok := strings.Cut(name, "@"); ok {
+		dir = filepath.Join(parent, "app-"+systemdEscape(prefix)+".slice", name)
+	}
+	st, err := os.Stat(dir)
+	if err != nil {
+		return "", err
+	}
+	if !st.IsDir() {
+		return "", fmt.Errorf("%s: not a folder", dir)
+	}
+	return dir, nil
+}
+
+// systemdEscape escapes a unit name prefix the way systemd does for slice
+// names (unit_name_escape): letters, digits, ':', '_' and '.' are kept
+// (but not a leading '.'), '/' becomes '-', and anything else becomes
+// \xNN.
+func systemdEscape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '/':
+			b.WriteByte('-')
+		case c == '.' && i > 0, c == ':', c == '_',
+			'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, `\x%02x`, c)
+		}
+	}
+	return b.String()
 }
 
 func (r *Reader) serviceMemory() []ServiceMemory {
@@ -149,6 +195,9 @@ func readKey(path, key string) (uint64, error) {
 			return 0, fmt.Errorf("%s: %s: %w", path, key, err)
 		}
 		return n, nil
+	}
+	if err := sc.Err(); err != nil {
+		return 0, fmt.Errorf("%s: %w", path, err)
 	}
 	return 0, fmt.Errorf("%s: no %s", path, key)
 }

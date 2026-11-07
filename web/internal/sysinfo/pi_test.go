@@ -2,35 +2,40 @@ package sysinfo
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
-func TestReadThrottled(t *testing.T) {
-	file := func(body string) string {
-		return writeFiles(t, map[string]string{"get_throttled": body}) + "/get_throttled"
-	}
+func TestParseThrottled(t *testing.T) {
 	for _, tc := range []struct {
-		body string
+		out  string
 		want Throttle
 	}{
-		{"0\n", Throttle{}},
-		// Too hot earlier, fine now: soft limit and throttling since boot.
-		{"0xc0000\n", Throttle{SinceBoot: ThrottleFlags{Throttled: true, SoftTempLimit: true}, Raw: 0xc0000}},
-		{"f000f", Throttle{
-			Now:       ThrottleFlags{true, true, true, true},
-			SinceBoot: ThrottleFlags{true, true, true, true},
-			Raw:       0xf000f,
+		{"throttled=0x0\n", Throttle{}},
+		// Too hot a moment ago, fine now.
+		{"throttled=0xc0000\n", Throttle{Recent: ThrottleFlags{Throttled: true, SoftTempLimit: true}, Raw: 0xc0000}},
+		{"throttled=f000f", Throttle{
+			Now:    ThrottleFlags{true, true, true, true},
+			Recent: ThrottleFlags{true, true, true, true},
+			Raw:    0xf000f,
 		}},
 	} {
-		got, err := ReadThrottled(file(tc.body))
+		got, err := ParseThrottled(tc.out)
 		if err != nil || got != tc.want {
-			t.Errorf("ReadThrottled(%q) = %+v, %v; want %+v", tc.body, got, err, tc.want)
+			t.Errorf("ParseThrottled(%q) = %+v, %v; want %+v", tc.out, got, err, tc.want)
 		}
 	}
-	for _, body := range []string{"", "throttled", "1ffffffff"} {
-		if v, err := ReadThrottled(file(body)); err == nil {
-			t.Errorf("ReadThrottled(%q) = %+v, want an error", body, v)
+	for _, out := range []string{"", "0x0", "throttled=", "throttled=hot", "throttled=0x1ffffffff", "error=1 error_msg=\"Command not registered\""} {
+		if v, err := ParseThrottled(out); err == nil {
+			t.Errorf("ParseThrottled(%q) = %+v, want an error", out, v)
 		}
+	}
+
+	// A failing vcgencmd (not installed, or not in the video group) is an
+	// error, not all-clear flags.
+	r := &Reader{Root: t.TempDir(), Run: noVcgencmd}
+	if v, err := r.readThrottle(); err == nil {
+		t.Errorf("readThrottle without vcgencmd = %+v, want an error", v)
 	}
 }
 
@@ -75,5 +80,12 @@ func TestReadConfigTxt(t *testing.T) {
 
 	if _, err := (&Reader{Root: t.TempDir()}).readFirmware(); err == nil {
 		t.Error("readFirmware with no config.txt: want an error")
+	}
+
+	// A line too long to scan is an error, not a quietly shorter list.
+	long := "arm_freq=2000\n#" + strings.Repeat("x", 70<<10) + "\n[pi5]\nover_voltage_delta=50000\n"
+	path := writeFiles(t, map[string]string{"config.txt": long}) + "/config.txt"
+	if v, err := ReadConfigTxt(path); err == nil {
+		t.Errorf("ReadConfigTxt with a 70 KB line = %+v, want an error", v)
 	}
 }

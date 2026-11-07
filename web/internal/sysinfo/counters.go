@@ -103,6 +103,9 @@ func ReadStat(path string) (CPUTimes, []CPUTimes, error) {
 		}
 		cores = append(cores, t)
 	}
+	if err := sc.Err(); err != nil {
+		return CPUTimes{}, nil, fmt.Errorf("%s: %w", path, err)
+	}
 	if total == nil {
 		return CPUTimes{}, nil, fmt.Errorf("%s: no cpu line", path)
 	}
@@ -185,6 +188,9 @@ func ReadNetDev(path string) (map[string]NetCounters, error) {
 		}
 		out[name] = NetCounters{Rx: rx, Tx: tx}
 	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	return out, nil
 }
 
@@ -226,6 +232,9 @@ func ReadDiskstats(path string, major, minor uint32) (DiskCounters, error) {
 			return DiskCounters{}, fmt.Errorf("%s: %s: bad sector counts %q, %q", path, f[2], f[5], f[9])
 		}
 		return DiskCounters{Device: f[2], Read: read * 512, Write: written * 512}, nil
+	}
+	if err := sc.Err(); err != nil {
+		return DiskCounters{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return DiskCounters{}, fmt.Errorf("%s: no device %d:%d", path, major, minor)
 }

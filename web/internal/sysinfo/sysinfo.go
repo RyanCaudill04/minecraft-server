@@ -58,12 +58,13 @@ type Memory struct {
 }
 
 // Throttle is the Raspberry Pi firmware's throttling flags: what is
-// happening now, and what has happened since boot. Under-voltage means a
-// weak power supply; the others mean the CPU was slowed, usually by heat.
+// happening now, and what happened in the last couple of seconds (see
+// ParseThrottled). Under-voltage means a weak power supply; the others
+// mean the CPU was slowed, usually by heat.
 type Throttle struct {
-	Now       ThrottleFlags `json:"now"`
-	SinceBoot ThrottleFlags `json:"since_boot"`
-	Raw       uint32        `json:"raw"` // the firmware's bits, as read
+	Now    ThrottleFlags `json:"now"`
+	Recent ThrottleFlags `json:"recent"`
+	Raw    uint32        `json:"raw"` // the firmware's bits, as read
 }
 
 // ThrottleFlags is one half of the firmware's get_throttled bits.
@@ -111,6 +112,9 @@ type Reader struct {
 	// Device reads the device number of the filesystem holding a path, to
 	// find its disk in /proc/diskstats; nil uses stat(2).
 	Device func(path string) (major, minor uint32, err error)
+	// Run runs a command and returns its output, for vcgencmd; nil runs it
+	// for real.
+	Run func(name string, args ...string) ([]byte, error)
 	// Services are systemd units, such as "minecraft.service", to report
 	// CPU and memory for. They're looked for next to this process's own
 	// unit, in the same slice (see cgroupDir).
@@ -225,6 +229,9 @@ func ReadMeminfo(path string) (Memory, error) {
 			return Memory{}, fmt.Errorf("%s: %s: %w", path, name, err)
 		}
 		*dst = v
+	}
+	if err := sc.Err(); err != nil {
+		return Memory{}, fmt.Errorf("%s: %w", path, err)
 	}
 	if !haveTotal || !haveAvail {
 		return Memory{}, fmt.Errorf("%s: no MemTotal or MemAvailable", path)

@@ -25,12 +25,22 @@ HugePages_Total:       0
 	config  = `# a made-up config.txt
 dtparam=audio=on
 arm_freq=1800 # comment
+[pi4]
+arm_freq=2000
 [pi5]
 arm_freq=2400
 over_voltage_delta=50000
 dtparam=fan_temp0=45000,fan_temp0_speed=125,i2c_arm=on
+[0x1234abcd]
+temp_limit=80
+[EDID=XYZ-Display]
+temp_limit=81
 [all]
 temp_soft_limit=70
+[none]
+arm_freq=3000
+[all]
+force_turbo=0
 `
 )
 
@@ -50,17 +60,22 @@ func writeFiles(t *testing.T, files map[string]string) string {
 	return root
 }
 
+// noVcgencmd stands in for a machine without vcgencmd, so tests never run
+// a real command.
+func noVcgencmd(string, ...string) ([]byte, error) {
+	return nil, errors.New("vcgencmd: not found")
+}
+
 func fullRoot(t *testing.T) string {
 	return writeFiles(t, map[string]string{
 		"sys/class/thermal/thermal_zone0/temp": temp,
 		"proc/meminfo":                         meminfo,
 		"proc/loadavg":                         loadavg,
 		"proc/uptime":                          uptime,
-		"sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq":                      "1500000\n",
-		"sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq":                      "2400000\n",
-		"sys/devices/platform/soc@107c000000/soc@107c000000:firmware/get_throttled": "50005\n",
-		"sys/devices/platform/cooling_fan/hwmon/hwmon3/fan1_input":                  "2890\n",
-		"boot/firmware/config.txt":                                                  config,
+		"sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq":     "1500000\n",
+		"sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq":     "2400000\n",
+		"sys/devices/platform/cooling_fan/hwmon/hwmon3/fan1_input": "2890\n",
+		"boot/firmware/config.txt":                                 config,
 	})
 }
 
@@ -73,6 +88,12 @@ func TestRead(t *testing.T) {
 		Statfs: func(path string) (Disk, error) {
 			statted = path
 			return disk, nil
+		},
+		Run: func(name string, args ...string) ([]byte, error) {
+			if name != "vcgencmd" || !reflect.DeepEqual(args, []string{"get_throttled"}) {
+				t.Errorf("ran %s %q, want vcgencmd get_throttled", name, args)
+			}
+			return []byte("throttled=0x50005\n"), nil
 		},
 		Errs: func(name string, err error) { t.Errorf("%s: %v", name, err) },
 	}
@@ -104,9 +125,9 @@ func TestRead(t *testing.T) {
 		t.Errorf("clock = %v of %v MHz, want 1500 of 2400", h.CPUMHz, h.CPUMaxMHz)
 	}
 	wantThrottle := Throttle{
-		Now:       ThrottleFlags{UnderVoltage: true, Throttled: true},
-		SinceBoot: ThrottleFlags{UnderVoltage: true, Throttled: true},
-		Raw:       0x50005,
+		Now:    ThrottleFlags{UnderVoltage: true, Throttled: true},
+		Recent: ThrottleFlags{UnderVoltage: true, Throttled: true},
+		Raw:    0x50005,
 	}
 	if h.Throttle == nil || *h.Throttle != wantThrottle {
 		t.Errorf("throttle = %+v, want %+v", h.Throttle, wantThrottle)
@@ -114,13 +135,19 @@ func TestRead(t *testing.T) {
 	if h.FanRPM == nil || *h.FanRPM != 2890 {
 		t.Errorf("fan = %v, want 2890", h.FanRPM)
 	}
+	// A board filter replaces the one before it, other filters stack on
+	// it without being shown, and [none] lines never apply.
 	wantFirmware := []FirmwareSetting{
 		{Key: "arm_freq", Value: "1800"},
-		{Key: "arm_freq", Value: "2400", Section: "pi5"},
-		{Key: "over_voltage_delta", Value: "50000", Section: "pi5"},
-		{Key: "fan_temp0", Value: "45000", Section: "pi5"},
-		{Key: "fan_temp0_speed", Value: "125", Section: "pi5"},
+		{Key: "arm_freq", Value: "2000", Model: "pi4"},
+		{Key: "arm_freq", Value: "2400", Model: "pi5"},
+		{Key: "over_voltage_delta", Value: "50000", Model: "pi5"},
+		{Key: "fan_temp0", Value: "45000", Model: "pi5"},
+		{Key: "fan_temp0_speed", Value: "125", Model: "pi5"},
+		{Key: "temp_limit", Value: "80", Model: "pi5", Conditional: true},
+		{Key: "temp_limit", Value: "81", Model: "pi5", Conditional: true},
 		{Key: "temp_soft_limit", Value: "70"},
+		{Key: "force_turbo", Value: "0"},
 	}
 	if !reflect.DeepEqual(h.Firmware, wantFirmware) {
 		t.Errorf("firmware = %+v, want %+v", h.Firmware, wantFirmware)
@@ -133,6 +160,7 @@ func TestReadMissing(t *testing.T) {
 		Root:     t.TempDir(), // nothing in it
 		DiskPath: "/srv/minecraft",
 		Statfs:   func(string) (Disk, error) { return Disk{}, errors.New("no such filesystem") },
+		Run:      noVcgencmd,
 		Errs:     func(name string, err error) { missing = append(missing, name) },
 	}
 	h := r.Read()
@@ -145,7 +173,7 @@ func TestReadMissing(t *testing.T) {
 	}
 
 	// No DiskPath: the disk isn't read at all.
-	r = &Reader{Root: fullRoot(t), Statfs: func(string) (Disk, error) {
+	r = &Reader{Root: fullRoot(t), Run: noVcgencmd, Statfs: func(string) (Disk, error) {
 		t.Error("Statfs called without a DiskPath")
 		return Disk{}, nil
 	}}
@@ -162,7 +190,7 @@ func TestReadPartial(t *testing.T) {
 		"proc/loadavg":                         loadavg,
 		"proc/uptime":                          uptime,
 	})
-	h := (&Reader{Root: root}).Read()
+	h := (&Reader{Root: root, Run: noVcgencmd}).Read()
 	if h.TempC != nil || h.Memory != nil {
 		t.Errorf("bad temp and meminfo: %v %v, want nil", h.TempC, h.Memory)
 	}
