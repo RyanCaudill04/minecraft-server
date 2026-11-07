@@ -4,6 +4,14 @@ Instructions for coding agents (and people) working in this repo. `CLAUDE.md`
 imports this file, so every tool reads the same rules. Where a skill under
 `.claude/skills/` disagrees with this file, this file wins.
 
+**Every change goes through `dev`.** Branch from an up-to-date `dev`, open
+the pull request into `dev` (`gh pr create --base dev`), and ship by
+merging `dev` into `main` with a merge commit. Never open a pull request
+from any other branch into `main`: the `from-dev` check fails it. If a pull
+request targets `main` by mistake, merge `dev` into its branch and change
+its base to `dev` (`gh pr edit <N> --base dev`) rather than rebasing and
+force-pushing. Details are under "Workflow" and "Dev sites".
+
 ## Layout
 
 | Path | What it is |
