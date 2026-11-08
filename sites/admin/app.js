@@ -1301,35 +1301,178 @@ const PI_TRIAL = {
 const FAN_STEPS = 4;
 const fanCell = (i, part) => $(`pi-fan-${i}-${part}`);
 
-// The fan curve's rows, built once.
+// The fan curve's steps, built once: on at, off below and speed for each,
+// with a meter showing the speed as a share of full.
 function buildFanRows() {
-  const body = $("pi-fan-rows");
+  const list = $("pi-fan-rows");
   for (let i = 0; i < FAN_STEPS; i++) {
-    const tr = document.createElement("tr");
-    const th = document.createElement("th");
-    th.scope = "row";
-    th.textContent = String(i + 1);
-    tr.append(th);
-    for (const [part, step, label] of [
-      ["temp", "0.5", "on at, °C"],
-      ["off", "0.5", "off below, °C"],
-      ["speed", "1", "speed, 0 to 255"],
+    const li = document.createElement("li");
+    li.className = "pi-fan-step";
+    const badge = document.createElement("span");
+    badge.className = "pi-fan-badge";
+    badge.textContent = String(i + 1);
+    badge.setAttribute("aria-hidden", "true");
+    li.append(badge);
+    for (const [part, step, name, unit, short] of [
+      ["temp", "0.5", "On at", "°C", "On °C"],
+      ["off", "0.5", "Off below", "°C", "Off °C"],
+      ["speed", "1", "Speed", "/255", "Speed"],
     ]) {
-      const td = document.createElement("td");
+      const label = document.createElement("label");
+      label.className = `pi-fan-field pi-fan-${part}`;
+      // On narrow screens a shorter label, with the unit, replaces both.
+      const caption = document.createElement("span");
+      const long = document.createElement("span");
+      long.className = "pi-fan-cap-long";
+      long.textContent = name;
+      const brief = document.createElement("span");
+      brief.className = "pi-fan-cap-short";
+      brief.textContent = short;
+      caption.append(long, brief);
+      const box = document.createElement("span");
+      box.className = "pi-input";
       const input = document.createElement("input");
       input.type = "number";
       input.inputMode = "decimal";
       input.step = step;
       input.id = `pi-fan-${i}-${part}`;
       input.disabled = true;
-      input.setAttribute("aria-label", `Step ${i + 1} ${label}`);
-      td.append(input);
-      tr.append(td);
+      input.setAttribute("aria-label", `Step ${i + 1} ${name.toLowerCase()}, ${unit === "°C" ? "°C" : "0 to 255"}`);
+      const u = document.createElement("span");
+      u.className = "unit";
+      u.textContent = unit;
+      box.append(input, u);
+      label.append(caption, box);
+      li.append(label);
     }
-    body.append(tr);
+    const meter = document.createElement("span");
+    meter.className = "pi-fan-meter";
+    meter.setAttribute("aria-hidden", "true");
+    const fill = document.createElement("span");
+    fill.id = `pi-fan-${i}-meter`;
+    const pct = document.createElement("span");
+    pct.className = "pi-fan-pct";
+    pct.id = `pi-fan-${i}-pct`;
+    meter.append(fill);
+    li.append(meter, pct);
+    list.append(li);
   }
 }
 buildFanRows();
+
+// The curve as the boxes describe it right now, skipping steps that aren't
+// filled in: [{ on, off, speed }] in °C and 0 to 255.
+function fanSteps() {
+  const steps = [];
+  for (let i = 0; i < FAN_STEPS; i++) {
+    const on = parseFloat(fanCell(i, "temp").value);
+    const off = parseFloat(fanCell(i, "off").value);
+    const speed = parseFloat(fanCell(i, "speed").value);
+    if ([on, speed].every(Number.isFinite)) steps.push({ i, on, off: Number.isFinite(off) ? off : on, speed });
+  }
+  return steps;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(name, attrs = {}) {
+  const el = document.createElementNS(SVG_NS, name);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+// Draws the fan curve: speed (as a share of full) against temperature,
+// stepping up at each step's "on at". Each step's marker shows its numbers
+// on hover or focus. The step boxes below are the table view.
+let fanChartLimits = null;
+function renderFanChart(limits) {
+  fanChartLimits = limits;
+  const svg = $("pi-fan-chart");
+  svg.querySelectorAll(":scope > :not(title)").forEach((n) => n.remove());
+  const steps = fanSteps();
+  for (let i = 0; i < FAN_STEPS; i++) {
+    const v = parseFloat(fanCell(i, "speed").value);
+    const share = Number.isFinite(v) ? Math.max(0, Math.min(1, v / 255)) : 0;
+    $(`pi-fan-${i}-meter`).style.width = `${share * 100}%`;
+    $(`pi-fan-${i}-pct`).textContent = Number.isFinite(v) ? `${Math.round(share * 100)}%` : "";
+  }
+
+  // Drawn at the size it's shown, so the labels stay 11px on any screen.
+  const W = Math.max(240, Math.round(svg.getBoundingClientRect().width) || 600);
+  const H = W < 420 ? 120 : 150, L = 38, R = 12, T = 10, B = 24;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const lo = (limits?.fan_temp?.min ?? 30000) / 1000;
+  const hi = Math.max((limits?.fan_temp?.max ?? 80000) / 1000, ...steps.map((s) => s.on)) + 5;
+  const x = (t) => L + ((Math.max(lo, Math.min(hi, t)) - lo) / (hi - lo)) * (W - L - R);
+  const y = (sp) => T + (1 - Math.max(0, Math.min(255, sp)) / 255) * (H - T - B);
+
+  const grid = svgEl("g", { class: "pi-fan-grid" });
+  for (const share of [0, 0.5, 1]) {
+    const gy = y(share * 255);
+    grid.append(svgEl("line", { x1: L, x2: W - R, y1: gy, y2: gy }));
+    const t = svgEl("text", { x: L - 6, y: gy + 3, "text-anchor": "end" });
+    t.textContent = `${share * 100}%`;
+    grid.append(t);
+  }
+  for (let t = Math.ceil(lo / 10) * 10; t <= hi; t += 10) {
+    const lbl = svgEl("text", { x: x(t), y: H - 6, "text-anchor": "middle" });
+    lbl.textContent = `${t}°`;
+    grid.append(lbl);
+  }
+  svg.append(grid);
+  if (!steps.length) return;
+
+  // A step line: flat at the last speed until the next step turns on.
+  let d = `M${x(lo)},${y(0)}`;
+  for (const s of steps) d += ` H${x(s.on)} V${y(s.speed)}`;
+  d += ` H${x(hi)}`;
+  const base = y(0);
+  svg.append(svgEl("path", { class: "pi-fan-area", d: `${d} V${base} H${x(lo)} Z` }));
+  svg.append(svgEl("path", { class: "pi-fan-line", d }));
+
+  const tip = $("pi-fan-tip");
+  for (const s of steps) {
+    const g = svgEl("g", { class: "pi-fan-point", tabindex: "0", role: "img",
+      "aria-label": `Step ${s.i + 1}: on at ${s.on} °C, off below ${s.off} °C, speed ${Math.round((s.speed / 255) * 100)}%` });
+    g.append(svgEl("circle", { class: "pi-fan-hit", cx: x(s.on), cy: y(s.speed), r: 12 }));
+    g.append(svgEl("circle", { class: "pi-fan-dot", cx: x(s.on), cy: y(s.speed), r: 4 }));
+    const show = () => {
+      tip.textContent = `Step ${s.i + 1}: on at ${s.on} °C, off below ${s.off} °C, ${Math.round((s.speed / 255) * 100)}% (${s.speed})`;
+      tip.style.left = `${(x(s.on) / W) * 100}%`;
+      tip.style.top = `${(y(s.speed) / H) * 100}%`;
+      tip.hidden = false;
+    };
+    const hide = () => { tip.hidden = true; };
+    g.addEventListener("pointerenter", show);
+    g.addEventListener("pointerleave", hide);
+    g.addEventListener("focus", show);
+    g.addEventListener("blur", hide);
+    svg.append(g);
+  }
+}
+
+// Redraw when the chart's width changes (a rotated phone, a resized window).
+if ("ResizeObserver" in window) {
+  let lastWidth = 0;
+  new ResizeObserver(([entry]) => {
+    const w = Math.round(entry.contentRect.width);
+    if (w && w !== lastWidth && !$("pi-fan").hidden) {
+      lastWidth = w;
+      renderFanChart(fanChartLimits);
+    }
+  }).observe($("pi-fan-chart"));
+}
+
+// One line beside the checkbox: what the fan does when the box is off, or
+// a short read of the custom curve when it's on.
+function fanSummary(limits, on) {
+  if (!on) {
+    const d = limits?.fan_default;
+    return d?.length ? `Off: the firmware's default, on from ${fmtMilli(d[0].temp)} °C and full speed by ${fmtMilli(d[d.length - 1].temp)} °C.` : "Off: the firmware's default.";
+  }
+  const steps = fanSteps();
+  if (!steps.length) return "Fill in the steps below.";
+  return `On from ${steps[0].on} °C, ${Math.round((steps[steps.length - 1].speed / 255) * 100)}% by ${steps[steps.length - 1].on} °C.`;
+}
 
 function fillPiForm(s, limits) {
   $("pi-arm-freq").value = s?.arm_freq ?? "";
@@ -1502,7 +1645,9 @@ function renderPi() {
   for (let i = 0; i < FAN_STEPS; i++) {
     for (const part of ["temp", "off", "speed"]) fanCell(i, part).disabled = !editable || !fanOn;
   }
-  $("pi-fan").classList.toggle("off", !fanOn);
+  $("pi-fan").hidden = !fanOn;
+  $("pi-fan-summary").textContent = fanSummary(p?.limits, fanOn);
+  if (fanOn) renderFanChart(p?.limits);
   $("pi-save").disabled = !editable;
   $("pi-defaults").disabled = !editable;
   $("pi-discard").hidden = !p?.pending || trialBusy || rebootPending || goingBack;

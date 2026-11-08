@@ -243,13 +243,20 @@
               </label>
             </fieldset>
 
-            <fieldset class="pi-fields">
+            <fieldset class="pi-fields pi-fan-fields">
               <legend class="eyebrow">Fan</legend>
-              <label class="pi-check"><input type="checkbox" id="pi-fan-custom" disabled> Custom fan curve</label>
-              <table class="pi-fan" id="pi-fan">
-                <thead><tr><th scope="col">Step</th><th scope="col">On at (°C)</th><th scope="col">Off below (°C)</th><th scope="col">Speed (0–255)</th></tr></thead>
-                <tbody id="pi-fan-rows"></tbody>
-              </table>
+              <div class="pi-fan-head">
+                <label class="pi-check"><input type="checkbox" id="pi-fan-custom" aria-controls="pi-fan" disabled> Custom fan curve</label>
+                <span class="pi-fan-summary" id="pi-fan-summary"></span>
+              </div>
+              <div class="pi-fan" id="pi-fan" hidden>
+                <figure class="pi-fan-chart">
+                  <svg id="pi-fan-chart" viewBox="0 0 600 150" preserveAspectRatio="xMinYMin meet" role="img" aria-labelledby="pi-fan-chart-title"><title id="pi-fan-chart-title">Fan speed by temperature</title></svg>
+                  <div class="pi-fan-tip" id="pi-fan-tip" hidden></div>
+                  <figcaption class="pi-range">Fan speed as the CPU warms up. Each step turns on at its temperature and off again below its "off below" one.</figcaption>
+                </figure>
+                <ol class="pi-fan-steps" id="pi-fan-rows"></ol>
+              </div>
             </fieldset>
 
             <p class="pi-warn" id="pi-warn" hidden></p>
