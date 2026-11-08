@@ -38,7 +38,7 @@ world-settings:
         - type: circle
           center-x: 0
           center-z: 0
-          radius: 5000
+          radius: 10000
     # Live positions are visible to anyone with the URL, so they're off.
     # play also always serves an empty tiles/players.json.
     player-tracker:
@@ -54,18 +54,18 @@ world-settings:
     map:
       display-name: Nether
       order: 1
-      # A nether block is 8 overworld blocks across, so 625 here covers the
-      # same ground as the overworld's 5,000, linked by portals. squaremap
+      # A nether block is 8 overworld blocks across, so 1,250 here covers the
+      # same ground as the overworld's 10,000, linked by portals. squaremap
       # draws the nether below its bedrock roof on its own.
       visibility-limits:
         - type: circle
           center-x: 0
           center-z: 0
-          radius: 625
+          radius: 1250
   minecraft:the_end:
     map:
       display-name: End
       order: 2
       # End blocks are the same size as the overworld's, so it keeps the
-      # default 5,000-block circle: the main island and the outer islands
+      # default 10,000-block circle: the main island and the outer islands
       # past 1,000 blocks, where end gateways lead.
