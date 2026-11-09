@@ -295,14 +295,34 @@ scripts/ci-changes_test.sh
 scripts/release-notes_test.sh
 ```
 
+## How changes ship
+
+Every change goes through the `dev` branch:
+
+1. Branch from an up-to-date `dev` and open a pull request into `dev`
+   (`gh pr create --base dev`). CI runs its checks on it.
+2. Merging it into `dev` deploys the dev sites, dev-play.ryancaudill.dev
+   and dev-admin.ryancaudill.dev. They serve the real pages with a frozen,
+   synthetic API and refuse every change, so you can preview a design
+   without touching the Pi.
+3. To ship, open a pull request from `dev` into `main` and merge it with a
+   merge commit (not a squash). That publishes a release, and mc-agent
+   installs it on the Pi within minutes (see
+   [Releases and deploys](#releases-and-deploys)).
+
+`main` takes pull requests only from `dev`: the `from-dev` check
+([`from-dev.yml`](.github/workflows/from-dev.yml)) fails any other. Nobody
+pushes to `main` or `dev` directly. If a pull request was opened against
+`main` by mistake, merge `dev` into its branch and change its base to `dev`.
+
 ## CI/CD
 
 [`ci.yml`](.github/workflows/ci.yml) runs on every pull request, every push
-to `main`, and by hand.
+to `main` or `dev`, and by hand.
 
 1. **changes** lists the changed files and
    [`scripts/ci-changes.sh`](scripts/ci-changes.sh) turns them into scopes. On
-   a pull request it compares with the merge base. On `main` it compares with
+   a pull request it compares with the merge base. On a push it compares with
    the newest `r<N>` release tag, so a failed run's changes are picked up by
    the next one.
 2. **Scoped jobs** run only when their scope changed:
@@ -330,6 +350,9 @@ to `main`, and by hand.
    - builds the release with [`scripts/build-release.sh`](scripts/build-release.sh),
    - publishes it as a GitHub Release with `release.tar.gz` and
      `release.tar.gz.sha256`.
+5. **dev** runs on `dev` after ci-ok. It builds the dev sites with
+   [`scripts/build-dev.sh`](scripts/build-dev.sh) and deploys them to
+   Cloudflare Workers.
 
 To build a release by hand (it needs Go, and `jq` if you pass notes):
 

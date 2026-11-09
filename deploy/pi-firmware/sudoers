@@ -1,0 +1,10 @@
+# Lets the user that runs admin start pi-firmware as root, with exactly
+# these subcommands and no other arguments. "boot" isn't here: only
+# pi-firmware-boot.service runs it. Installed to /etc/sudoers.d/pi-firmware
+# by hand (README.md), with PIUSER replaced by that user.
+PIUSER ALL=(root) NOPASSWD: /usr/local/sbin/pi-firmware stage, \
+                            /usr/local/sbin/pi-firmware discard, \
+                            /usr/local/sbin/pi-firmware keep, \
+                            /usr/local/sbin/pi-firmware reboot-trial, \
+                            /usr/local/sbin/pi-firmware reboot, \
+                            /usr/local/sbin/pi-firmware governor

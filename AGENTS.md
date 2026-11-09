@@ -4,6 +4,14 @@ Instructions for coding agents (and people) working in this repo. `CLAUDE.md`
 imports this file, so every tool reads the same rules. Where a skill under
 `.claude/skills/` disagrees with this file, this file wins.
 
+**Every change goes through `dev`.** Branch from an up-to-date `dev`, open
+the pull request into `dev` (`gh pr create --base dev`), and ship by
+merging `dev` into `main` with a merge commit. Never open a pull request
+from any other branch into `main`: the `from-dev` check fails it. If a pull
+request targets `main` by mistake, merge `dev` into its branch and change
+its base to `dev` (`gh pr edit <N> --base dev`) rather than rebasing and
+force-pushing. Details are under "Workflow" and "Dev sites".
+
 ## Layout
 
 | Path | What it is |
@@ -12,15 +20,19 @@ imports this file, so every tool reads the same rules. Where a skill under
 | `web/cmd/play` | play.ryancaudill.dev: server status, world facts and player stats. Listens on `127.0.0.1:8082`. |
 | `web/cmd/admin` | admin.ryancaudill.dev: live status and the active release. Listens on `127.0.0.1:8081`. |
 | `web/cmd/mc-agent` | The deploy agent on the Pi: `deploy`, `rollback`, `status`, `version`. |
+| `web/cmd/pi-firmware` | Root helper admin runs through sudo to change the Pi 5's clock, voltage, temperature-limit and fan settings, tried with a one-shot tryboot first. Installed by hand, never by mc-agent (`deploy/pi-firmware/README.md`). |
 | `web/cmd/mc-players` | Small CLI that prints who is online with a status ping. |
-| `web/internal/*` | Shared packages: `deploy` (mc-agent's logic), `nbt` and `world` (read world files), `ping` and `mcstatus` (server status), `site` (static files and JSON helpers). |
+| `web/internal/*` | Shared packages: `deploy` (mc-agent's logic), `nbt` and `world` (read world files), `ping` and `mcstatus` (server status), `pifirmware` (the Pi settings), `site` (static files and JSON helpers). |
 | `web/internal/world/worldtest`, `web/internal/nbt/nbttest` | Synthetic test fixtures. Tests never use real player data. |
 | `sites/play`, `sites/admin` | Each site's `index.html`, `style.css`, `app.js`. |
 | `sites/shared` | `base.css`, served at `/shared/` by play and admin. |
 | `deploy/systemd/` | systemd **user** units installed on the Pi. |
+| `deploy/pi-firmware/` | The helper's sudoers rule, boot unit and watchdog config, installed by hand as root. |
 | `deploy/release.json` | Units, services, timers and health checks mc-agent applies for a release. |
 | `scripts/` | CI change detection, release notes and the release build, each with a `_test.sh` where it has logic. |
-| `.github/workflows/ci.yml` | CI/CD: scoped checks on PRs, one required check `ci-ok`, and releases from `main`. |
+| `.github/workflows/ci.yml` | CI/CD: scoped checks on PRs, one required check `ci-ok`, releases from `main`, and the dev sites from `dev`. |
+| `dev/` | The dev sites on Cloudflare Workers (free plan): `worker.mjs` and a wrangler config per site. See "Dev sites" below. |
+| `.github/workflows/from-dev.yml` | The `from-dev` check: PRs into `main` must come from `dev`. |
 | `.github/workflows/review.yml`, `.github/review.md` | Optional advisory review on PRs labelled `review` (see below). |
 | `.claude/skills/` | Repo-specific agent skills, added in #105 (see "Decision: agent instructions and skills"). |
 | Repo root | The Minecraft server's own files: `lazymc.toml`, `start.sh`, `server.properties.example`, Paper/Spigot/Bukkit configs, `plugins/`, `config/`. |
@@ -43,8 +55,13 @@ node --check sites/admin/app.js
 shellcheck scripts/*.sh start.sh
 scripts/ci-changes_test.sh
 scripts/release-notes_test.sh
+scripts/release-changes_test.sh
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12   # CI pins this version
 scripts/build-release.sh <tag> <output folder> [notes.json]   # e.g. scripts/build-release.sh dev "$(mktemp -d)"
+
+# Dev sites
+node --test tests/dev/worker.test.mjs
+scripts/build-dev_test.sh
 ```
 
 ### Preview play or admin locally
@@ -71,9 +88,15 @@ Fixtures are synthetic (`worldtest`, `nbttest`).
 
 ## Workflow
 
-- Branch from an up-to-date `main` and open a pull request. `main` changes
-  only through PRs that pass `ci-ok`. Never commit to, push to or
-  force-push `main`.
+- Changes go through `dev` first. Branch from an up-to-date `dev` and
+  open a pull request into `dev` (`gh pr create --base dev`). Merging it
+  deploys the dev sites (see "Dev sites"). To ship, open a PR from `dev`
+  into `main` and merge it with a merge commit, never a squash, so
+  `main` gets `dev`'s commits as they are.
+- `main` takes PRs only from `dev`: the `from-dev` check
+  (`.github/workflows/from-dev.yml`) fails for any other branch. Both
+  branches change only through PRs that pass `ci-ok`. Never commit to,
+  push to or force-push `main` or `dev`.
 - Merging to `main` deploys automatically: CI publishes a release `r<N>`
   when anything under `web/`, `sites/`, `deploy/`, `.github/workflows/` or
   `scripts/build-release.sh` changed, and `mc-agent.timer` on the Pi
@@ -83,24 +106,48 @@ Fixtures are synthetic (`worldtest`, `nbttest`).
   `site: serve static files with Cache-Control: no-cache`. Areas in use
   include `play`, `admin`, `site`, `mc-agent`, `ci`, `world`, `nbt`,
   `ping`, `build-release`, `docs`.
-- PR title: a plain, specific sentence (squash merges reuse it). PR body,
+- PR title: a plain, specific sentence (squash merges into `dev` reuse
+  it). PR body,
   as in #91 and #93: `Fixes #N` (or `Part of #N`) and a sentence of
   context, then `## What's in it`, `## Testing`, and `## After merging`
   only when something must be done by hand.
-- Labels decide the release kind (`scripts/release-notes.sh`):
-  `enhancement` is a feature, else `bug` is a fix, else other. Add one of
+- Labels on the PRs into `dev` decide the release kind
+  (`scripts/release-notes.sh`): `scripts/release-changes.sh` lists the PRs
+  a merge of `dev` brought into `main`. `enhancement` is a feature, else
+  `bug` is a fix, else other. The PR from `dev` into `main` needs no kind
+  label. Add one of
   them unless the change is neither, plus area labels (`play`, `admin`,
   `ci-cd`, `infra`, `mc-server`, `security`, `accessibility`,
   `tech-debt`, `documentation`). Use only labels that exist
   (`gh label list`).
 - Never merge a PR unless the owner asks.
 
+## Dev sites
+
+Merging a PR into `dev` runs CI's checks, then deploys
+dev-play.ryancaudill.dev and dev-admin.ryancaudill.dev to Cloudflare
+Workers. Both are behind Cloudflare Access. They serve the real pages from
+`sites/` with a frozen, synthetic API: `scripts/build-dev.sh` saves each
+GET route's JSON from the `TestDevSnapshot` tests in `web/cmd/play` and
+`web/cmd/admin`, and `dev/worker.mjs` serves those files. Every POST is
+refused, so nothing on the dev sites reaches the Pi or the server.
+
+- A ruleset protects `dev` like `main`: no direct pushes, force-pushes or
+  deleting it. Never merge a PR into `dev` unless the owner asks.
+- What's on `dev` ships to the Pi only when `dev` is merged into `main`.
+- When a page starts reading a new GET route, add it to that site's
+  `TestDevSnapshot`. `scripts/build-dev_test.sh` fails until you do.
+- Snapshot data comes only from test fixtures. Never put real player data
+  or anything from the Pi into it.
+- The squaremap preview on play is empty on the dev site: there are no
+  map tiles in the snapshot.
+
 ## Rules
 
 - **No tool or AI attribution** in commits, PR titles, PR descriptions,
   issues or comments: no `Co-Authored-By` trailers, no "Generated with"
   lines, no mention of the assistant that helped. Work appears as the
-  owner's alone. Check with `git log --format=%B origin/main..HEAD`.
+  owner's alone. Check with `git log --format=%B origin/dev..HEAD`.
 - `docs/` is private and git-ignored. Never commit it, quote it, or
   reference its contents from tracked files.
 - The repo is public: no IP addresses, secrets, tokens, Access team

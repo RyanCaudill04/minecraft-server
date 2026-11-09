@@ -219,6 +219,199 @@ html:has(dialog[open]) { overflow: hidden; }
 .confirm form { display: flex; flex-direction: column; gap: 10px; }
 .confirm .actions { justify-content: flex-end; margin-top: 8px; }
 
+/* ---------- Pi settings ---------- */
+
+.pi-card { display: flex; flex-direction: column; gap: 18px; }
+.pi-locked,
+.pi-problems,
+.pi-warn {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+  font-size: 0.875rem;
+}
+.pi-problems { padding-left: 32px; }
+.pi-locked[hidden], .pi-problems[hidden], .pi-warn[hidden], .pi-trial[hidden] { display: none; }
+
+/* The last trial: data-phase colors the dot like a health card's. */
+.pi-trial {
+  --state: var(--gray);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--state) 10%, transparent);
+}
+.pi-trial p { margin: 0; font-size: 0.875rem; }
+.pi-trial[data-phase="ok"]   { --state: var(--green); }
+.pi-trial[data-phase="warn"] { --state: var(--amber); }
+.pi-trial[data-phase="bad"]  { --state: var(--red); }
+.pi-trial[data-phase="busy"] { --state: var(--amber); }
+.pi-trial[data-phase="busy"] .dot { animation: pulse 1.4s ease-in-out infinite; }
+.pi-trial .actions:has(button:not([hidden])) { margin-top: 4px; }
+
+.pi-now { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.pi-now dd { margin: 4px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.pi-now .pi-probation { font-weight: 400; }
+.pi-now .pi-probation[hidden] { display: none; }
+
+.pi-form { display: flex; flex-direction: column; gap: 14px; }
+.pi-form > p { margin: 0; }
+.pi-fields { display: flex; flex-wrap: wrap; gap: 12px 20px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.pi-fields legend { padding: 0; margin-bottom: 8px; }
+.pi-field { display: flex; flex-direction: column; gap: 4px; font-size: 0.875rem; }
+.pi-range { color: var(--subtle); font-size: 0.75rem; }
+.pi-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.pi-input:focus-within { box-shadow: inset 0 0 0 2px var(--accent); }
+.pi-input .unit { color: var(--muted); font-size: 0.8125rem; }
+.pi-input input,
+.pi-governor select {
+  width: 7.5em;
+  padding: 8px 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--text);
+  font: 0.875rem ui-monospace, "SF Mono", Menlo, monospace;
+}
+.pi-input input:disabled, .pi-governor select:disabled { cursor: not-allowed; color: var(--muted); }
+.pi-check { display: flex; align-items: center; gap: 8px; font-size: 0.875rem; font-weight: 500; }
+.pi-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+
+/* The fan curve: a checkbox and one line when it's off; a chart and the
+   four steps when it's on. */
+.pi-fan-fields { flex-direction: column; flex-wrap: nowrap; gap: 12px; }
+.pi-fan-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+.pi-fan-summary { color: var(--subtle); font-size: 0.8125rem; }
+.pi-fan {
+  display: grid;
+  gap: 14px;
+  max-width: 640px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.pi-fan[hidden] { display: none; }
+.pi-fan-chart { position: relative; margin: 0; }
+.pi-fan-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.pi-fan-chart figcaption { margin-top: 4px; }
+.pi-fan-grid line { stroke: var(--border); stroke-width: 1; }
+.pi-fan-grid text { fill: var(--subtle); font-variant-numeric: tabular-nums; }
+.pi-fan-area { fill: var(--accent-soft); stroke: none; }
+.pi-fan-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.pi-fan-dot { fill: var(--accent); stroke: var(--bg); stroke-width: 2; }
+.pi-fan-hit { fill: transparent; }
+.pi-fan-point { cursor: default; outline: none; }
+.pi-fan-point:hover .pi-fan-dot, .pi-fan-point:focus-visible .pi-fan-dot { r: 5; }
+.pi-fan-point:focus-visible .pi-fan-hit { stroke: var(--accent); stroke-width: 2; }
+.pi-fan-tip {
+  position: absolute;
+  z-index: 1;
+  transform: translate(-50%, calc(-100% - 10px));
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: var(--shadow), inset 0 0 0 1px var(--border);
+  color: var(--text);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.pi-fan-tip[hidden] { display: none; }
+
+.pi-fan-steps { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.pi-fan-step {
+  display: grid;
+  grid-template-columns: auto repeat(3, minmax(0, 1fr)) minmax(72px, 0.8fr) 3.2em;
+  align-items: end;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.pi-fan-badge {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-bottom: 6px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.pi-fan-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 0.75rem; color: var(--muted); }
+.pi-fan-field .pi-input input { width: 100%; min-width: 3em; }
+.pi-fan-field .unit { white-space: nowrap; }
+.pi-fan-cap-short { display: none; }
+.pi-fan-grid text { font-size: 11px; }
+.pi-fan-meter {
+  position: relative;
+  height: 6px;
+  margin-bottom: 15px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.pi-fan-meter > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.2s var(--ease);
+}
+.pi-fan-pct { margin-bottom: 9px; color: var(--muted); font-size: 0.8125rem; font-variant-numeric: tabular-nums; text-align: right; }
+@media (max-width: 560px) {
+  .pi-fan { padding: 10px; gap: 10px; }
+  .pi-fan-step { grid-template-columns: auto repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px; }
+  .pi-fan-field .unit { display: none; }
+  .pi-fan-cap-long { display: none; }
+  .pi-fan-cap-short { display: inline; white-space: nowrap; }
+  .pi-fan-field .pi-input { padding: 0 8px; }
+  .pi-fan-meter { grid-column: 2 / 4; margin-bottom: 0; }
+  .pi-fan-pct { margin-bottom: 0; text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pi-fan-meter > span { transition: none; }
+}
+
+.pi-reboot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.pi-reboot .hint { text-align: left; max-width: none; }
+.pi-governor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.pi-governor select {
+  width: auto;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.pi-governor p { flex: 1 1 100%; margin: 0; }
+.pi-card > .note:empty { display: none; }
+
+@media (max-width: 760px) {
+  .pi-now { grid-template-columns: 1fr; }
+}
+
 /* ---------- Pi health ---------- */
 
 /* One card per reading. data-level, not data-state, so the ping state the

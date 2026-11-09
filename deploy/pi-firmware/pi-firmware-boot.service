@@ -1,0 +1,33 @@
+# System unit (not a user unit): runs "pi-firmware boot" as root at every
+# boot. It puts back the CPU governor admin set, watches kept settings for
+# unclean resets (and puts the old config.txt back after two), and settles
+# a trial: on a trial boot it keeps minecraft.service stopped, checks the
+# Pi, waits for Keep, and reboots back to config.txt if a check fails or
+# Keep doesn't come. "clean-stop" at shutdown marks the boot as ended
+# cleanly. Installed by hand (README.md), with PIUSER replaced by the user
+# that runs minecraft.service and admin.
+
+[Unit]
+Description=Pi firmware settings: governor, probation and trial boot check
+
+[Service]
+Type=exec
+ExecStart=/usr/local/sbin/pi-firmware boot
+# Stays active after boot finishes, so clean-stop runs at every clean
+# shutdown. "boot" never fails the unit for the same reason; its errors
+# are in the journal.
+RemainAfterExit=yes
+ExecStop=/usr/local/sbin/pi-firmware clean-stop
+Environment=PI_FIRMWARE_USER=PIUSER
+# It writes only the boot partition, its own state and its lock file.
+StateDirectory=pi-firmware
+ProtectSystem=strict
+ReadWritePaths=/boot/firmware /run
+# Read-only rather than hidden: stopping the user's minecraft.service
+# connects to the user manager under /run/user.
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

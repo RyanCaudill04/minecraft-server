@@ -5,24 +5,27 @@
 # Pushes to main: the same checks for everything since the last release,
 # then publish a release if any of it is deployable. The Pi's mc-agent
 # timer installs the newest release.
+# Pushes to dev: the same checks, then deploy the dev sites to Cloudflare
+# (dev/): play's and admin's pages with a synthetic API snapshot.
 name: CI/CD
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A new push to a pull request cancels its older run. Runs on main don't
-# cancel the running one, but GitHub keeps only one pending run per group,
-# so a newer merge replaces a waiting one. That's fine: each run on main
-# covers everything since the last release, so main always catches up.
+# A new push to a pull request or to dev cancels its older run. Runs on
+# main don't cancel the running one, but GitHub keeps only one pending run
+# per group, so a newer merge replaces a waiting one. That's fine: each run
+# on main covers everything since the last release, so main always catches
+# up.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/dev' }}
 
 jobs:
   changes:
@@ -105,9 +108,16 @@ jobs:
       # than paying for their own runners, and run only when their scope
       # changed.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: needs.changes.outputs.play == 'true' || needs.changes.outputs.admin == 'true'
+        if: needs.changes.outputs.play == 'true' || needs.changes.outputs.admin == 'true' || needs.changes.outputs.infra == 'true'
         with:
           node-version: 24
+      - name: dev sites build, and their Worker's tests
+        # A page that starts reading a new API route needs a snapshot of it
+        # for the dev site, so this runs when either page changes too.
+        if: needs.changes.outputs.play == 'true' || needs.changes.outputs.admin == 'true' || needs.changes.outputs.infra == 'true'
+        run: |
+          node --test tests/dev/worker.test.mjs
+          scripts/build-dev_test.sh
       - name: play.ryancaudill.dev JavaScript syntax
         if: needs.changes.outputs.play == 'true'
         run: node --check sites/play/app.js && node --check sites/play/format.js
@@ -173,6 +183,8 @@ jobs:
           done
           curl -fsS http://127.0.0.1:8081/api/status | grep -q '"state":"offline"'
           curl -fsS http://127.0.0.1:8081/api/deploy | grep -q '"active":""'
+          # Off a Pi 5, with no owner set, the Pi settings are read-only.
+          curl -fsS http://127.0.0.1:8081/api/pi | grep -q '"can_change":false'
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8081/api/status)" = 405
   play-e2e:
     name: play.ryancaudill.dev end-to-end
@@ -285,10 +297,19 @@ jobs:
           "$(go env GOPATH)/bin/actionlint"
       - name: shellcheck scripts
         run: shellcheck scripts/*.sh deploy/backup/*.sh
+      - name: dev sites' wrangler configs parse
+        # wrangler.jsonc allows comments; strip them before parsing.
+        run: |
+          for f in dev/*.jsonc; do
+            sed 's#^ *//.*##' "$f" | jq -e '.name and .assets.directory and (.workers_dev == false)' >/dev/null ||
+              { echo "::error::$f"; exit 1; }
+          done
       - name: Change detection tests
         run: scripts/ci-changes_test.sh
       - name: Release notes tests
-        run: scripts/release-notes_test.sh
+        run: |
+          scripts/release-notes_test.sh
+          scripts/release-changes_test.sh
       - name: World backup tests
         run: scripts/mc-backup_test.sh
       - name: Server fetch and migration tests
@@ -410,3 +431,38 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "$TAG" \
             --notes "Built from ${GITHUB_SHA} by run ${GITHUB_RUN_ID}. The Pi installs it within a few minutes."
+
+  # Pushes to dev only. Needs the CLOUDFLARE_API_TOKEN and
+  # CLOUDFLARE_ACCOUNT_ID secrets in the dev environment. Nothing here
+  # touches the Pi or a release.
+  dev:
+    name: deploy the dev sites
+    needs: [ci-ok]
+    if: >-
+      !cancelled() &&
+      needs.ci-ok.result == 'success' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: web/go.mod
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Build
+        run: scripts/build-dev.sh dev/dist
+      - name: Deploy to Cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          for site in play admin; do
+            npx --yes wrangler@4.151.2 deploy -c "dev/$site.jsonc"
+          done

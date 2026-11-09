@@ -17,7 +17,7 @@ trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/bin" "$out"
 (
   cd "$root/web"
-  for cmd in play admin mc-agent mc-rcon; do
+  for cmd in play admin mc-agent mc-rcon pi-firmware; do
     CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
       -ldflags "-s -w -X main.version=$tag" -o "$stage/bin/$cmd" "./cmd/$cmd"
   done
@@ -25,7 +25,9 @@ mkdir -p "$stage/bin" "$out"
 
 cp -R "$root/sites" "$stage/sites"
 mkdir -p "$stage/deploy/systemd"
-cp -R "$root/deploy/backup" "$root/deploy/release.json" "$stage/deploy/"
+# deploy/pi-firmware ships for installing by hand as root; mc-agent never
+# installs it.
+cp -R "$root/deploy/backup" "$root/deploy/pi-firmware" "$root/deploy/release.json" "$stage/deploy/"
 # Only the units the manifest links. The others in deploy/systemd, like
 # minecraft.service, are linked from the server checkout instead.
 jq -r '.units[]' "$root/deploy/release.json" | while read -r unit; do

@@ -30,6 +30,10 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10.5h3l2-5 3.5 9 2-4h4.5"/></svg>
           Pi health
         </a>
+        <a href="#pi">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="1.5"/><path d="M8 2.5V5M12 2.5V5M8 15v2.5M12 15v2.5M2.5 8H5M2.5 12H5M15 8h2.5M15 12h2.5"/></svg>
+          Pi settings
+        </a>
         <a href="#console">
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M6 8l2.5 2L6 12M10.5 12.5H14"/></svg>
           Console
@@ -194,6 +198,110 @@
             <p class="metric-sub">&nbsp;</p>
           </article>
         </div>
+      </section>
+
+      <section id="pi" class="section">
+        <header class="section-head">
+          <h2>Pi settings</h2>
+          <p class="muted">The CPU clock, voltage, temperature limit and fan curve in <code>config.txt</code>. New settings are tried for one boot first: if the Pi doesn't come back healthy, it goes back to the saved ones by itself.</p>
+        </header>
+        <article class="card pi-card" tabindex="-1">
+          <p class="pi-locked" id="pi-locked" hidden></p>
+          <ul class="pi-problems" id="pi-problems" hidden></ul>
+
+          <div class="pi-trial" id="pi-trial" data-phase="" hidden>
+            <span class="eyebrow"><span class="dot"></span><span id="pi-trial-title"></span></span>
+            <p id="pi-trial-text"></p>
+            <div class="actions">
+              <button type="button" class="btn btn-primary" id="pi-keep" hidden disabled>Keep these settings</button>
+              <button type="button" class="btn btn-secondary" id="pi-back" hidden disabled>Go back</button>
+            </div>
+          </div>
+
+          <dl class="pi-now">
+            <div><dt class="eyebrow">Saved (every boot)</dt><dd id="pi-saved">–</dd><dd class="pi-probation muted small" id="pi-probation" hidden></dd></div>
+            <div><dt class="eyebrow" id="pi-pending-title">Waiting for a trial boot</dt><dd id="pi-pending">Nothing</dd></div>
+          </dl>
+
+          <form class="pi-form" id="pi-form" autocomplete="off" novalidate>
+            <fieldset class="pi-fields">
+              <legend class="eyebrow">CPU</legend>
+              <label class="pi-field">
+                <span>Top clock</span>
+                <span class="pi-input"><input id="pi-arm-freq" type="number" inputmode="numeric" step="50" disabled><span class="unit">MHz</span></span>
+                <span class="pi-range" id="pi-arm-freq-range"></span>
+              </label>
+              <label class="pi-field">
+                <span>Extra voltage</span>
+                <span class="pi-input"><input id="pi-volts" type="number" inputmode="numeric" step="5" disabled><span class="unit">mV</span></span>
+                <span class="pi-range" id="pi-volts-range"></span>
+              </label>
+              <label class="pi-field">
+                <span>Temperature limit</span>
+                <span class="pi-input"><input id="pi-temp-limit" type="number" inputmode="numeric" step="1" disabled><span class="unit">°C</span></span>
+                <span class="pi-range" id="pi-temp-limit-range"></span>
+              </label>
+            </fieldset>
+
+            <fieldset class="pi-fields pi-fan-fields">
+              <legend class="eyebrow">Fan</legend>
+              <div class="pi-fan-head">
+                <label class="pi-check"><input type="checkbox" id="pi-fan-custom" aria-controls="pi-fan" disabled> Custom fan curve</label>
+                <span class="pi-fan-summary" id="pi-fan-summary"></span>
+              </div>
+              <div class="pi-fan" id="pi-fan" hidden>
+                <figure class="pi-fan-chart">
+                  <svg id="pi-fan-chart" viewBox="0 0 600 150" preserveAspectRatio="xMinYMin meet" role="img" aria-labelledby="pi-fan-chart-title"><title id="pi-fan-chart-title">Fan speed by temperature</title></svg>
+                  <div class="pi-fan-tip" id="pi-fan-tip" hidden></div>
+                  <figcaption class="pi-range">Fan speed as the CPU warms up. Each step turns on at its temperature and off again below its "off below" one.</figcaption>
+                </figure>
+                <ol class="pi-fan-steps" id="pi-fan-rows"></ol>
+              </div>
+            </fieldset>
+
+            <p class="pi-warn" id="pi-warn" hidden></p>
+            <div class="actions">
+              <button type="submit" class="btn btn-primary" id="pi-save" disabled>Save for a trial boot</button>
+              <button type="button" class="btn btn-secondary" id="pi-defaults" disabled>Use defaults</button>
+              <button type="button" class="btn btn-secondary" id="pi-discard" hidden disabled>Discard waiting settings</button>
+            </div>
+            <p class="muted small">An empty box uses the firmware's default. Nothing changes until the Pi reboots.</p>
+          </form>
+
+          <div class="pi-reboot">
+            <div class="actions">
+              <button type="button" class="btn btn-danger" id="pi-reboot-trial" disabled>Reboot to try them</button>
+              <button type="button" class="btn btn-danger" id="pi-reboot" hidden disabled>Reboot</button>
+            </div>
+            <p class="hint" id="pi-reboot-hint"></p>
+          </div>
+
+          <form class="pi-governor" id="pi-governor-form" novalidate>
+            <label class="pi-field">
+              <span>CPU governor</span>
+              <select id="pi-governor" disabled></select>
+            </label>
+            <button type="submit" class="btn btn-secondary" id="pi-governor-apply" disabled>Apply now</button>
+            <p class="muted small">Changes at once, no reboot, and stays after one. <code>performance</code> keeps the CPU at its top clock; <code>ondemand</code> is the default.</p>
+          </form>
+
+          <p class="note" id="pi-note" role="status"></p>
+        </article>
+
+        <dialog class="card confirm" id="pi-confirm" aria-labelledby="pi-confirm-title">
+          <form method="dialog">
+            <h3 id="pi-confirm-title">Reboot the Pi?</h3>
+            <p class="muted" id="pi-confirm-message"></p>
+            <label class="prompt">
+              <input id="pi-confirm-word" type="text" autocomplete="off" spellcheck="false" autocapitalize="off"
+                     placeholder="reboot" aria-label="Type reboot to confirm">
+            </label>
+            <div class="actions">
+              <button type="submit" class="btn btn-secondary" value="cancel">Cancel</button>
+              <button type="submit" class="btn btn-danger" value="ok" id="pi-confirm-ok" disabled>Reboot</button>
+            </div>
+          </form>
+        </dialog>
       </section>
 
       <section id="console" class="section">
