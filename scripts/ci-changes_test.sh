@@ -30,8 +30,6 @@ check "admin site"        'sites/admin/index.html\n'               'admin deploy
 check "admin command"     'web/cmd/admin/main.go\n'                'admin deploy'
 check "admin tests"       'tests/admin/status.test.js\n'          'admin'
 check "shared stylesheet" 'sites/shared/base.css\n'                'play admin deploy'
-check "serve command"     'web/cmd/serve/main.go\n'                'admin deploy'
-check "portfolio"         'sites/portfolio/index.html\n'           'admin deploy'
 check "agent only"        'web/cmd/mc-agent/main.go\n'             'deploy'
 check "lazymc config"     'lazymc.toml\n'                          'mc_server'
 check "paper config"      'config/paper-global.yml\n'              'mc_server'

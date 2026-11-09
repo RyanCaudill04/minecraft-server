@@ -22,10 +22,10 @@ Units (from `deploy/systemd/` and `deploy/release.json`):
 | `minecraft` | LazyMC, which starts Paper on demand | 25565 public, Paper on 127.0.0.1:25566 |
 | `play` | play.ryancaudill.dev | 127.0.0.1:8082 |
 | `admin` | admin.ryancaudill.dev (behind Cloudflare Access) | 127.0.0.1:8081 |
-| `site@portfolio` | ryancaudill.dev | 127.0.0.1:8080 |
 | `mc-agent.timer` | runs `mc-agent.service` (`mc-agent deploy`) every 2 minutes | |
 
-There is no `site@admin` unit any more; admin is its own `admin` unit.
+There are no `site@` units any more: admin is its own `admin` unit, and
+ryancaudill.dev isn't served from the Pi.
 
 ## Rules
 
@@ -44,7 +44,7 @@ There is no `site@admin` unit any more; admin is its own `admin` unit.
 ## Status
 
 ```bash
-ssh mc-pi 'systemctl --user is-active minecraft play admin site@portfolio mc-agent.timer'
+ssh mc-pi 'systemctl --user is-active minecraft play admin mc-agent.timer'
 ssh mc-pi '~/apps/current/bin/mc-agent status'          # agent version and active release
 ssh mc-pi 'cat ~/apps/active.json; echo; cat ~/apps/failed 2>/dev/null'
 ssh mc-pi 'ls -t ~/apps/releases'                        # installed, newest first
@@ -165,13 +165,13 @@ Never run `start.sh` by hand while LazyMC runs; LazyMC starts it itself.
 Read-only, from the Mac:
 
 ```bash
-for url in https://play.ryancaudill.dev/ https://ryancaudill.dev/ https://admin.ryancaudill.dev/; do
+for url in https://play.ryancaudill.dev/ https://admin.ryancaudill.dev/; do
   printf '%s %s\n' "$(curl -s -o /dev/null -w '%{http_code}' "$url")" "$url"
 done
 ```
 
-Expect `200` for play and the portfolio, and `302` (to the Cloudflare
-Access login) for admin.
+Expect `200` for play and `302` (to the Cloudflare Access login) for
+admin.
 
 Stale Cloudflare caches (#5): compare what play serves with the active
 release's files. Release tags are git tags on the commit they were built

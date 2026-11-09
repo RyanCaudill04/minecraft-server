@@ -186,19 +186,6 @@ jobs:
           # Off a Pi 5, with no owner set, the Pi settings are read-only.
           curl -fsS http://127.0.0.1:8081/api/pi | grep -q '"can_change":false'
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8081/api/status)" = 405
-      - name: static sites smoke test
-        if: needs.changes.outputs.admin == 'true'
-        run: |
-          (cd web && go build -o "$RUNNER_TEMP/serve" ./cmd/serve)
-          for site in portfolio; do
-            port=$(sed -n 's/^ADDR=127\.0\.0\.1:\([0-9]*\)$/\1/p' "deploy/sites/$site.env")
-            test -n "$port" || { echo "::error::deploy/sites/$site.env must bind to 127.0.0.1"; exit 1; }
-            "$RUNNER_TEMP/serve" -dir "sites/$site" -addr "127.0.0.1:$port" &
-            for _ in $(seq 50); do curl -fs "http://127.0.0.1:$port/" >/dev/null && break; sleep 0.1; done
-            curl -fsS "http://127.0.0.1:$port/" | grep -q '<title>'
-            echo "$site OK on $port"
-          done
-
   play-e2e:
     name: play.ryancaudill.dev end-to-end
     needs: changes
@@ -340,7 +327,6 @@ jobs:
           tar -xzf "$RUNNER_TEMP/dist/release.tar.gz" -C "$current"
           units=$(mktemp -d)
           cp "$current"/deploy/systemd/{play.service,admin.service,mc-agent.service,mc-agent.timer,mc-backup.service,mc-backup.timer} "$units/"
-          for site in portfolio; do cp "$current/deploy/systemd/site@.service" "$units/site@$site.service"; done
           systemd-analyze --user --man=no verify "$units"/*
           # Every unit, service and timer the manifest names must be in the
           # release, and the health checks must hit the ports the services
@@ -356,16 +342,11 @@ jobs:
               assert template in m["units"], f"{svc} is not linked by units"
           for timer in m["timers"]:
               assert timer in m["units"], f"{timer} is not linked by units"
-          # site@<name>.service takes its address from deploy/sites/<name>.env;
-          # the others pass -addr on their ExecStart line.
+          # Each service passes -addr on its ExecStart line.
           ports = {}
           for svc in m["services"]:
-              if "@" in svc:
-                  name = svc.split("@")[1].removesuffix(".service")
-                  path, pattern = f"deploy/sites/{name}.env", r"^ADDR=127\.0\.0\.1:(\d+)$"
-              else:
-                  path, pattern = f"deploy/systemd/{svc}", r"-addr 127\.0\.0\.1:(\d+)"
-              found = re.search(pattern, open(os.path.join(root, path)).read(), re.M)
+              path = f"deploy/systemd/{svc}"
+              found = re.search(r"-addr 127\.0\.0\.1:(\d+)", open(os.path.join(root, path)).read())
               assert found, f"{path} has no 127.0.0.1 address"
               ports[svc] = int(found.group(1))
           health = set()
