@@ -568,7 +568,7 @@ var withOldAndAdmin = Manifest{
 
 var withoutThem = Manifest{
 	Units:    []string{"play.service", "site@.service", "mc-agent.timer"},
-	Services: []string{"play.service", "site@portfolio.service"},
+	Services: []string{"play.service", "site@example.service"},
 	Timers:   []string{"mc-agent.timer"},
 }
 
@@ -586,7 +586,7 @@ func TestUpgradeRemovesDroppedUnits(t *testing.T) {
 	}
 	calls := h.takeCalls()
 	// site@admin.service is an instance: its template stays, but it goes.
-	restart := slices.Index(calls, "restart play.service site@portfolio.service")
+	restart := slices.Index(calls, "restart play.service site@example.service")
 	for _, unit := range []string{"old.service", "site@admin.service"} {
 		if i := disabledAt(calls, unit); i < 0 || i > restart {
 			t.Errorf("%s wasn't stopped and disabled before the restart: %q", unit, calls)
@@ -786,7 +786,7 @@ func TestUnlinksUnitsShadowingTheRelease(t *testing.T) {
 	// template in the git checkout, which systemd prefers over the
 	// release's site@.service.
 	checkout := "/home/pi/minecraft_server/deploy/systemd/site@.service"
-	if err := os.Symlink(checkout, filepath.Join(h.d.UnitDir, "site@portfolio.service")); err != nil {
+	if err := os.Symlink(checkout, filepath.Join(h.d.UnitDir, "site@example.service")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -794,15 +794,15 @@ func TestUnlinksUnitsShadowingTheRelease(t *testing.T) {
 	if err := h.d.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if h.linked("site@portfolio.service") {
-		t.Error("site@portfolio.service still shadows the release's template")
+	if h.linked("site@example.service") {
+		t.Error("site@example.service still shadows the release's template")
 	}
 	// The usual enable after daemon-reload moves its enable links; nothing
 	// extra is needed, so an interrupted fix-up is finished by any later run.
 	if got := h.takeCalls(); !reflect.DeepEqual(got, []string{
 		"daemon-reload",
-		"enable play.service site@portfolio.service",
-		"restart play.service site@portfolio.service",
+		"enable play.service site@example.service",
+		"restart play.service site@example.service",
 		"enable --now mc-agent.timer",
 	}) {
 		t.Errorf("systemctl calls = %q", got)
@@ -820,7 +820,7 @@ func TestKeepsLinksThatAreNotShadowing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(rel, filepath.Join(h.d.UnitDir, "site@portfolio.service")); err != nil {
+	if err := os.Symlink(rel, filepath.Join(h.d.UnitDir, "site@example.service")); err != nil {
 		t.Fatal(err)
 	}
 	// A hand-installed unit that's no template instance of the release.
@@ -834,7 +834,7 @@ func TestKeepsLinksThatAreNotShadowing(t *testing.T) {
 	if err := h.d.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !h.linked("site@portfolio.service") {
+	if !h.linked("site@example.service") {
 		t.Error("a relative link into the release was removed")
 	}
 	if !h.linked("minecraft.service") {
@@ -847,7 +847,7 @@ func TestShadowingFileFailsTheDeploy(t *testing.T) {
 	if err := os.MkdirAll(h.d.UnitDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(h.d.UnitDir, "site@portfolio.service")
+	path := filepath.Join(h.d.UnitDir, "site@example.service")
 	if err := os.WriteFile(path, []byte("[Service]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

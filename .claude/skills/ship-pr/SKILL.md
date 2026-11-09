@@ -129,9 +129,9 @@ gh pr checks --watch
 
 `ci-ok` is the one required check. It passes when every scoped job either
 passed or was skipped because nothing in its scope changed. Report `ci-ok`
-and the scoped jobs that ran (`go (vet, test, build)`,
-`play.ryancaudill.dev`, `admin.ryancaudill.dev and static sites`,
-`Minecraft server config`, `deploy files, scripts and workflows`). If a job
+and the scoped jobs that ran (`go (vet, test, build, smoke tests)`,
+`play.ryancaudill.dev end-to-end`, `Minecraft server config`,
+`deploy files, scripts and workflows`). If a job
 fails, read it with `gh run view --log-failed`, fix it in a new commit,
 and push.
 
