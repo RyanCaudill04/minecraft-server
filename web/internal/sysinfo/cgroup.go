@@ -76,7 +76,7 @@ func (r *Reader) services(f func(name, dir string) error) {
 
 // unitCgroup finds a running unit's cgroup folder in parent. systemd puts
 // each instance of a template unit in a slice of its own, so
-// site@portfolio.service is in app-site.slice/ rather than next to the
+// site@example.service is in app-site.slice/ rather than next to the
 // other units.
 func unitCgroup(parent, name string) (string, error) {
 	dir := filepath.Join(parent, name)

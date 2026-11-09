@@ -26,10 +26,10 @@ func TestServiceMemory(t *testing.T) {
 			// aren't.
 			cgroupSlice + "/nomem.service/cpu.stat": "usage_usec 5\n",
 			// Template instances are in a slice of their own.
-			cgroupSlice + "/app-site.slice/site@portfolio.service/memory.current": "9000000\n",
-			cgroupSlice + "/app-site.slice/site@portfolio.service/memory.stat":    "inactive_file 1000000\n",
+			cgroupSlice + "/app-site.slice/site@example.service/memory.current": "9000000\n",
+			cgroupSlice + "/app-site.slice/site@example.service/memory.stat":    "inactive_file 1000000\n",
 		}),
-		Services: []string{"minecraft.service", "mc-backup.service", "admin.service", "play.service", "site@portfolio.service", "site@other.service", "broken.service", "nomem.service", "../user.slice", ""},
+		Services: []string{"minecraft.service", "mc-backup.service", "admin.service", "play.service", "site@example.service", "site@other.service", "broken.service", "nomem.service", "../user.slice", ""},
 		Run:      noVcgencmd,
 		Errs:     func(name string, err error) { errs = append(errs, name) },
 	}
@@ -38,7 +38,7 @@ func TestServiceMemory(t *testing.T) {
 		{Name: "minecraft.service", Memory: 10 << 30},
 		{Name: "admin.service", Memory: 18000000},
 		{Name: "play.service", Memory: 0},
-		{Name: "site@portfolio.service", Memory: 8000000},
+		{Name: "site@example.service", Memory: 8000000},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("services = %+v, want %+v", got, want)
