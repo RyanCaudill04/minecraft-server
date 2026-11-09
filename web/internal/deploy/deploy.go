@@ -578,7 +578,7 @@ func (d *Deployer) remove(ctx context.Context, r *Manifest) {
 }
 
 // unshadow removes links in the unit folder named after one of m's
-// template instances, such as site@portfolio.service, when the release
+// template instances, such as site@example.service, when the release
 // ships the template. systemd prefers a unit file with the instance's exact
 // name over the template, so such a link (left from installing by hand)
 // would keep the service running from wherever it points instead of the

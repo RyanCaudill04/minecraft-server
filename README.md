@@ -252,7 +252,6 @@ only. Cloudflare Tunnel carries public traffic to it (see
 | --- | --- | --- | --- | --- |
 | play | [`web/cmd/play`](web/cmd/play) | play.ryancaudill.dev | `127.0.0.1:8082` | The player dashboard ([`sites/play`](sites/play)) and `GET /api/status`, `/api/world`, `/api/players`, plus squaremap's tiles at `/map/` |
 | admin | [`web/cmd/admin`](web/cmd/admin) | admin.ryancaudill.dev | `127.0.0.1:8081` | The admin page ([`sites/admin`](sites/admin)) and `GET /api/status`, `/api/deploy`, `/api/plugins`, `/api/me`, `/api/logs`, plus `POST /api/console` (RCON) and `POST /api/server/{action}` (start, stop, restart, wake). Behind Cloudflare Access |
-| portfolio | [`web/cmd/serve`](web/cmd/serve) | ryancaudill.dev | `127.0.0.1:8080` | The static [`sites/portfolio`](sites/portfolio) folder |
 | mc-agent | [`web/cmd/mc-agent`](web/cmd/mc-agent) | none | none | Installs releases on the Pi (see [Releases](#releases-and-deploys)) |
 | mc-players | [`web/cmd/mc-players`](web/cmd/mc-players) | none | none | A command-line tool that prints who is online. It isn't part of a release |
 | mc-rcon | [`web/cmd/mc-rcon`](web/cmd/mc-rcon) | none | none | A command-line RCON client (see [RCON](#rcon)) |
@@ -267,14 +266,9 @@ only. Cloudflare Tunnel carries public traffic to it (see
   releases into: the active tag, its release notes, and when it was built and
   applied.
 - **Shared files.** `sites/shared/` is served at `/shared/` by play and admin.
-- **Static sites.** `serve` runs from the template unit
-  [`site@.service`](deploy/systemd/site@.service). The instance name is the
-  site, and its address is in `deploy/sites/<site>.env`. play's address is
-  set in `play.service`; nothing reads `deploy/sites/play.env` today.
 - **Caching.** play and admin serve their static files with
   `Cache-Control: no-cache` and their API with `no-store`, so a new release
-  shows up without purging Cloudflare's cache. `serve` sets no
-  `Cache-Control`, so the portfolio may need a purge after a release.
+  shows up without purging Cloudflare's cache.
 
 Shared Go code is in `web/internal/`: `site` (static files and JSON),
 `mcstatus` and `ping` (status pings), `world` and `nbt` (world files), and
@@ -292,7 +286,6 @@ go test -race ./...
 # folder has no world/, as in a fresh clone).
 go run ./cmd/play -dir ../sites/play -shared ../sites/shared -server .. -addr 127.0.0.1:8082
 go run ./cmd/admin -dir ../sites/admin -shared ../sites/shared -addr 127.0.0.1:8081
-go run ./cmd/serve -dir ../sites/portfolio -addr 127.0.0.1:8080
 ```
 
 The script tests run from the repo root:
@@ -318,7 +311,7 @@ to `main`, and by hand.
    | --- | --- | --- |
    | go | always | `gofmt`, `go vet`, `go test -race`, an arm64 build |
    | play | `web/cmd/play`, `sites/play`, shared code | JS syntax, smoke test of the built server |
-   | admin | `web/cmd/admin`, `web/cmd/serve`, `sites/admin`, `sites/portfolio`, shared code | JS syntax, smoke tests of admin and each static site |
+   | admin | `web/cmd/admin`, `sites/admin`, `tests/admin`, shared code | JS syntax, unit tests of the page's helpers, smoke test of admin |
    | mc_server | server configs, jars, `start.sh`, `config/`, `plugins/` | `shellcheck start.sh`, `lazymc.toml` addresses, no secrets in `server.properties.example` |
    | infra | `deploy/`, `scripts/`, `.github/` | actionlint, shellcheck, the script tests, a test release whose units `systemd-analyze` verifies |
 
@@ -344,9 +337,8 @@ To build a release by hand (it needs Go, and `jq` if you pass notes):
 scripts/build-release.sh <tag> <output folder> [notes.json]
 ```
 
-The tarball holds the arm64 binaries in `bin/` (play, admin, serve,
-mc-agent, mc-rcon), `sites/`, `deploy/systemd/`, `deploy/sites/`, `deploy/backup/`,
-`deploy/release.json`, `deploy/notes.json` when notes were given, and
+The tarball holds the arm64 binaries in `bin/` (play, admin, mc-agent,
+mc-rcon), `sites/`, `deploy/systemd/`, `deploy/backup/`, `deploy/release.json`, `deploy/notes.json` when notes were given, and
 `VERSION`.
 
 ## Releases and deploys
@@ -432,12 +424,11 @@ opened for the websites.
 
    | Hostname | Service |
    | --- | --- |
-   | `<your-domain>` | `http://127.0.0.1:8080` (portfolio) |
    | `admin.<your-domain>` | `http://127.0.0.1:8081` (admin) |
    | `play.<your-domain>` | `http://127.0.0.1:8082` (play) |
 
-   The addresses come from the units in `deploy/systemd/` and the env files in
-   `deploy/sites/`. If you change one, change the tunnel too.
+   The addresses come from the units in `deploy/systemd/`. If you change one,
+   change the tunnel too.
 
 TODO (owner):
 - How `cloudflared` is installed and run on the Pi (package, system service,
