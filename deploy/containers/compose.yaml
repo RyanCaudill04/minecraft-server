@@ -1,0 +1,83 @@
+# The three containers on the Pi: mc-server, play and admin.
+#
+# mc-containers.service runs this through stack.sh, which fills in the
+# variables below: the images the release pins (deploy/images.env), the
+# host's folders, and the Pi user's IDs. Run stack.sh rather than compose
+# by hand.
+#
+# All three share the Pi's network, so every port is where it was before
+# containers: LazyMC on 0.0.0.0:25565, Paper on 127.0.0.1:25566, RCON on
+# 127.0.0.1:25575, admin on 127.0.0.1:8081 and play on 127.0.0.1:8082.
+# cloudflared, the router's port forward, and mc-backup and mc-rcon on the
+# host need no changes. Each runs as the Pi's user, so the files they
+# write keep their owner.
+name: minecraft
+
+x-host-user: &host-user
+  user: "${HOST_UID:?run stack.sh}:${HOST_GID:?run stack.sh}"
+  network_mode: host
+  restart: unless-stopped
+
+services:
+  mc-server:
+    <<: *host-user
+    image: ${MC_SERVER_IMAGE:?run stack.sh}
+    container_name: mc-server
+    # A small init runs entrypoint.sh, which stops LazyMC and Paper
+    # together, and reaps what they leave behind.
+    init: true
+    # Longer than LazyMC's stop_timeout (180 s), so Paper can save.
+    stop_grace_period: 240s
+    environment:
+      MC_HEAP: ${MC_HEAP:-10G}
+    volumes:
+      - ${SERVER_DIR:?run stack.sh}:/server
+
+  play:
+    <<: *host-user
+    image: ${PLAY_IMAGE:?run stack.sh}
+    container_name: play
+    read_only: true
+    command: [-server, /server, -addr, 127.0.0.1:8082]
+    volumes:
+      - ${SERVER_DIR:?run stack.sh}:/server:ro
+
+  admin:
+    <<: *host-user
+    image: ${ADMIN_IMAGE:?run stack.sh}
+    container_name: admin
+    read_only: true
+    # The Docker socket's group, to start and stop mc-server. That's as
+    # much as root on the Pi; Cloudflare Access and admin's own token check
+    # stand in front of it, and only the server controls use it.
+    group_add:
+      - "${DOCKER_GID:?run stack.sh}"
+    env_file:
+      - path: ${SECRETS_ENV:?run stack.sh}
+        required: false
+    environment:
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-}
+    command:
+      - -server
+      - /server
+      - -apps
+      - /apps
+      - -backups
+      - /backups
+      - -addr
+      - 127.0.0.1:8081
+      - -container
+      - mc-server
+      - -host-root
+      - /host
+    volumes:
+      - ${SERVER_DIR:?run stack.sh}:/server:ro
+      # Deploy state from mc-agent, and the backups admin flags and deletes.
+      - ${APPS_DIR:?run stack.sh}:/apps:ro
+      - ${BACKUP_DIR:?run stack.sh}:/backups
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      # The Pi's own temperature, memory, load, disks and network for
+      # /api/health, and its firmware settings, shown read-only.
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /boot/firmware:/host/boot/firmware:ro

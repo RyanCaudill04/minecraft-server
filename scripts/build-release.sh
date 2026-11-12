@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Builds a release for the Pi: arm64 binaries, the sites play and admin
-# serve, and the deploy files, packed as release.tar.gz plus a SHA-256
-# checksum file.
+# Builds a release for the Pi: the host's arm64 binaries (mc-agent, mc-rcon
+# for mc-backup, and pi-firmware), the deploy files, and the container
+# images the release runs (deploy/images.env, from images.sh), packed as
+# release.tar.gz plus a SHA-256 checksum file. play, admin and mc-server
+# themselves ship as images, which CI pushes before it publishes the
+# release.
 # A notes file (from release-notes.sh) ships as deploy/notes.json.
 #
 # Usage: scripts/build-release.sh <tag> <output folder> [notes.json]
@@ -17,19 +20,21 @@ trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/bin" "$out"
 (
   cd "$root/web"
-  for cmd in play admin mc-agent mc-rcon pi-firmware; do
+  for cmd in mc-agent mc-rcon pi-firmware; do
     CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
       -ldflags "-s -w -X main.version=$tag" -o "$stage/bin/$cmd" "./cmd/$cmd"
   done
 )
 
-cp -R "$root/sites" "$stage/sites"
-mkdir -p "$stage/deploy/systemd"
+mkdir -p "$stage/deploy/systemd" "$stage/deploy/containers"
 # deploy/pi-firmware ships for installing by hand as root; mc-agent never
 # installs it.
 cp -R "$root/deploy/backup" "$root/deploy/pi-firmware" "$root/deploy/release.json" "$stage/deploy/"
-# Only the units the manifest links. The others in deploy/systemd, like
-# minecraft.service, are linked from the server checkout instead.
+# mc-containers.service runs these; the Dockerfiles beside them are only
+# for building the images.
+cp "$root/deploy/containers/compose.yaml" "$root/deploy/containers/stack.sh" "$stage/deploy/containers/"
+"$root/scripts/images.sh" "$tag" >"$stage/deploy/images.env"
+# Only the units the manifest links.
 jq -r '.units[]' "$root/deploy/release.json" | while read -r unit; do
   cp "$root/deploy/systemd/$unit" "$stage/deploy/systemd/"
 done
