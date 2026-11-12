@@ -44,7 +44,7 @@ ryancaudill.dev isn't served from the Pi.
 ## Status
 
 ```bash
-ssh mc-pi 'systemctl --user is-active minecraft play admin mc-agent.timer'
+ssh mc-pi 'systemctl --user is-active mc-containers mc-agent.timer; docker ps --format "{{.Names}} {{.Status}}"'
 ssh mc-pi '~/apps/current/bin/mc-agent status'          # agent version and active release
 ssh mc-pi 'cat ~/apps/active.json; echo; cat ~/apps/failed 2>/dev/null'
 ssh mc-pi 'ls -t ~/apps/releases'                        # installed, newest first
@@ -72,8 +72,9 @@ Use `--user-unit`. `journalctl --user -u <unit>` finds nothing on this Pi.
 
 ```bash
 ssh mc-pi 'journalctl --user-unit mc-agent.service -n 50 --no-pager'   # deploys
-ssh mc-pi 'journalctl --user-unit play -n 100 --no-pager'
-ssh mc-pi 'journalctl --user-unit minecraft -n 100 --no-pager'         # LazyMC
+ssh mc-pi 'docker logs --tail 100 play'
+ssh mc-pi 'docker logs --tail 100 mc-server'                           # LazyMC and Paper
+ssh mc-pi 'journalctl --user-unit mc-containers -n 50 --no-pager'     # compose up on deploys
 ssh mc-pi 'tail -n 100 ~/minecraft_server/logs/latest.log'             # Paper
 ```
 
@@ -143,20 +144,20 @@ follow whatever it adds instead.
 1. Check `/api/status` (see Status): `online` must be `0`. If it isn't,
    stop and tell the user who is on.
 2. Ask the user, naming the action.
-3. Stop and confirm Paper saved. `minecraft.service` sends SIGTERM to
-   LazyMC and Paper; Paper saves the world and exits (systemd waits up to
-   240s):
+3. Stop and confirm Paper saved. Stopping the `mc-server` container sends
+   SIGTERM to LazyMC and Paper; Paper saves the world and exits (Docker
+   waits up to 240s):
 
    ```bash
-   ssh mc-pi 'systemctl --user stop minecraft'
+   ssh mc-pi 'docker stop -t 240 mc-server'
    ssh mc-pi 'grep -n "All dimensions are saved" ~/minecraft_server/logs/latest.log | tail -n 1'
    ```
 
    If Paper was asleep (state `sleeping`), there is nothing to save and no
    new line is expected. If it was `active` and the line is missing, don't
    start it again; show the log tail to the user.
-4. Start it again: `ssh mc-pi 'systemctl --user start minecraft'`, then
-   check `is-active minecraft` and `/api/status` (expect `sleeping`).
+4. Start it again: `ssh mc-pi 'docker start mc-server'`, then check
+   `docker ps` and `/api/status` (expect `sleeping`).
 
 Never run `start.sh` by hand while LazyMC runs; LazyMC starts it itself.
 

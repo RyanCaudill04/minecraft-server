@@ -3,11 +3,84 @@
 Configuration, launcher files and web apps for the Raspberry Pi Minecraft
 server. The repo holds three things:
 
-- the Paper server's configuration, plugins and launcher (`start.sh`,
-  `lazymc.toml`, `config/`, `plugins/`),
+- the Paper server's configuration and plugins (`config/`, `plugins/`),
 - the Go web apps under [`web/`](web) and their pages under [`sites/`](sites),
-- the deploy files under [`deploy/`](deploy) and the CI/CD pipeline in
-  [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+- the deploy files under [`deploy/`](deploy), including the three containers
+  the Pi runs ([`deploy/containers`](deploy/containers)), and the CI/CD
+  pipeline in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+## Containers
+
+The Pi runs three containers with Docker Compose
+([`deploy/containers/compose.yaml`](deploy/containers/compose.yaml)):
+
+| Container | Image | What it runs |
+| --- | --- | --- |
+| `mc-server` | `ghcr.io/ryancaudill04/minecraft-server/mc-server` | LazyMC and Paper ([`Dockerfile`](deploy/containers/mc-server/Dockerfile)), with Java 25 and the pinned Paper jar and libraries inside the image |
+| `play` | `ghcr.io/ryancaudill04/minecraft-server/play` | play.ryancaudill.dev ([`Dockerfile`](deploy/containers/web/Dockerfile), target `play`) |
+| `admin` | `ghcr.io/ryancaudill04/minecraft-server/admin` | admin.ryancaudill.dev (the same Dockerfile, target `admin`) |
+
+- **Data stays on the Pi.** The world, configs, plugins and
+  `server.properties` are in the server folder (`~/minecraft_server`), which
+  is mounted at `/server`. play and admin mount it read-only. Images hold
+  only programs.
+- **Networking is unchanged.** All three use the Pi's own network, so LazyMC
+  is on `0.0.0.0:25565`, Paper on `127.0.0.1:25566`, RCON on
+  `127.0.0.1:25575`, admin on `127.0.0.1:8081` and play on `127.0.0.1:8082`,
+  as before. cloudflared, the router, `mc-backup` and `mc-rcon` work as they
+  did.
+- **Files keep their owner.** Each container runs as the Pi's user.
+- **Deploys.** [`mc-containers.service`](deploy/systemd/mc-containers.service)
+  runs [`stack.sh`](deploy/containers/stack.sh), which runs
+  `docker compose up` with the images the release pins in
+  `deploy/images.env`. mc-agent restarts it on every deploy (see
+  [Releases](#releases-and-deploys)). play and admin are rebuilt for every
+  release. mc-server's tag is a hash of its inputs
+  ([`scripts/images.sh`](scripts/images.sh)), so the server only restarts
+  when its image changes.
+- **admin's controls** start and stop the `mc-server` container through the
+  Docker socket. From its container, admin can't run `mc-backup.service` or
+  change the Pi's firmware settings: the nightly backup still runs on the
+  host, and the Pi settings show read-only.
+
+Day to day, on the Pi:
+
+```bash
+docker ps                                    # the three containers
+docker logs -f mc-server                     # LazyMC and Paper
+~/apps/current/deploy/containers/stack.sh up # re-apply the active release
+docker stop mc-server                        # stop the server (Paper saves first)
+docker start mc-server
+```
+
+Host settings go in `~/.config/minecraft/host.env`: `SERVER_DIR`,
+`BACKUP_DIR`, `BACKUP_KEEP_DAYS` and `MC_HEAP` (Paper's heap, default `10G`).
+After changing one, run `systemctl --user restart mc-containers`.
+
+### Moving the Pi to containers
+
+Do this before merging the first container release into `main`. mc-agent
+deploys within minutes of the release, and `mc-server` can't take port 25565
+while `minecraft.service` holds it.
+
+1. Install Docker Engine and the Compose plugin
+   (`curl -fsSL https://get.docker.com | sh`, or Docker's apt repository),
+   then `sudo usermod -aG docker "$USER"` and log in again. Check with
+   `docker compose version`.
+2. Stop the old server and keep it off:
+   `systemctl --user disable --now minecraft` and remove its link,
+   `rm ~/.config/systemd/user/minecraft.service`. The server is down from
+   here until the release deploys.
+3. Restart the user manager, so user units such as mc-agent get the docker
+   group: `sudo systemctl restart user@$(id -u)`.
+4. After the release's first push, make the three GHCR packages public
+   (GitHub > Packages > each package > Package settings > Change
+   visibility), so the Pi can pull them without logging in.
+
+mc-agent then installs the release: it stops and unlinks `play.service` and
+`admin.service`, starts `mc-containers.service`, and waits for play and admin
+to answer. A rollback to an older release stops the play and admin
+containers and starts the old units again, and leaves `mc-server` running.
 
 ## Connection details
 
@@ -27,52 +100,32 @@ Before enabling services such as RCON or the Paper management server, keep their
 
 ## RCON
 
-RCON replaces the console now that Paper runs under systemd. It listens on `127.0.0.1:25575` only, because RCON binds to `server-ip` (`127.0.0.1`); never forward that port. Set `enable-rcon=true` and a long random `rcon.password` in the ignored `server.properties` on the Pi, and the same password as `RCON_PASSWORD` in `~/.config/minecraft/secrets.env` (mode `0600`), which `admin.service` loads. Then run commands over SSH with `~/apps/current/bin/mc-rcon list`, or from the admin page's Console. RCON only answers while Paper is awake; LazyMC keeps it asleep until someone joins.
+RCON replaces the console now that Paper runs in a container. It listens on `127.0.0.1:25575` only, because RCON binds to `server-ip` (`127.0.0.1`); never forward that port. Set `enable-rcon=true` and a long random `rcon.password` in the ignored `server.properties` on the Pi, and the same password as `RCON_PASSWORD` in `~/.config/minecraft/secrets.env` (mode `0600`), which compose passes to the admin container. Then run commands over SSH with `~/apps/current/bin/mc-rcon list`, or from the admin page's Console. RCON only answers while Paper is awake; LazyMC keeps it asleep until someone joins.
 
 ## Paper server files
 
-`start.sh` needs `versions/26.2/paper-26.2.jar` and `libraries/`. Neither is
-in Git. `server.jar` is the Paperclip launcher, and running it once patches
-and writes both. Minecraft 26.1 and newer needs Java 25 or above. From a fresh
-clone, in the server folder:
-
-```bash
-java -Dpaperclip.patchonly=true -jar server.jar
-```
-
-`-Dpaperclip.patchonly=true` writes the files and exits instead of starting
-the server. Copy `server.properties.example` to `server.properties` before
-the first real start.
-
-A clone made before these files were untracked deletes them on its next
-`git pull`. Copy them aside first, or run the command above again afterwards.
+The `mc-server` image holds Java 25, LazyMC and the patched Paper jar with
+its `libraries/`. Its build runs [`scripts/fetch-server.sh --patch`](scripts/fetch-server.sh),
+which downloads what [`deploy/server.json`](deploy/server.json) pins and runs
+Paperclip, checking every SHA-256. The server folder doesn't need
+`server.jar`, `versions/`, `libraries/` or `lazymc` any more. Copy
+`server.properties.example` to `server.properties` before the first start.
 
 ## LazyMC
 
-[`lazymc.toml`](lazymc.toml) puts the Paper server to sleep when it has no
-players and wakes it when somebody connects. LazyMC listens publicly on TCP
-port `25565`; while it is running, Paper is automatically bound privately to
-`127.0.0.1:25566`. Keep the router forwarding TCP `25565` only.
+[`deploy/containers/mc-server/lazymc.toml`](deploy/containers/mc-server/lazymc.toml)
+puts the Paper server to sleep when it has no players and wakes it when
+somebody connects. LazyMC listens publicly on TCP port `25565`; while it is
+running, Paper is automatically bound privately to `127.0.0.1:25566`. Keep
+the router forwarding TCP `25565` only.
 
-On the Raspberry Pi, install the Linux ARM64 LazyMC release binary in this
-directory as `lazymc`, then start it from the server directory:
-
-```bash
-chmod +x ./lazymc
-./lazymc --help
-./lazymc start
-```
-
-Do not run `start.sh` while LazyMC is running; LazyMC launches it itself. The
-first connection wakes Paper. If Paper takes more than 25 seconds to start,
-the player will be asked to reconnect once it is ready. Test a complete
-start-and-idle-stop cycle while watching LazyMC's output before treating this
-as a production deployment.
-
-On the Pi, LazyMC runs as the systemd user unit
-[`deploy/systemd/minecraft.service`](deploy/systemd/minecraft.service). That
-unit is installed by hand from the git checkout in `~/minecraft_server` (the
-steps are in the file), not by mc-agent.
+The container's entrypoint ([`entrypoint.sh`](deploy/containers/mc-server/entrypoint.sh))
+runs LazyMC, which runs [`start.sh`](deploy/containers/mc-server/start.sh)
+on demand. The first connection wakes Paper. If Paper takes more than 25
+seconds to start, the player is asked to reconnect once it's ready.
+`docker stop mc-server` sends SIGTERM to LazyMC and Paper together (with
+SIGCONT, in case LazyMC froze Paper to sleep), and waits for Paper to save,
+up to 4 minutes.
 
 ## Pinned server versions
 
@@ -95,20 +148,21 @@ pinned URL still serves the pinned file.
 
 ### Applying a server update on the Pi
 
-Server files don't deploy automatically yet (#15). After a change to
-`deploy/server.json` or `plugins/manifest.json` is merged, from the checkout
+A change to `deploy/server.json` changes the `mc-server` image's tag, so it
+ships with the next release: mc-agent's deploy recreates the container,
+which restarts the server. Back up first if it matters
+(`systemctl --user start mc-backup`).
+
+Plugins are still in the server folder and don't deploy automatically yet
+(#15). After a change to `plugins/manifest.json` is merged, from the checkout
 on the Pi:
 
 ```bash
 systemctl --user start mc-backup   # back up first; check journalctl --user -u mc-backup
-systemctl --user stop minecraft
-git pull && scripts/fetch-server.sh --replace --patch ~/minecraft_server
-systemctl --user start minecraft
+docker stop mc-server
+git pull && scripts/fetch-server.sh --replace ~/minecraft_server
+docker start mc-server
 ```
-
-Because `start.sh` puts every JAR under `libraries/` on the classpath, delete
-the folder of any library version Paper no longer lists (for example an old
-`libraries/io/papermc/paper/paper-api/<build>/`) before starting.
 
 ## Server folder
 
@@ -129,8 +183,8 @@ running it again with `--checkout ~/src/minecraft-server` finishes the job.
 
 `mc-backup.timer` runs [`deploy/backup/mc-backup.sh`](deploy/backup/mc-backup.sh)
 every night at about 04:30. It ships in the release, so mc-agent installs and
-updates it like the web apps. It never starts, stops or waits on
-`minecraft.service`. Each run writes
+updates it like the containers. It never starts, stops or waits on
+the `mc-server` container. Each run writes
 `~/backups/minecraft/world-YYYYmmdd-HHMMSS.tar.gz` with a `.sha256` file next
 to it, checks the archive, and removes backups 10 days old or older, except
 ones flagged for safe keeping. An archive holds `world`,
@@ -244,14 +298,15 @@ against it.
 
 ## Web apps
 
-Each app is a small Go server in `web/cmd/<name>`. It listens on loopback
+Each app is a small Go server in `web/cmd/<name>`. play and admin run in
+their own containers (see [Containers](#containers)) and listen on loopback
 only. Cloudflare Tunnel carries public traffic to it (see
 [Outside setup](#outside-setup)).
 
 | App | Command | Site | Address | What it serves |
 | --- | --- | --- | --- | --- |
 | play | [`web/cmd/play`](web/cmd/play) | play.ryancaudill.dev | `127.0.0.1:8082` | The player dashboard ([`sites/play`](sites/play)) and `GET /api/status`, `/api/world`, `/api/players`, plus squaremap's tiles at `/map/` |
-| admin | [`web/cmd/admin`](web/cmd/admin) | admin.ryancaudill.dev | `127.0.0.1:8081` | The admin page ([`sites/admin`](sites/admin)) and `GET /api/status`, `/api/deploy`, `/api/plugins`, `/api/me`, `/api/logs`, plus `POST /api/console` (RCON) and `POST /api/server/{action}` (start, stop, restart, wake). Behind Cloudflare Access |
+| admin | [`web/cmd/admin`](web/cmd/admin) | admin.ryancaudill.dev | `127.0.0.1:8081` | The admin page ([`sites/admin`](sites/admin)) and `GET /api/status`, `/api/deploy`, `/api/plugins`, `/api/me`, `/api/logs`, plus `POST /api/console` (RCON) and `POST /api/server/{action}` (start, stop or restart the `mc-server` container, or wake Paper). Behind Cloudflare Access |
 | mc-agent | [`web/cmd/mc-agent`](web/cmd/mc-agent) | none | none | Installs releases on the Pi (see [Releases](#releases-and-deploys)) |
 | mc-players | [`web/cmd/mc-players`](web/cmd/mc-players) | none | none | A command-line tool that prints who is online. It isn't part of a release |
 | mc-rcon | [`web/cmd/mc-rcon`](web/cmd/mc-rcon) | none | none | A command-line RCON client (see [RCON](#rcon)) |
@@ -332,16 +387,19 @@ to `main` or `dev`, and by hand.
    | go | always | `gofmt`, `go vet`, `go test -race`, an arm64 build |
    | play | `web/cmd/play`, `sites/play`, shared code | JS syntax, smoke test of the built server |
    | admin | `web/cmd/admin`, `sites/admin`, `tests/admin`, shared code | JS syntax, unit tests of the page's helpers, smoke test of admin |
-   | mc_server | server configs, jars, `start.sh`, `config/`, `plugins/` | `shellcheck start.sh`, `lazymc.toml` addresses, no secrets in `server.properties.example` |
-   | infra | `deploy/`, `scripts/`, `.github/` | actionlint, shellcheck, the script tests, a test release whose units `systemd-analyze` verifies |
+   | mc_server | server configs, jars, `deploy/containers/mc-server`, `config/`, `plugins/` | shellcheck of the container's scripts, `lazymc.toml` addresses and paths, no secrets in `server.properties.example` |
+   | infra | `deploy/`, `scripts/`, `.github/` | actionlint, shellcheck, the script tests, a test release whose units `systemd-analyze` verifies and whose compose ports match its health checks |
+   | images | anything that goes into an image: `web/`, `sites/`, `deploy/containers/`, `deploy/server.json`, `scripts/fetch-server.sh` | builds the three arm64 images on an arm64 runner and runs them with `stack.sh` as the Pi does: play sees a sleeping LazyMC, admin answers, and a stop is clean |
 
    Any change under `.github/` turns every scope on.
 3. **ci-ok** passes when every job passed or was skipped. It is the one check
    branch protection requires.
 4. **release** runs on `main` after ci-ok, when something that ships changed
-   (`web/`, `sites/`, `deploy/`, `scripts/build-release.sh` or the workflows),
-   or on a manual run. It:
+   (`web/`, `sites/`, `deploy/`, the release and image scripts or the
+   workflows), or on a manual run. It:
    - picks the next tag, `r<N+1>`,
+   - builds and pushes the `play` and `admin` images tagged `r<N+1>`, and the
+     `mc-server` image if its inputs changed, to GHCR,
    - writes release notes: [`scripts/release-changes.sh`](scripts/release-changes.sh)
      lists the PRs merged since the last tag, and
      [`scripts/release-notes.sh`](scripts/release-notes.sh) turns them into
@@ -360,9 +418,11 @@ To build a release by hand (it needs Go, and `jq` if you pass notes):
 scripts/build-release.sh <tag> <output folder> [notes.json]
 ```
 
-The tarball holds the arm64 binaries in `bin/` (play, admin, mc-agent,
-mc-rcon), `sites/`, `deploy/systemd/`, `deploy/backup/`, `deploy/release.json`, `deploy/notes.json` when notes were given, and
-`VERSION`.
+The tarball holds the host's arm64 binaries in `bin/` (mc-agent, mc-rcon
+and pi-firmware), `deploy/systemd/`, `deploy/backup/`, `deploy/containers/`
+(`compose.yaml` and `stack.sh`), `deploy/images.env` (the images it pins),
+`deploy/release.json`, `deploy/notes.json` when notes were given, and
+`VERSION`. play, admin and mc-server ship as images.
 
 ## Releases and deploys
 
@@ -380,13 +440,14 @@ of `mc-agent deploy`:
    switch in `~/apps/active.json`.
 5. Links each unit in [`deploy/release.json`](deploy/release.json) into
    `~/.config/systemd/user` through `current`, reloads systemd, enables and
-   restarts the listed services, and enables the timers.
+   restarts the listed services (`mc-containers.service`, which brings the
+   containers up on the release's images), and enables the timers.
 6. Waits for every health URL in `release.json` to answer.
 
 If any step after the switch fails, mc-agent switches back to the previous
 release and writes the tag to `~/apps/failed`, so it isn't retried. Publish a
 new release to try again. It keeps the 5 newest releases and removes older
-ones. It never touches units installed by hand, such as `minecraft.service`.
+ones. It never touches units installed by hand.
 
 Other commands, run on the Pi:
 
@@ -450,7 +511,7 @@ opened for the websites.
    | `admin.<your-domain>` | `http://127.0.0.1:8081` (admin) |
    | `play.<your-domain>` | `http://127.0.0.1:8082` (play) |
 
-   The addresses come from the units in `deploy/systemd/`. If you change one,
+   The addresses come from `-addr` in `deploy/containers/compose.yaml`. If you change one,
    change the tunnel too.
 
 TODO (owner):
