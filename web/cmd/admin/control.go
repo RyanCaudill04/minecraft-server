@@ -119,8 +119,8 @@ func (a *app) serverAction(w http.ResponseWriter, r *http.Request, user string) 
 		writeError(w, http.StatusConflict, lockedTrial)
 		return
 	}
-	log.Printf("admin: audit: %s: %s %s", user, act, control.Unit)
-	// Finish asking systemd even if the browser goes away.
+	log.Printf("admin: audit: %s: %s %s", user, act, a.serverName())
+	// Finish asking Docker (or systemd) even if the browser goes away.
 	err := a.control.Do(context.WithoutCancel(r.Context()), act)
 	a.status.Reset()
 	switch {
@@ -128,9 +128,9 @@ func (a *app) serverAction(w http.ResponseWriter, r *http.Request, user string) 
 		writeError(w, http.StatusConflict, "The server is still starting or stopping. Try again when it's done.")
 	case err != nil:
 		log.Printf("admin: %s: %v", act, err)
-		writeError(w, http.StatusBadGateway, "systemd refused: see admin's log.")
+		writeError(w, http.StatusBadGateway, "The server's controls refused: see admin's log.")
 	default:
-		// Accepted: systemd has queued it, and /api/status shows the rest.
+		// Accepted: it's started or under way, and /api/status shows the rest.
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusAccepted)
@@ -329,4 +329,13 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// serverName is what the controls act on, for the audit log: the container
+// in containers, else the unit.
+func (a *app) serverName() string {
+	if a.container != "" {
+		return a.container
+	}
+	return control.Unit
 }

@@ -119,7 +119,7 @@ function showAll(ul, count, shown, rerender) {
 }
 
 // The pill, the Overview card and the Server card all show summary(), so
-// they agree; the Server card adds systemd's detail below it.
+// they agree; the Server card adds Docker's detail below it.
 function renderStatus() {
   const s = data.status;
   const sum = summary(s);
@@ -473,9 +473,9 @@ function renderPaperHealth(p) {
 // ---------- Server controls ----------
 
 const ACTIONS = {
-  start: { doing: "Starting the server…", done: "Asked systemd to start the server." },
-  stop: { doing: "Stopping the server…", done: "Asked systemd to stop the server. Paper saves first." },
-  restart: { doing: "Restarting the server…", done: "Asked systemd to restart the server. Paper saves first." },
+  start: { doing: "Starting the server…", done: "Asked Docker to start the server." },
+  stop: { doing: "Stopping the server…", done: "Asked Docker to stop the server. Paper saves first." },
+  restart: { doing: "Restarting the server…", done: "Asked Docker to restart the server. Paper saves first." },
   wake: { doing: "Waking Paper…", done: "LazyMC is starting Paper. The console works once it's up." },
 };
 
@@ -554,7 +554,7 @@ function setLink(id, link, text) {
   li.querySelector(".link-state").textContent = text;
 }
 
-// systemd's unit, then LazyMC and Paper as the status ping sees them.
+// Docker's container state, then LazyMC and Paper as the status ping sees them.
 function renderChain(s, st) {
   const unit = {
     active: ["on", "Active"],
@@ -1101,7 +1101,9 @@ function renderBackups() {
   $("backup-newest-at").textContent = list[0] ? fmtDate(list[0].created) : "";
   $("backup-free").textContent = d?.free != null ? fmtBytes(d.free) : "–";
 
-  const [run, runText] = BACKUP_UNIT[d?.unit?.active] ?? ["unknown", d ? "Can't read mc-backup.service." : "Couldn't read the backups."];
+  // admin's container can't reach the host's systemd, so there's no unit
+  // state there and Run now stays off; the nightly timer still runs.
+  const [run, runText] = BACKUP_UNIT[d?.unit?.active] ?? ["unknown", d ? "Runs nightly on the host at about 04:30. Start one there with systemctl --user start mc-backup." : "Couldn't read the backups."];
   document.querySelector(".backup-run").dataset.run = run;
   $("backup-run-state").textContent = runText;
   const runBtn = $("backup-run");
