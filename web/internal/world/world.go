@@ -123,7 +123,9 @@ func ReadInfo(worldDir string) (*Info, error) {
 
 // ReadPlayers reads every player with a stats file in worldDir, newest
 // LastSeen first. Names come from usercache.json in serverDir; players
-// missing from it are named by the start of their UUID.
+// missing from it are named by the start of their UUID. A player with
+// neither a name nor a last-seen time is left out: there would be nothing
+// to show for them but a piece of their UUID.
 func ReadPlayers(serverDir, worldDir string) ([]Player, error) {
 	names, err := readUserCache(filepath.Join(serverDir, "usercache.json"))
 	if err != nil {
@@ -141,16 +143,19 @@ func ReadPlayers(serverDir, worldDir string) ([]Player, error) {
 	for _, path := range statFiles {
 		id := strings.TrimSuffix(filepath.Base(path), ".json")
 		p := Player{ID: id, Name: names[id]}
-		if p.Name == "" {
-			p.Name = id[:min(8, len(id))]
-		}
-		if err := readStats(path, &p); err != nil {
-			return nil, fmt.Errorf("world: %s: %w", id, err)
-		}
 		// The player data file is rewritten on every save while they're
 		// online and on logout, so its time is when they were last seen.
 		if fi, err := os.Stat(filepath.Join(playersDir, "data", id+".dat")); err == nil {
 			p.LastSeen = fi.ModTime().UTC()
+		}
+		if p.Name == "" {
+			if p.LastSeen.IsZero() {
+				continue
+			}
+			p.Name = id[:min(8, len(id))]
+		}
+		if err := readStats(path, &p); err != nil {
+			return nil, fmt.Errorf("world: %s: %w", id, err)
 		}
 		p.Advancements, earned[id], err = readAdvancements(filepath.Join(playersDir, "advancements", id+".json"))
 		if err != nil {

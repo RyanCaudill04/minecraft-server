@@ -1,5 +1,6 @@
-// Pure helpers for play.ryancaudill.dev: formatting and the day/night
-// cycle. No DOM access, so tests/play can run them under Node.
+// Pure helpers for play.ryancaudill.dev: formatting, the day/night cycle
+// and leaderboard ranks. No DOM access, so tests/play can run them under
+// Node.
 
 // Accent hue at points through the Minecraft day (0 = sunrise). Hues are
 // interpolated between them, the short way round the color wheel.
@@ -51,7 +52,21 @@ export function fmtNum(n) {
 
 export function fmtPlaytime(ticks) {
   const mins = Math.floor(ticks / 20 / 60);
-  return mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+  if (mins < 60) return `${mins}m`;
+  const h = `${Math.floor(mins / 60)}h`;
+  return mins % 60 ? `${h} ${mins % 60}m` : h;
+}
+
+// Ranks players by a stat, highest first, leaving out anyone without a
+// score. Tied scores share a rank, and the next rank skips past them
+// (1, 1, 3). Ties keep the players' order. Returns [{ player, rank }].
+export function ranked(players, key) {
+  const scored = players.filter((p) => p[key] > 0).sort((a, b) => b[key] - a[key]);
+  let rank = 0;
+  return scored.map((player, i) => {
+    if (i === 0 || player[key] !== scored[i - 1][key]) rank = i + 1;
+    return { player, rank };
+  });
 }
 
 export function fmtHours(ticks) {

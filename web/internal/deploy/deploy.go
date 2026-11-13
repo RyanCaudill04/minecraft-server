@@ -65,6 +65,15 @@ const (
 	maxNotesSize    = 1 << 20
 )
 
+// rollbackTimeout is how long a rollback after a failed deploy may take.
+// It's its own time, not what's left of the deploy's: a deploy that failed
+// by running out of time would otherwise leave none for the rollback. It
+// must outlast the slowest service start a rollback waits for
+// (mc-containers.service's TimeoutStartSec) plus the health checks, or a
+// slow rollback that succeeds is recorded as failed;
+// TestRollbackOutlastsTheUnitsStart checks that.
+const rollbackTimeout = 10 * time.Minute
+
 var validTag = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // Manifest says how to activate a release. It is deploy/release.json.
@@ -375,7 +384,9 @@ func (d *Deployer) Activate(ctx context.Context, tag string) (err error) {
 			return fmt.Errorf("deploy: %s failed with nothing to roll back to: %w", tag, err)
 		}
 		d.Log.Printf("rolling back to %s", previous)
-		rbErr := d.rollBackTo(ctx, previous)
+		rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+		defer cancel()
+		rbErr := d.rollBackTo(rbCtx, previous)
 		if rbErr != nil {
 			return errors.Join(err, fmt.Errorf("rollback: %w", rbErr))
 		}
