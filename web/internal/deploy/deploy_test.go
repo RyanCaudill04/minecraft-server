@@ -415,6 +415,51 @@ func TestSystemctlFailureRollsBack(t *testing.T) {
 	}
 }
 
+// A deploy that fails by running out of time still rolls back: the rollback
+// doesn't inherit the deploy's expired deadline. Before, every systemctl
+// call of the rollback failed at once, leaving current on the old release
+// with the failed release's units in place.
+func TestRollbackAfterTheDeadlineRunsOut(t *testing.T) {
+	h := newHarness(t)
+	h.publish(t, "r1", "/ok")
+	if err := h.d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inner := h.d.Systemctl
+	h.d.Systemctl = func(ctx context.Context, args ...string) error {
+		// Like exec.CommandContext, nothing runs once the context is done.
+		if err := ctx.Err(); err != nil {
+			h.mu.Lock()
+			h.calls = append(h.calls, strings.Join(args, " ")+" (context done)")
+			h.mu.Unlock()
+			return err
+		}
+		if current, _ := h.d.Current(); current == "r2" && args[0] == "restart" {
+			cancel() // the slow start used up the deploy's time
+			return context.DeadlineExceeded
+		}
+		return inner(ctx, args...)
+	}
+
+	h.publish(t, "r2", "/ok")
+	err := h.d.Run(ctx)
+	if err == nil || !strings.Contains(err.Error(), "rolled back to r1") {
+		t.Fatalf("err = %v, want r2 rolled back to r1", err)
+	}
+	if got := h.current(t); got != "r1" {
+		t.Errorf("current = %q, want r1", got)
+	}
+	calls := h.takeCalls()
+	for _, c := range calls {
+		if strings.HasSuffix(c, "(context done)") {
+			t.Errorf("the rollback ran %q on the expired context; calls: %q", c, calls)
+		}
+	}
+}
+
 func TestFirstDeployFailure(t *testing.T) {
 	h := newHarness(t)
 	h.d.HealthTimeout = 300 * time.Millisecond
