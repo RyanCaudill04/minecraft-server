@@ -1,8 +1,13 @@
-# LazyMC proxy and idle-sleep configuration for this Paper server.
+# LazyMC proxy and idle-sleep configuration for the mc-server container.
+# The image runs LazyMC with it (entrypoint.sh); the server folder is
+# mounted at /server.
 #
 # LazyMC owns the public Minecraft port. It rewrites the backend listener
 # values in server.properties while it is running, then restores them when it
 # exits. Do not start start.sh alongside LazyMC.
+#
+# The container shares the Pi's network (compose.yaml), so these addresses
+# are the Pi's own, as they were before containers.
 
 [public]
 # The address players (and the router port-forward) use.
@@ -11,8 +16,8 @@ address = "0.0.0.0:25565"
 [server]
 # Paper listens only on loopback, behind the LazyMC proxy.
 address = "127.0.0.1:25566"
-directory = "."
-command = "./start.sh"
+directory = "/server"
+command = "/opt/minecraft/start.sh"
 
 # Paper can take a little while to load worlds and plugins on a Raspberry Pi.
 start_timeout = 300

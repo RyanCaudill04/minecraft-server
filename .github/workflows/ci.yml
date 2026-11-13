@@ -3,7 +3,8 @@
 # Pull requests: work out which parts changed, run the checks for those
 # parts, and report one required check, ci-ok.
 # Pushes to main: the same checks for everything since the last release,
-# then publish a release if any of it is deployable. The Pi's mc-agent
+# then push the play, admin and mc-server images to GHCR and publish a
+# release that pins them, if any of it is deployable. The Pi's mc-agent
 # timer installs the newest release.
 # Pushes to dev: the same checks, then deploy the dev sites to Cloudflare
 # (dev/): play's and admin's pages with a synthetic API snapshot.
@@ -35,6 +36,7 @@ jobs:
       admin: ${{ steps.scopes.outputs.admin }}
       mc_server: ${{ steps.scopes.outputs.mc_server }}
       infra: ${{ steps.scopes.outputs.infra }}
+      images: ${{ steps.scopes.outputs.images }}
       deploy: ${{ steps.scopes.outputs.deploy }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -239,17 +241,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: shellcheck start.sh
-        run: shellcheck start.sh
+      - name: shellcheck the container's scripts
+        run: shellcheck deploy/containers/mc-server/*.sh
       - name: lazymc.toml
         run: |
           python3 - <<'EOF'
           import tomllib
-          with open("lazymc.toml", "rb") as f:
+          with open("deploy/containers/mc-server/lazymc.toml", "rb") as f:
               cfg = tomllib.load(f)
           # play pings Paper here to tell "active" from "sleeping".
           assert cfg["server"]["address"] == "127.0.0.1:25566", cfg["server"]["address"]
           assert cfg["public"]["address"].endswith(":25565"), cfg["public"]["address"]
+          # Where compose.yaml mounts the server folder, and where the
+          # Dockerfile puts start.sh.
+          assert cfg["server"]["directory"] == "/server", cfg["server"]["directory"]
+          assert cfg["server"]["command"] == "/opt/minecraft/start.sh", cfg["server"]["command"]
           print("lazymc.toml OK")
           EOF
       - name: Pinned server files match deploy/server.json and plugins/manifest.json
@@ -296,7 +302,7 @@ jobs:
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$(go env GOPATH)/bin/actionlint"
       - name: shellcheck scripts
-        run: shellcheck scripts/*.sh deploy/backup/*.sh
+        run: shellcheck scripts/*.sh deploy/backup/*.sh deploy/containers/*.sh
       - name: dev sites' wrangler configs parse
         # wrangler.jsonc allows comments; strip them before parsing.
         run: |
@@ -312,6 +318,10 @@ jobs:
           scripts/release-changes_test.sh
       - name: World backup tests
         run: scripts/mc-backup_test.sh
+      - name: Container image tag and compose wrapper tests
+        run: |
+          scripts/images_test.sh
+          scripts/stack_test.sh
       - name: Server fetch and migration tests
         run: |
           scripts/fetch-server_test.sh
@@ -326,14 +336,18 @@ jobs:
           mkdir -p "$current" "$HOME/minecraft_server"
           tar -xzf "$RUNNER_TEMP/dist/release.tar.gz" -C "$current"
           units=$(mktemp -d)
-          cp "$current"/deploy/systemd/{play.service,admin.service,mc-agent.service,mc-agent.timer,mc-backup.service,mc-backup.timer} "$units/"
+          cp "$current"/deploy/systemd/{mc-containers.service,mc-agent.service,mc-agent.timer,mc-backup.service,mc-backup.timer} "$units/"
           systemd-analyze --user --man=no verify "$units"/*
+          # compose.yaml as stack.sh fills it in, for the ports below.
+          mkdir -p "$HOME/minecraft_server"
+          DOCKER_GID=0 "$current/deploy/containers/stack.sh" config --format json > "$RUNNER_TEMP/compose.json"
           # Every unit, service and timer the manifest names must be in the
-          # release, and the health checks must hit the ports the services
+          # release, and the health checks must hit the ports the containers
           # listen on. Otherwise a typo only shows up as a failed deploy.
-          python3 - "$current" <<'EOF'
+          python3 - "$current" "$RUNNER_TEMP/compose.json" <<'EOF'
           import json, os, re, sys
           root = sys.argv[1]
+          compose = json.load(open(sys.argv[2]))
           m = json.load(open(os.path.join(root, "deploy/release.json")))
           for unit in m["units"]:
               assert os.path.exists(os.path.join(root, "deploy/systemd", unit)), unit
@@ -342,13 +356,19 @@ jobs:
               assert template in m["units"], f"{svc} is not linked by units"
           for timer in m["timers"]:
               assert timer in m["units"], f"{timer} is not linked by units"
-          # Each service passes -addr on its ExecStart line.
+          # play and admin pass -addr in their compose command.
           ports = {}
-          for svc in m["services"]:
-              path = f"deploy/systemd/{svc}"
-              found = re.search(r"-addr 127\.0\.0\.1:(\d+)", open(os.path.join(root, path)).read())
-              assert found, f"{path} has no 127.0.0.1 address"
-              ports[svc] = int(found.group(1))
+          for name in ("play", "admin"):
+              cmd = compose["services"][name]["command"]
+              addr = cmd[cmd.index("-addr") + 1]
+              found = re.fullmatch(r"127\.0\.0\.1:(\d+)", addr)
+              assert found, f"{name} listens on {addr}, not 127.0.0.1"
+              ports[name] = int(found.group(1))
+          for name, svc in compose["services"].items():
+              assert svc.get("network_mode") == "host", f"{name} isn't on the host's network"
+          images = dict(l.split("=", 1) for l in open(os.path.join(root, "deploy/images.env")).read().split())
+          for key in ("PLAY_IMAGE", "ADMIN_IMAGE", "MC_SERVER_IMAGE"):
+              assert images[key].startswith("ghcr.io/ryancaudill04/minecraft-server/"), images
           health = set()
           for url in m["health"]:
               found = re.match(r"http://127\.0\.0\.1:(\d+)/", url)
@@ -358,11 +378,62 @@ jobs:
           print("release.json OK")
           EOF
 
+  # Builds the three images for the Pi (arm64, on an arm64 runner) and runs
+  # them the way the Pi does, through stack.sh and compose.yaml. Nothing is
+  # pushed; release does that.
+  images:
+    name: container images
+    needs: changes
+    if: needs.changes.outputs.images == 'true'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build play, admin and mc-server
+        run: |
+          docker build -f deploy/containers/web/Dockerfile --target play -t ci/play:ci .
+          docker build -f deploy/containers/web/Dockerfile --target admin -t ci/admin:ci .
+          docker build -f deploy/containers/mc-server/Dockerfile -t ci/mc-server:ci .
+      - name: Run them as the Pi does
+        run: |
+          # A release as mc-agent unpacks it, pinned to the images above.
+          rel=$RUNNER_TEMP/release
+          mkdir -p "$rel/deploy/containers"
+          cp deploy/containers/compose.yaml deploy/containers/stack.sh "$rel/deploy/containers/"
+          printf '%s\n' PLAY_IMAGE=ci/play:ci ADMIN_IMAGE=ci/admin:ci MC_SERVER_IMAGE=ci/mc-server:ci > "$rel/deploy/images.env"
+          # A new server folder. Paper sleeps until someone joins, so this
+          # checks LazyMC, not a world.
+          srv=$RUNNER_TEMP/server
+          mkdir -p "$srv"
+          cp eula.txt "$srv/"
+          cp server.properties.example "$srv/server.properties"
+          export SERVER_DIR=$srv APPS_DIR=$RUNNER_TEMP/apps BACKUP_DIR=$RUNNER_TEMP/backups MC_HEAP=1G
+          "$rel/deploy/containers/stack.sh" up
+          for _ in $(seq 60); do curl -fs http://127.0.0.1:8082/api/status | grep -q '"state":"sleeping"' && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8082/api/status | grep -q '"state":"sleeping"' ||
+            { docker logs mc-server; docker logs play; exit 1; }
+          curl -fsS http://127.0.0.1:8082/ | grep -q '<title>play.ryancaudill.dev</title>'
+          curl -fsS http://127.0.0.1:8081/healthz | grep -q ok
+          # Without the Access config, admin refuses everything else.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/api/status)" = 503
+          # The files LazyMC writes keep the runner's owner, not root.
+          test "$(stat -c %u "$srv/server.properties")" = "$(id -u)"
+          # The unit's stop leaves the Minecraft server running.
+          "$rel/deploy/containers/stack.sh" stop-web
+          test "$(docker inspect -f '{{.State.Running}}' mc-server)" = true
+          test "$(docker inspect -f '{{.State.Running}}' play)" = false
+          # A stop reaches LazyMC through the entrypoint, well within the
+          # grace period.
+          start=$(date +%s)
+          "$rel/deploy/containers/stack.sh" down
+          test $(($(date +%s) - start)) -lt 60
+
   # The one check branch protection requires. Scoped jobs that were skipped
   # because nothing in their scope changed count as passing.
   ci-ok:
     name: ci-ok
-    needs: [changes, go, play-e2e, mc-server, infra]
+    needs: [changes, go, play-e2e, mc-server, infra, images]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -387,10 +458,12 @@ jobs:
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'push' && needs.changes.outputs.deploy == 'true'))
-    runs-on: ubuntu-latest
+    # arm64, like the Pi, so the images build natively.
+    runs-on: ubuntu-24.04-arm
     environment: production
     permissions:
       contents: write # create the release and its tag
+      packages: write # push the images to GHCR
       pull-requests: read # get info for release notes from PRs in release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -418,6 +491,35 @@ jobs:
           set -o pipefail
           scripts/release-changes.sh | scripts/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.json"
           cat "$RUNNER_TEMP/notes.json"
+      - name: Push the images
+        # Before the release exists: the Pi pulls them as soon as it does.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          scripts/images.sh "$TAG" > "$RUNNER_TEMP/images.env"
+          cat "$RUNNER_TEMP/images.env"
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/images.env"
+          for target in play admin; do
+            image=$PLAY_IMAGE
+            [ "$target" = admin ] && image=$ADMIN_IMAGE
+            docker build -f deploy/containers/web/Dockerfile --target "$target" \
+              --build-arg VERSION="$TAG" -t "$image" .
+            docker push "$image"
+          done
+          # mc-server's tag is a hash of its inputs, so it's only built when
+          # they changed. Otherwise the release pins the image already there,
+          # and the deploy doesn't restart the server.
+          if docker manifest inspect "$MC_SERVER_IMAGE" >/dev/null 2>&1; then
+            echo "$MC_SERVER_IMAGE is already pushed"
+          else
+            docker build -f deploy/containers/mc-server/Dockerfile -t "$MC_SERVER_IMAGE" .
+            docker push "$MC_SERVER_IMAGE"
+          fi
+          docker logout ghcr.io
       - name: Build
         env:
           TAG: ${{ steps.tag.outputs.tag }}

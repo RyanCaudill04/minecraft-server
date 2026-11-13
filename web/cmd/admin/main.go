@@ -5,7 +5,8 @@
 //
 //	GET  /healthz             "ok", without a token, for mc-agent's health check
 //	GET  /api/status          active, sleeping, starting or offline, who is
-//	                          online, and minecraft.service's systemd state
+//	                          online, and the server's state from Docker
+//	                          (or systemd, outside containers)
 //	GET  /api/deploy          the release mc-agent has active, what changed
 //	                          in it, when it was released and applied, the
 //	                          installed and failed releases, and the last
@@ -17,7 +18,8 @@
 //	GET  /api/me              who is signed in and which controls they can use
 //	GET  /api/logs?lines=n    the end of Paper's latest.log
 //	POST /api/console         run {"command": "..."} over RCON
-//	POST /api/server/{action} start, stop or restart minecraft.service
+//	POST /api/server/{action} start, stop or restart the mc-server container
+//	                          (or minecraft.service, outside containers)
 //	GET  /api/backups         the world backups, newest first, and whether
 //	                          one is running
 //	GET  /api/backups/{name}  download one
@@ -59,10 +61,17 @@
 // -backup-keep-days override them.
 //
 // The RCON password is read from RCON_PASSWORD (set in
-// ~/.config/minecraft/secrets.env, which admin.service loads), never from a
-// flag. Without it the console is off.
+// ~/.config/minecraft/secrets.env, which compose.yaml passes to the admin
+// container), never from a flag. Without it the console is off.
 //
-// Usage: admin -dir folder -shared folder [-apps folder] [-server folder] [-addr host:port] [-paper host:port] [-lazymc host:port] [-rcon host:port] [-logs file] [-backups folder] [-backup-keep-days n] [-dev-user email]
+// In its container (deploy/containers), admin runs with -container
+// mc-server: it starts and stops that container through the Docker socket
+// (-docker), reads the host's /proc and /sys under -host-root, and leaves
+// off what only the host can do: running mc-backup.service and changing
+// the Pi's firmware settings. Without -container it controls
+// minecraft.service through systemctl --user, as it did before containers.
+//
+// Usage: admin -dir folder -shared folder [-apps folder] [-server folder] [-addr host:port] [-paper host:port] [-lazymc host:port] [-rcon host:port] [-logs file] [-backups folder] [-backup-keep-days n] [-container name [-docker socket]] [-host-root folder] [-dev-user email]
 package main
 
 import (
@@ -122,6 +131,9 @@ type app struct {
 	checker                            *mcstatus.Checker
 	// control starts and stops the server; nil turns the controls off.
 	control control.Controller
+	// container is the server's container when control is Docker, for the
+	// audit log; "" when it's minecraft.service.
+	container string
 	// wake asks a sleeping LazyMC to start Paper; nil turns it off.
 	wake func(ctx context.Context) error
 	// rcon runs a console command; nil when there's no RCON password.
@@ -403,6 +415,9 @@ func main() {
 	logPath := flag.String("logs", "", "Paper's log file (default: logs/latest.log in -server)")
 	backupDir := flag.String("backups", envOr(filepath.Join(home, "backups", "minecraft"), "MC_BACKUP_DIR", "BACKUP_DIR"), "folder mc-backup.sh writes world backups to")
 	keepDays := flag.Int("backup-keep-days", backups.DefaultKeepDays, "days the nightly cleanup keeps a backup that isn't flagged (default: BACKUP_KEEP_DAYS, else 10)")
+	container := flag.String("container", "", "control this Docker container (e.g. "+control.Container+") instead of minecraft.service; also turns off what only the host can do")
+	dockerSocket := flag.String("docker", control.DockerSocket, "the Docker Engine API's socket, for -container")
+	hostRoot := flag.String("host-root", "", "where the host's /proc and /sys are mounted (default: the real ones)")
 	devUser := flag.String("dev-user", "", "skip the Access token check and act as this email (local development only)")
 	flag.Parse()
 	if !flagSet("backup-keep-days") {
@@ -438,8 +453,9 @@ func main() {
 
 	a := &app{
 		dir: *dir, sharedDir: *sharedDir, appsDir: *appsDir, serverDir: *serverDir,
-		checker: &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status},
-		logPath: *logPath,
+		checker:  &mcstatus.Checker{PaperAddr: *paper, LazymcAddr: *lazymc, Timeout: *timeout, Ping: ping.Status},
+		logPath:  *logPath,
+		hostRoot: *hostRoot,
 		backups: &backups.Store{
 			Dir: *backupDir, KeepDays: *keepDays,
 			// Only the nightly backups, named after the world, are cleaned
@@ -450,18 +466,26 @@ func main() {
 		wake: func(ctx context.Context) error {
 			return ping.Wake(ctx, *lazymc, wakeName)
 		},
-		pi:          sudoPi,
-		piInstalled: helperInstalled,
-		piOwners:    owners(os.Getenv("PI_SETTINGS_OWNER")),
+		piOwners: owners(os.Getenv("PI_SETTINGS_OWNER")),
 	}
-	if ctl, err := control.NewSystemd(control.Unit, nil); err != nil {
-		log.Fatalf("admin: %v", err)
+	if *container != "" {
+		// In a container there's no systemd or sudo to reach: the backup
+		// button and the Pi settings are off, and the page says so.
+		ctl, err := control.NewDocker(*container, *dockerSocket)
+		if err != nil {
+			log.Fatalf("admin: %v", err)
+		}
+		a.control, a.container = ctl, *container
 	} else {
+		a.pi, a.piInstalled = sudoPi, helperInstalled
+		ctl, err := control.NewSystemd(control.Unit, nil)
+		if err != nil {
+			log.Fatalf("admin: %v", err)
+		}
 		a.control = ctl
-	}
-	if ctl, err := control.NewSystemd(control.BackupUnit, nil); err != nil {
-		log.Fatalf("admin: %v", err)
-	} else {
+		if ctl, err = control.NewSystemd(control.BackupUnit, nil); err != nil {
+			log.Fatalf("admin: %v", err)
+		}
 		a.backupUnit = ctl
 	}
 	// Read the password once and drop it from the environment, so

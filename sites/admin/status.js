@@ -11,13 +11,15 @@ export const STATES = {
   unknown: { title: "Can't reach admin", message: () => "The admin API isn't answering. Retrying…" },
 };
 
-// When minecraft.service isn't simply running, systemd knows more than the
-// ping: a stopped unit and a crashed one both just look offline to it.
+// When the mc-server container isn't simply running, Docker knows more than
+// the ping: a stopped container and a crashed one both just look offline to
+// it. admin reports Docker's state in systemd's terms (active, inactive,
+// failed...), so the names below are systemd's.
 const UNIT_SUMMARY = {
-  activating: { state: "starting", title: "Starting…", message: "systemd is starting LazyMC." },
+  activating: { state: "starting", title: "Starting…", message: "Docker is starting LazyMC." },
   deactivating: { state: "starting", title: "Stopping…", message: "Paper is saving the world. This can take a few minutes." },
   inactive: { state: "offline", title: "Stopped", message: "LazyMC and Paper are off. Nobody can join until it's started." },
-  failed: { state: "offline", title: "Failed", message: "systemd gave up on it. Start it again, or check journalctl --user-unit minecraft." },
+  failed: { state: "offline", title: "Failed", message: "LazyMC exited with an error. Start it again, or check docker logs mc-server." },
 };
 
 // The one answer to "is the server up?" that the pill, the Overview card
@@ -33,7 +35,7 @@ export function summary(s) {
 }
 
 // The Server card's line under the title: the summary's, or with the unit
-// running, how LazyMC and Paper are doing. When systemd can't be read, the
+// running, how LazyMC and Paper are doing. When Docker can't be read, the
 // hint under the buttons says so.
 export function unitMessage(s) {
   if (!s) return "One moment.";
@@ -46,7 +48,7 @@ export function unitMessage(s) {
     case "sleeping":
       return "LazyMC is up. Paper sleeps until someone joins.";
   }
-  return "systemd says it's running, but LazyMC isn't answering pings yet.";
+  return "Docker says it's running, but LazyMC isn't answering pings yet.";
 }
 
 // Which of start, stop, restart and wake can run now.
@@ -69,7 +71,7 @@ export function actionHint(me, s, pending) {
   if (pending) return "";
   if (!me) return "Checking what you can do…";
   if (!me.email) return me.locked || "admin couldn't tell who you are, so the controls are off.";
-  if (!me.control) return "admin can't reach systemd on this machine, so the controls are off.";
+  if (!me.control) return "admin can't reach Docker on this machine, so the controls are off.";
   if (!s) return "Checking the server…";
   switch (s.unit?.active) {
     case "active":
@@ -78,11 +80,11 @@ export function actionHint(me, s, pending) {
     case "failed":
       return "Stop and Restart are off while the server is stopped.";
     case "activating":
-      return "The controls come back once systemd has started it.";
+      return "The controls come back once Docker has started it.";
     case "deactivating":
       return "The controls come back once Paper has saved and stopped.";
   }
-  return "admin can't read minecraft.service from systemd, so the controls are off.";
+  return "admin can't read the mc-server container from Docker, so the controls are off.";
 }
 
 // Why the console can't run commands, or "" when it can.

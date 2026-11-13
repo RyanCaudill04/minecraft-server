@@ -1,5 +1,7 @@
-// Package control starts, stops and restarts the Minecraft server's user
-// unit through systemctl --user, and reports its state.
+// Package control starts, stops and restarts the Minecraft server and
+// reports its state: the mc-server container through the Docker Engine API
+// (Docker), or, outside containers, its user unit through systemctl --user
+// (Systemd).
 //
 // minecraft.service runs LazyMC, which starts Paper on demand, so stopping
 // the unit stops both; a stop can take minutes while Paper saves. Actions

@@ -1,0 +1,13 @@
+# Image builds send only what the Dockerfiles in deploy/containers copy.
+# Everything else stays out of the build context, above all the world,
+# server.properties, secrets and docs/ when building from a server folder
+# or a checkout with local files in it.
+*
+!web/
+!sites/
+!deploy/server.json
+!deploy/containers/
+!scripts/fetch-server.sh
+# Built binaries a local `go build` may leave behind.
+web/play
+web/admin

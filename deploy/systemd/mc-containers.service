@@ -1,0 +1,25 @@
+# User unit for the containers: mc-server (LazyMC and Paper), play and
+# admin (deploy/containers). Installed by mc-agent from the active release
+# (~/apps/current), and restarted on every deploy like any other service:
+# its start runs the images the release pins, and its stop stops play and
+# admin but leaves mc-server running (see stack.sh). Docker restarts the
+# containers at boot by itself.
+#
+# Needs Docker, with this user in the docker group (README.md).
+
+[Unit]
+Description=mc-server, play and admin containers
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# host.env sets SERVER_DIR, BACKUP_DIR, BACKUP_KEEP_DAYS and MC_HEAP, shared
+# with mc-backup.
+EnvironmentFile=-%h/.config/minecraft/host.env
+ExecStart=%h/apps/current/deploy/containers/stack.sh up
+ExecStop=%h/apps/current/deploy/containers/stack.sh stop-web
+# Pulling a new image over a slow connection can take a while.
+TimeoutStartSec=15min
+
+[Install]
+WantedBy=default.target

@@ -19,3 +19,16 @@ updates:
       interval: weekly
     commit-message:
       prefix: web
+
+  # The images' base images (Go, distroless, Java), pinned by digest. A bump
+  # to mc-server's changes its inputs hash (scripts/images.sh), so the next
+  # release rebuilds it.
+  - package-ecosystem: docker
+    directories:
+      - /deploy/containers/web
+      - /deploy/containers/mc-server
+    schedule:
+      interval: weekly
+    labels: [infra]
+    commit-message:
+      prefix: containers
