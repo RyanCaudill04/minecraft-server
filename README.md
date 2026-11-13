@@ -33,11 +33,19 @@ The Pi runs three containers with Docker Compose
 - **Deploys.** [`mc-containers.service`](deploy/systemd/mc-containers.service)
   runs [`stack.sh`](deploy/containers/stack.sh), which runs
   `docker compose up` with the images the release pins in
-  `deploy/images.env`. mc-agent restarts it on every deploy (see
+  `deploy/images.env`, checks that LazyMC answers on 25565 (play's and
+  admin's health checks pass with the server offline, so this is the
+  deploy's check on it), and removes this repo's images nothing uses any
+  more. mc-agent restarts it on every deploy (see
   [Releases](#releases-and-deploys)). play and admin are rebuilt for every
   release. mc-server's tag is a hash of its inputs
   ([`scripts/images.sh`](scripts/images.sh)), so the server only restarts
   when its image changes.
+- **A stopped server stays stopped.** If you stop `mc-server` (from admin,
+  or `docker stop mc-server`), a deploy updates it but doesn't start it,
+  until the Pi reboots: at boot it starts again, as `minecraft.service` did.
+- **Crashes restart.** If LazyMC dies, the container stops Paper cleanly
+  and exits, and Docker starts it again.
 - **admin's controls** start and stop the `mc-server` container through the
   Docker socket. From its container, admin can't run `mc-backup.service` or
   change the Pi's firmware settings: the nightly backup still runs on the
@@ -55,7 +63,9 @@ docker start mc-server
 
 Host settings go in `~/.config/minecraft/host.env`: `SERVER_DIR`,
 `BACKUP_DIR`, `BACKUP_KEEP_DAYS` and `MC_HEAP` (Paper's heap, default `10G`).
-After changing one, run `systemctl --user restart mc-containers`.
+After changing one, run `systemctl --user restart mc-containers`. admin's
+secrets in `~/.config/minecraft/secrets.env` are read literally: write
+values without quotes, and a `$` stays a `$`.
 
 ### Moving the Pi to containers
 
