@@ -59,6 +59,7 @@ scripts/release-notes_test.sh
 scripts/release-changes_test.sh
 scripts/images_test.sh
 scripts/stack_test.sh
+scripts/entrypoint_test.sh   # needs setsid: skips on macOS, runs in CI
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12   # CI pins this version
 scripts/build-release.sh <tag> <output folder> [notes.json]   # e.g. scripts/build-release.sh dev "$(mktemp -d)"
 

@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 # Runs the release's containers (compose.yaml) with docker compose.
-# mc-containers.service runs "stack.sh up" on every deploy and
+# mc-containers.service runs "stack.sh up" on every deploy and at boot, and
 # "stack.sh stop-web" when it stops.
 #
 # Usage: deploy/containers/stack.sh up|stop-web|down|config
 #
 #   up        Start the images the release pins (deploy/images.env), pulling
-#             any that are missing. A container whose image and settings
-#             haven't changed keeps running, so a release that doesn't touch
-#             mc-server's image doesn't restart the Minecraft server.
+#             any that are missing, then check that LazyMC answers and
+#             remove this repo's images that no installed release pins. A container
+#             whose image and settings haven't changed keeps running, so a
+#             release that doesn't touch mc-server's image doesn't restart
+#             the Minecraft server. An mc-server stopped on purpose (from
+#             admin, or docker stop) since the Pi booted stays stopped: it
+#             is only updated, and starts with its new image when someone
+#             starts it. Fails if LazyMC doesn't come up, which fails the
+#             deploy, so mc-agent rolls back.
 #   stop-web  Stop play and admin, and leave mc-server running. This is the
 #             unit's stop: a rollback to a release from before containers
 #             starts its own play and admin, and players stay connected.
@@ -23,11 +29,15 @@
 #                     would start a new world.
 #   BACKUP_DIR        mc-backup's archives, for admin (default
 #                     ~/backups/minecraft; MC_BACKUP_DIR wins)
-#   BACKUP_KEEP_DAYS  passed to admin
+#   BACKUP_KEEP_DAYS  passed to admin (MC_BACKUP_KEEP_DAYS wins, as in
+#                     mc-backup.sh)
 #   MC_HEAP           Paper's heap, passed to mc-server (default 10G)
 #   APPS_DIR          mc-agent's folder, for admin (default ~/apps)
 #   DOCKER_SOCKET     the Docker Engine API (default /var/run/docker.sock)
 #   SECRETS_ENV       admin's secrets (default ~/.config/minecraft/secrets.env)
+# For scripts/stack_test.sh: MC_PORT (LazyMC's port, default 25565),
+# STACK_BOOT_TIME (seconds since the epoch), STACK_WAIT (seconds to wait for
+# Docker and for LazyMC, default 120 and 60).
 set -euo pipefail
 
 die() { echo "stack.sh: $*" >&2; exit 1; }
@@ -44,12 +54,101 @@ export DOCKER_SOCKET=${DOCKER_SOCKET:-/var/run/docker.sock}
 export HOST_UID HOST_GID DOCKER_GID
 HOST_UID=$(id -u)
 HOST_GID=$(id -g)
-if [ -z "${DOCKER_GID:-}" ]; then
-  DOCKER_GID=$(stat -c %g "$DOCKER_SOCKET" 2>/dev/null) ||
-    die "can't read $DOCKER_SOCKET; is Docker installed and running?"
-fi
+mc_port=${MC_PORT:-25565}
 
 compose=(docker compose --project-name minecraft --file "$here/compose.yaml" --env-file "$images")
+image_label=org.opencontainers.image.source=https://github.com/RyanCaudill04/minecraft-server
+
+# wait_for_docker waits for the Docker daemon, which may still be starting
+# when the unit runs at boot, and reads the socket's group for admin.
+wait_for_docker() {
+  local i
+  for ((i = 0; i < ${STACK_WAIT:-120}; i += 2)); do
+    docker info >/dev/null 2>&1 && break
+    sleep 2
+  done
+  docker info >/dev/null 2>&1 || die "Docker doesn't answer on $DOCKER_SOCKET; is it running, and is $(id -un) in the docker group?"
+  if [ -z "${DOCKER_GID:-}" ]; then
+    DOCKER_GID=$(stat -c %g "$DOCKER_SOCKET" 2>/dev/null) || die "can't read $DOCKER_SOCKET's group"
+  fi
+}
+
+# to_epoch turns a docker inspect time (2026-11-13T04:45:34.123Z) into
+# seconds, with GNU date (the Pi) or BSD date (macOS, for the tests).
+to_epoch() {
+  local t=${1%%.*}
+  t=${t%Z}
+  date -u -d "${t}Z" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%S' "$t" +%s 2>/dev/null
+}
+
+boot_time() {
+  if [ -n "${STACK_BOOT_TIME:-}" ]; then
+    echo "$STACK_BOOT_TIME"
+  else
+    awk '/^btime /{print $2}' /proc/stat
+  fi
+}
+
+# stopped_on_purpose reports whether mc-server exists, isn't running, and
+# was meant to be off since the Pi last booted: it stopped after the boot
+# (Docker's restart policy restarts a crash by itself, so that's a stop from
+# admin or docker stop), or an earlier up made it after the boot without
+# starting it. Either way, after a reboot it starts again, as
+# minecraft.service did. Docker doesn't start a container that was never
+# started when it boots, so a made-but-not-started one is judged by when it
+# was made.
+stopped_on_purpose() {
+  local status finished created since booted
+  read -r status finished created < <(docker inspect -f '{{.State.Status}} {{.State.FinishedAt}} {{.Created}}' mc-server 2>/dev/null) || return 1
+  case $status in
+    created) since=$created ;;
+    exited | dead) since=$finished ;;
+    *) return 1 ;;
+  esac
+  since=$(to_epoch "$since") || return 1
+  booted=$(boot_time) || return 1
+  [ -n "$since" ] && [ -n "$booted" ] && [ "$since" -ge "$booted" ]
+}
+
+running_restarts() { docker inspect -f '{{.State.Running}} {{.RestartCount}}' mc-server 2>/dev/null; }
+lazymc_answers() { (exec 3<>"/dev/tcp/127.0.0.1/$mc_port") 2>/dev/null; }
+
+# check_server waits for mc-server to run and LazyMC to answer on its port,
+# then makes sure it isn't restarting in a loop. play's and admin's health
+# checks pass with the server offline, so this is the deploy's check on it.
+check_server() {
+  local i before
+  for ((i = 0; i < ${STACK_WAIT:-60}; i++)); do
+    before=$(running_restarts)
+    if [ "${before%% *}" = true ] && lazymc_answers; then
+      sleep 3
+      [ "$(running_restarts)" = "$before" ] && return 0
+    fi
+    sleep 1
+  done
+  docker logs --tail 20 mc-server >&2 || true
+  die "mc-server isn't running, or nothing answers on port $mc_port"
+}
+
+# prune removes this repo's images that no installed release pins (the
+# ones mc-agent keeps in $APPS_DIR/releases, and this one), so images of
+# releases it has removed don't fill the disk the world and backups share.
+# Every installed release keeps its images, so a rollback to any of them
+# needs no download. Docker refuses to remove an image a container uses,
+# and those refusals are fine.
+prune() {
+  local keep ref
+  # cat fails on a glob with nothing installed yet; what it read still counts.
+  keep=$({ cat "$images" "$APPS_DIR"/releases/*/deploy/images.env 2>/dev/null || true; } |
+    sed -n 's/^[A-Z_]*_IMAGE=//p' | sort -u)
+  while read -r ref; do
+    case $ref in '' | *:'<none>') continue ;; esac
+    grep -qxF -- "$ref" <<<"$keep" && continue
+    docker image rm "$ref" >/dev/null 2>&1 || true
+  done < <(docker image ls --filter "label=$image_label" --format '{{.Repository}}:{{.Tag}}')
+  # Untagged layers left when a tag moved to a newer image.
+  docker image prune --force --filter "label=$image_label" >/dev/null 2>&1 || true
+}
 
 case ${1:-} in
   up)
@@ -57,11 +156,28 @@ case ${1:-} in
     # server folder would start a brand new world.
     [ -d "$SERVER_DIR" ] || die "no server folder at $SERVER_DIR; set SERVER_DIR in host.env"
     mkdir -p "$BACKUP_DIR" "$APPS_DIR"
-    "${compose[@]}" up --detach --remove-orphans --pull missing --quiet-pull
+    wait_for_docker
+    if stopped_on_purpose; then
+      echo "mc-server was stopped on purpose, so it's updated but left stopped"
+      "${compose[@]}" up --detach --remove-orphans --pull missing --quiet-pull play admin
+      "${compose[@]}" up --no-start --pull missing --quiet-pull mc-server
+    else
+      "${compose[@]}" up --detach --remove-orphans --pull missing --quiet-pull
+      check_server
+    fi
+    prune
     ;;
-  stop-web) "${compose[@]}" stop play admin ;;
-  down) "${compose[@]}" down ;;
-  config) "${compose[@]}" config "${@:2}" ;;
+  stop-web)
+    # No waiting here: at shutdown Docker may already be stopping, and the
+    # socket's group only matters for starting admin.
+    DOCKER_GID=${DOCKER_GID:-$(stat -c %g "$DOCKER_SOCKET" 2>/dev/null || echo 0)}
+    "${compose[@]}" stop play admin
+    ;;
+  down) wait_for_docker && "${compose[@]}" down ;;
+  config)
+    DOCKER_GID=${DOCKER_GID:-0}
+    "${compose[@]}" config "${@:2}"
+    ;;
   *)
     sed -n '6p' "$0" | sed 's/^# //' >&2
     exit 2

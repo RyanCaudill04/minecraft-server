@@ -318,10 +318,11 @@ jobs:
           scripts/release-changes_test.sh
       - name: World backup tests
         run: scripts/mc-backup_test.sh
-      - name: Container image tag and compose wrapper tests
+      - name: Container image tag, compose wrapper and entrypoint tests
         run: |
           scripts/images_test.sh
           scripts/stack_test.sh
+          scripts/entrypoint_test.sh
       - name: Server fetch and migration tests
         run: |
           scripts/fetch-server_test.sh
