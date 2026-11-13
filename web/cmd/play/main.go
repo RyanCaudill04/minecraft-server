@@ -55,7 +55,9 @@ func newHandler(dir, sharedDir, serverDir, mapDir string, c *mcstatus.Checker) h
 	mux.HandleFunc("GET /api/world", site.JSON("play: world", worldInfo))
 	mux.HandleFunc("GET /api/players", site.JSON("play: players", players))
 	mux.HandleFunc("GET /api/activity", site.JSON("play: activity", activity))
-	mux.Handle("GET /map/", http.StripPrefix("/map", mapHandler(mapDir)))
+	// The not-rendered page sits where Cloudflare looks for /map/'s 404
+	// page on the dev site.
+	mux.Handle("GET /map/", http.StripPrefix("/map", mapHandler(mapDir, filepath.Join(dir, "map", site.NotFoundPage))))
 	mux.Handle("GET /map", http.RedirectHandler("/map/", http.StatusMovedPermanently))
 	mux.Handle("GET /", site.Static(dir, sharedDir))
 	return mux

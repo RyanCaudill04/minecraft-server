@@ -347,6 +347,29 @@ p { margin: 0; }
 .appear { animation: appear 0.5s var(--ease) both; }
 @keyframes appear { from { transform: translateY(6px); opacity: 0; } }
 
+/* ---------- Not found ---------- */
+
+/* Each site's 404.html: the brand and one card with a way back. */
+.not-found {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  min-height: 100vh;
+  padding: 24px 16px;
+}
+.not-found .card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  max-width: 440px;
+  padding: 28px;
+}
+.not-found .btn { margin-top: 12px; text-decoration: none; }
+
 /* ---------- Responsive ---------- */
 
 /* Below this the status card is too narrow for the address and its button,

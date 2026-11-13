@@ -115,6 +115,65 @@ func TestMapNotRenderedYet(t *testing.T) {
 	}
 }
 
+// With play's page in place, /map/ says the map isn't rendered on a styled
+// page, both before squaremap made its folder and while the folder has no
+// page yet. Anything else under /map/ stays a plain 404.
+func TestMapNotRenderedPage(t *testing.T) {
+	const page = "<!doctype html><h1>No map yet</h1>"
+	dir := t.TempDir()
+	writeFile(t, dir, "map/404.html", page)
+	server := t.TempDir()
+	web := filepath.Join(server, "plugins", "squaremap", "web")
+	h := newHandler(dir, t.TempDir(), server, web, fakeChecker(nil, nil))
+
+	check := func(when, plain string) {
+		t.Helper()
+		for _, p := range []string{"/map/", "/map/?world=minecraft_overworld"} {
+			rec := get(h, p)
+			if rec.Code != http.StatusNotFound || rec.Body.String() != page {
+				t.Errorf("%s %s: %d %q, want 404 with the page", when, p, rec.Code, rec.Body)
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+				t.Errorf("%s %s: Content-Type %q", when, p, ct)
+			}
+			if got := rec.Header().Get("Content-Security-Policy"); got != mapCSP {
+				t.Errorf("%s %s: Content-Security-Policy %q", when, p, got)
+			}
+		}
+		rec := get(h, plain)
+		if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "<h1>") {
+			t.Errorf("%s %s: %d %q, want a plain 404", when, plain, rec.Code, rec.Body)
+		}
+	}
+	check("no folder:", "/map/tiles/settings.json")
+	writeFile(t, web, "tiles/settings.json", `{"ui":{}}`)
+	writeFile(t, web, "tiles/minecraft_overworld/3/0_0.png", "png")
+	check("no page:", "/map/tiles/minecraft_overworld/3/9_9.png")
+
+	// Once squaremap writes its page, that's what /map/ serves.
+	writeFile(t, web, "index.html", "<div id=map></div>")
+	if rec := get(h, "/map/"); rec.Code != http.StatusOK || rec.Body.String() != "<div id=map></div>" {
+		t.Errorf("rendered: %d %q, want squaremap's page", rec.Code, rec.Body)
+	}
+}
+
+// play's real pages: an unknown path and the unrendered map each get their
+// own styled 404.
+func TestNotFoundPagesFromSites(t *testing.T) {
+	sites := filepath.Join("..", "..", "..", "sites")
+	server := t.TempDir()
+	h := newHandler(filepath.Join(sites, "play"), filepath.Join(sites, "shared"), server, filepath.Join(server, "nope"), fakeChecker(nil, nil))
+	for p, want := range map[string]string{
+		"/no/such/page": "Page not found",
+		"/map/":         "hasn't been rendered",
+	} {
+		rec := get(h, p)
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("%s: %d, want 404 with %q in %q", p, rec.Code, want, rec.Body)
+		}
+	}
+}
+
 func TestMapStaysInsideItsFolder(t *testing.T) {
 	h, web := newMapServer(t)
 

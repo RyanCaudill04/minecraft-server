@@ -3,10 +3,12 @@ package site
 import (
 	"context"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -182,6 +184,116 @@ func TestStaticWithoutShared(t *testing.T) {
 		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
 		if rec.Code != want {
 			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+}
+
+func TestStaticNotFoundPage(t *testing.T) {
+	dir, shared := t.TempDir(), t.TempDir()
+	const page = "<!doctype html><h1>Page not found</h1>"
+	for name, body := range map[string]string{
+		filepath.Join(dir, "index.html"):   "page",
+		filepath.Join(dir, NotFoundPage):   page,
+		filepath.Join(dir, ".env"):         "secret",
+		filepath.Join(shared, "base.css"):  "shared css",
+		filepath.Join(dir, "img", "a.png"): "png",
+	} {
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := Static(dir, shared)
+
+	for _, p := range []string{"/missing", "/deep/missing/path", "/missing.js", "/shared/missing.css", "/.env", "/img/"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", p, rec.Code)
+		}
+		if rec.Body.String() != page {
+			t.Errorf("GET %s body = %q, want only the 404 page", p, rec.Body)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+			t.Errorf("GET %s Content-Type = %q", p, ct)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
+			t.Errorf("GET %s Cache-Control = %q, want no-cache", p, cc)
+		}
+	}
+
+	// Everything else is untouched.
+	for p, want := range map[string]string{"/": "page", "/shared/base.css": "shared css", "/img/a.png": "png"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		if rec.Code != http.StatusOK || rec.Body.String() != want {
+			t.Errorf("GET %s = %d %q, want 200 %q", p, rec.Code, rec.Body, want)
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST / = %d, want 405", rec.Code)
+	}
+}
+
+func TestNotFoundWithoutPage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NotFound(rec, filepath.Join(t.TempDir(), NotFoundPage), "nothing here")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status %d, want 404", rec.Code)
+	}
+	if got := rec.Body.String(); got != "nothing here\n" {
+		t.Errorf("body %q, want the plain message", got)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("Content-Type %q, want text/plain", ct)
+	}
+
+	// Static falls back to the file server's own text.
+	dir := t.TempDir()
+	rec = httptest.NewRecorder()
+	Static(dir, "").ServeHTTP(rec, httptest.NewRequest("GET", "/missing", nil))
+	if rec.Code != http.StatusNotFound || rec.Body.String() != "404 page not found\n" {
+		t.Errorf("GET /missing without a 404 page = %d %q", rec.Code, rec.Body)
+	}
+}
+
+// The sites' 404 pages are served at any depth (/a/b/c, /map/), so every
+// URL in them must be absolute, and each needs a way home.
+func TestNotFoundPages(t *testing.T) {
+	sites := filepath.Join("..", "..", "..", "sites")
+	var pages []string
+	err := filepath.WalkDir(sites, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.Name() == NotFoundPage {
+			pages = append(pages, p)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) < 3 {
+		t.Fatalf("found %d 404 pages (%v), want play's, play's map's and admin's", len(pages), pages)
+	}
+	url := regexp.MustCompile(`(?:href|src)="([^"]*)"`)
+	for _, p := range pages {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(b)
+		for _, m := range url.FindAllStringSubmatch(body, -1) {
+			if !strings.HasPrefix(m[1], "/") {
+				t.Errorf("%s: relative URL %q breaks below the top folder", p, m[1])
+			}
+		}
+		for _, want := range []string{`href="/shared/base.css"`, `href="/"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s: missing %s", p, want)
+			}
 		}
 	}
 }
