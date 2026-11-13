@@ -21,7 +21,10 @@
 /* ---------- Layout ---------- */
 
 .player-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
-.facts-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+/* A wrapping row rather than grid columns: the cards on each row share its
+   width, so the five facts never leave one card alone beside an empty cell. */
+.facts-grid { display: flex; flex-wrap: wrap; }
+.facts-grid .fact { flex: 1 1 170px; min-width: 0; }
 
 /* "Updated …" once status has failed for a while. */
 .stale { color: var(--amber); }
@@ -122,6 +125,9 @@
 }
 .map-foot p { margin: 0; font-size: 0.875rem; }
 .map-foot .btn { text-decoration: none; }
+/* /map/ has nothing to show until squaremap has rendered this world, so the
+   link appears with the preview. */
+.map-card:not([data-ready="true"]) .map-foot .btn { display: none; }
 
 /* Player cards */
 .player-card {
@@ -334,7 +340,7 @@ html:has(.sheet[open]) { overflow: hidden; }
 
 @media (max-width: 420px) {
   .player-grid { grid-template-columns: minmax(0, 1fr); }
-  .facts-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .facts-grid .fact { flex-basis: 140px; }
   .address { flex-direction: column; align-items: stretch; }
   .map-stage { height: 260px; }
   .map-foot { flex-direction: column; align-items: stretch; text-align: center; }

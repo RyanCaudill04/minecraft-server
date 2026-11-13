@@ -6,6 +6,8 @@ import (
 	"os"
 	"path"
 	"strings"
+
+	"github.com/ryancaudill04/minecraft-server/web/internal/site"
 )
 
 // mapCSP lets squaremap's page load only its own files. It fetches tiles
@@ -31,7 +33,10 @@ const noPlayers = `{"players":[],"max":0}` + "\n"
 // because squaremap rewrites one only when its area changes; everything
 // else is checked on every load, because squaremap replaces its page on
 // each update.
-func mapHandler(webDir string) http.Handler {
+//
+// Until squaremap has written its page, /map/ itself answers 404 with the
+// page in notRenderedPage, which says so.
+func mapHandler(webDir, notRenderedPage string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", mapCSP)
@@ -52,13 +57,31 @@ func mapHandler(webDir string) http.Handler {
 
 		root, err := os.OpenRoot(webDir)
 		if err != nil {
-			h.Del("Cache-Control")
-			http.Error(w, "The map hasn't been rendered yet.", http.StatusNotFound)
+			notRendered(w, r, notRenderedPage)
 			return
 		}
 		defer root.Close()
+		if r.URL.Path == "/" {
+			if _, err := root.Stat("index.html"); err != nil {
+				notRendered(w, r, notRenderedPage)
+				return
+			}
+		}
 		http.FileServerFS(filesOnly{root.FS()}).ServeHTTP(w, r)
 	})
+}
+
+// notRendered answers a request for the map before squaremap has written
+// it. The map's page gets the styled page in page; anything else, such as
+// the tiles/settings.json play's own page checks for, gets plain text.
+func notRendered(w http.ResponseWriter, r *http.Request, page string) {
+	const msg = "The map hasn't been rendered yet."
+	w.Header().Del("Cache-Control")
+	if r.URL.Path == "/" {
+		site.NotFound(w, page, msg)
+		return
+	}
+	http.Error(w, msg, http.StatusNotFound)
 }
 
 // filesOnly opens files but no folders other than the top one, which
