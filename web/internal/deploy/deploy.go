@@ -67,8 +67,12 @@ const (
 
 // rollbackTimeout is how long a rollback after a failed deploy may take.
 // It's its own time, not what's left of the deploy's: a deploy that failed
-// by running out of time would otherwise leave none for the rollback.
-const rollbackTimeout = 5 * time.Minute
+// by running out of time would otherwise leave none for the rollback. It
+// must outlast the slowest service start a rollback waits for
+// (mc-containers.service's TimeoutStartSec) plus the health checks, or a
+// slow rollback that succeeds is recorded as failed;
+// TestRollbackOutlastsTheUnitsStart checks that.
+const rollbackTimeout = 10 * time.Minute
 
 var validTag = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 

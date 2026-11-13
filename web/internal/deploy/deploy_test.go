@@ -460,6 +460,34 @@ func TestRollbackAfterTheDeadlineRunsOut(t *testing.T) {
 	}
 }
 
+// The rollback's own deadline must outlast the slowest start it waits for:
+// mc-containers.service's TimeoutStartSec, plus a minute for the health
+// checks. Otherwise the context kills systemctl while systemd's start job
+// carries on and may succeed, and the rollback is recorded as failed.
+func TestRollbackOutlastsTheUnitsStart(t *testing.T) {
+	unit, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "systemd", "mc-containers.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var start time.Duration
+	for _, line := range strings.Split(string(unit), "\n") {
+		v, ok := strings.CutPrefix(strings.TrimSpace(line), "TimeoutStartSec=")
+		if !ok {
+			continue
+		}
+		// systemd writes minutes as "min"; Go wants "m".
+		if start, err = time.ParseDuration(strings.ReplaceAll(v, "min", "m")); err != nil {
+			t.Fatalf("TimeoutStartSec=%s: %v", v, err)
+		}
+	}
+	if start == 0 {
+		t.Fatal("mc-containers.service sets no TimeoutStartSec")
+	}
+	if need := start + time.Minute; rollbackTimeout < need {
+		t.Errorf("rollbackTimeout is %v, want at least %v (the unit's %v start, plus a minute for health checks)", rollbackTimeout, need, start)
+	}
+}
+
 func TestFirstDeployFailure(t *testing.T) {
 	h := newHarness(t)
 	h.d.HealthTimeout = 300 * time.Millisecond
