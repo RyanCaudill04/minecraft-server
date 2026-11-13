@@ -1,6 +1,6 @@
 // play.ryancaudill.dev: polls the play API and renders the dashboard.
 
-import { accentHue, capitalize, fmtAgo, fmtDate, fmtDistance, fmtHours, fmtNum, fmtPlaytime, fmtWhen, mcClock, phase, weather } from "./format.js";
+import { accentHue, capitalize, fmtAgo, fmtDate, fmtDistance, fmtHours, fmtNum, fmtPlaytime, fmtWhen, mcClock, phase, ranked, weather } from "./format.js";
 
 const STATUS_MS = 10_000; // server state and who's online
 const DATA_MS = 60_000; // world facts and player stats (change only on save)
@@ -31,14 +31,15 @@ const STATES = {
   },
 };
 
+// `none` is what a board says while nobody has a score on it.
 const BOARDS = [
-  { key: "playTicks", label: "Playtime", fmt: fmtPlaytime },
-  { key: "mobKills", label: "Mob kills", fmt: fmtNum },
-  { key: "blocksMined", label: "Blocks mined", fmt: fmtNum },
-  { key: "distanceCm", label: "Distance", fmt: fmtDistance },
-  { key: "advancements", label: "Advancements", fmt: fmtNum },
-  { key: "fishCaught", label: "Fish caught", fmt: fmtNum },
-  { key: "deaths", label: "Deaths", fmt: fmtNum },
+  { key: "playTicks", label: "Playtime", fmt: fmtPlaytime, none: "Nobody has played yet." },
+  { key: "mobKills", label: "Mob kills", fmt: fmtNum, none: "No mobs killed yet." },
+  { key: "blocksMined", label: "Blocks mined", fmt: fmtNum, none: "No blocks mined yet." },
+  { key: "distanceCm", label: "Distance", fmt: fmtDistance, none: "Nobody has gone anywhere yet." },
+  { key: "advancements", label: "Advancements", fmt: fmtNum, none: "No advancements yet." },
+  { key: "fishCaught", label: "Fish caught", fmt: fmtNum, none: "No fish caught yet." },
+  { key: "deaths", label: "Deaths", fmt: fmtNum, none: "Nobody has died yet." },
 ];
 
 const SHEET_STATS = [
@@ -98,6 +99,8 @@ async function refreshStatus() {
   if (before && before !== data.status.state) refreshData();
 }
 
+let hashChecked = false; // whether a #player/<name> link has had its chance to open
+
 async function refreshData() {
   const [world, players, activity] = await Promise.allSettled([
     getJSON("/api/world"),
@@ -113,6 +116,11 @@ async function refreshData() {
   renderPlayers();
   renderBoard();
   renderActivity();
+  // A link to a player's sheet can only open once the players are in.
+  if (!hashChecked && players.status === "fulfilled") {
+    hashChecked = true;
+    syncSheet();
+  }
 }
 
 // ---------- Rendering ----------
@@ -176,7 +184,7 @@ function renderWorld() {
     ["Weather", weather(w), w.raining ? "Bring a roof" : "Clear skies"],
     ["World age", fmtHours(w.ageTicks), "Real time the world has run"],
     ["Difficulty", capitalize(w.difficulty) + (w.hardcore ? " · Hardcore" : ""), w.hardcore ? "One life" : "Respawns on"],
-    ["Spawn", w.spawn ? w.spawn.join(", ") : "Unknown", "X, Y, Z"],
+    ["Spawn", w.spawn ? coords(w.spawn) : "Unknown", "X, Y, Z"],
     ["Version", w.version || "Unknown", "Java Edition"],
     ["Last saved", fmtAgo(w.lastSaved), w.lastSaved ? fmtWhen(w.lastSaved) : "Unknown"],
     ["Players", fmtNum(data.players.length), "Have joined so far"],
@@ -186,7 +194,9 @@ function renderWorld() {
     ...facts.map(([label, value, hint], i) => {
       const card = el("article", "card fact" + (appear ? " appear" : ""));
       card.style.animationDelay = `${i * 30}ms`;
-      card.append(el("span", "label", label), el("span", "value", value), el("span", "hint", hint));
+      const v = el("span", "value");
+      v.append(value);
+      card.append(el("span", "label", label), v, el("span", "hint", hint));
       return card;
     }),
   );
@@ -212,7 +222,7 @@ function renderPlayers() {
       card.type = "button";
       card.dataset.id = p.id;
       card.style.animationDelay = `${i * 30}ms`;
-      card.addEventListener("click", () => openSheet(p.id, "player-grid"));
+      card.addEventListener("click", () => showPlayer(p.id, "player-grid"));
       card.append(head(p, 44), el("span", "who"));
       playerCards.set(p.id, card);
     }
@@ -255,6 +265,8 @@ function renderBoard() {
       tab.addEventListener("click", () => {
         data.board = b.key;
         renderBoard();
+        // On a phone the tabs scroll sideways: bring the picked one into view.
+        tab.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
       });
       tabs.append(tab);
     }
@@ -262,36 +274,42 @@ function renderBoard() {
   for (const tab of tabs.children) tab.setAttribute("aria-pressed", tab.dataset.key === data.board);
 
   const board = BOARDS.find((b) => b.key === data.board);
-  const ranked = rankedBy(board.key);
-  const top = Math.max(1, ranked[0]?.[board.key] ?? 1);
+  // Only players with a score are on a board, so it can be empty.
+  const rows = ranked(data.players, board.key);
+  const top = Math.max(1, rows[0]?.player[board.key] ?? 1);
   // Bars grow in when a board first shows, not on every minute's refresh.
-  const grow = ranked.length > 0 && data.boardShown !== board.key;
+  const grow = rows.length > 0 && data.boardShown !== board.key;
   if (grow) data.boardShown = board.key;
 
   // Rebuilding replays the bars and drops focus from a row, so only do it
   // when the board or its numbers changed.
-  const key = JSON.stringify([board.key, ranked.map((p) => [p.id, p.name, p[board.key]])]);
+  const key = JSON.stringify([board.key, rows.map(({ player: p, rank }) => [p.id, p.name, p[board.key], rank])]);
   if (key === boardKey) return;
   boardKey = key;
 
   const list = $("board");
   list.setAttribute("aria-label", `${board.label} leaderboard`);
+  list.hidden = rows.length === 0;
+  $("board-empty").hidden = rows.length > 0;
+  $("board-empty").textContent = board.none;
   const focusedID = list.contains(document.activeElement) ? document.activeElement.dataset.id : null;
 
-  const rows = ranked.map((p, i) => {
+  const items = rows.map(({ player: p, rank }) => {
     // The row is a real button so it can be reached and opened from the
-    // keyboard, like the player cards.
+    // keyboard, like the player cards. Tied players share a rank, and the
+    // medal colors follow the rank, not the row.
     const li = el("li");
+    li.dataset.rank = rank;
     const row = el("button");
     row.type = "button";
     row.dataset.id = p.id;
-    row.addEventListener("click", () => openSheet(p.id, "board"));
+    row.addEventListener("click", () => showPlayer(p.id, "board"));
     const wrap = el("span", "bar-wrap");
     const bar = el("span", "bar");
     const fill = el("span");
     bar.append(fill);
     wrap.append(el("span", "name", p.name), bar);
-    row.append(el("span", "rank", String(i + 1)), head(p, 32), wrap, el("span", "score", board.fmt(p[board.key])));
+    row.append(el("span", "rank", String(rank)), head(p, 32), wrap, el("span", "score", board.fmt(p[board.key])));
     li.append(row);
     const width = `${(p[board.key] / top) * 100}%`;
     // Set the width after insertion so the bar animates from zero, or
@@ -300,7 +318,7 @@ function renderBoard() {
     else fill.style.width = width;
     return li;
   });
-  list.replaceChildren(...rows);
+  list.replaceChildren(...items);
   if (focusedID) focusPlayer("board", focusedID, { preventScroll: true });
 }
 
@@ -348,17 +366,60 @@ function renderActivity() {
 
 // ---------- Player sheet ----------
 
+// The sheet has a URL, #player/<name>, so a player can be linked to and
+// Back closes the sheet. Opening it from the page pushes a history entry
+// and closing it goes back over that entry. A sheet opened from a link or
+// a reload has no entry of its own to go back over, so closing it just
+// drops the hash.
+const PLAYER_HASH = /^#player\/(.+)$/;
+
 // Where the sheet was opened from: the player's id and the list it was in.
-// Not the element, which may be re-rendered while the sheet is open.
+// Not the element, which may be re-rendered while the sheet is open. Null
+// when it was opened from the URL.
 let sheetOpener = null;
+
+// Opens a player's sheet from a card or a leaderboard row.
+function showPlayer(id, from) {
+  const p = data.players.find((x) => x.id === id);
+  if (!p) return;
+  history.pushState({ sheet: true }, "", `#player/${encodeURIComponent(p.name)}`);
+  openSheet(id, from);
+}
 
 function openSheet(id, from) {
   if (!fillSheet(id)) return;
-  sheetOpener = { id, from };
+  sheetOpener = from ? { id, from } : null;
 
   // showModal traps focus, makes the page inert and closes on Esc.
-  $("sheet").showModal();
+  if (!$("sheet").open) $("sheet").showModal();
 }
+
+// The player the URL's hash names, matched without case as Minecraft names
+// are, or null.
+function playerInHash() {
+  const m = PLAYER_HASH.exec(location.hash);
+  if (!m) return null;
+  let name;
+  try {
+    name = decodeURIComponent(m[1]).toLowerCase();
+  } catch {
+    return null;
+  }
+  return data.players.find((p) => p.name.toLowerCase() === name) ?? null;
+}
+
+// Opens or closes the sheet to match the URL: on Back and Forward, a
+// changed hash, and the first time the players load.
+function syncSheet() {
+  const p = playerInHash();
+  if (p) {
+    if (!(sheet.open && data.sheetId === p.id)) openSheet(p.id);
+  } else if (sheet.open && !PLAYER_HASH.test(location.hash)) {
+    sheet.close();
+  }
+}
+addEventListener("popstate", syncSheet);
+addEventListener("hashchange", syncSheet);
 
 // Fills the sheet with a player's stats. Returns false if they're unknown.
 function fillSheet(id) {
@@ -389,13 +450,26 @@ function fillSheet(id) {
     ...SHEET_STATS.map((s) => {
       const div = el("div");
       const dd = el("dd", "", s.fmt(p[s.key]));
-      const rank = rankedBy(s.key).findIndex((x) => x.id === id) + 1;
-      if (rank === 1 && p[s.key] > 0 && s.key !== "deaths") dd.append(el("span", "rank-note", "#1 on the server"));
+      const note = rankNote(s.key, id);
+      if (note) dd.append(el("span", "rank-note", note));
       div.append(el("dt", "", s.label), dd);
       return div;
     }),
   );
   return true;
+}
+
+// Where a player places on a stat, such as "#2 of 3", counting only the
+// players with a score, the same as the leaderboards. Nothing when they
+// have no score, when nobody else has one either (a rank of one says
+// nothing), or for deaths, where coming first is no honour.
+function rankNote(key, id) {
+  if (key === "deaths") return "";
+  const rows = ranked(data.players, key);
+  const mine = rows.find((r) => r.player.id === id);
+  if (!mine || rows.length < 2) return "";
+  const tied = rows.filter((r) => r.rank === mine.rank).length > 1;
+  return `${tied ? "Tied " : ""}#${mine.rank} of ${rows.length}`;
 }
 
 // Focuses the player's card or row in the list with the given id.
@@ -409,6 +483,12 @@ sheet.addEventListener("close", () => {
   sheetOpener = null;
   data.sheetId = null;
   pressedOutside = false;
+  // Closed from the page (Esc, the button, the backdrop) rather than by
+  // Back: leave the sheet's URL too.
+  if (PLAYER_HASH.test(location.hash)) {
+    if (history.state?.sheet) history.back();
+    else history.replaceState(history.state, "", location.pathname + location.search);
+  }
 });
 $("sheet-close").addEventListener("click", () => sheet.close());
 // The dialog fills the viewport height on desktop, so a click on its empty
@@ -486,6 +566,14 @@ function el(tag, className = "", text) {
   return node;
 }
 
+// Coordinates as "x, y, z", where a narrow card may wrap between numbers
+// but never inside one (as after the minus sign of a negative number).
+function coords(xyz) {
+  const out = document.createDocumentFragment();
+  xyz.forEach((n, i) => out.append(i ? ", " : "", el("span", "nowrap", String(n))));
+  return out;
+}
+
 // A front view of the player's whole skin, size pixels wide and 2.4 times
 // as tall.
 function bodyURL(id, size) {
@@ -512,12 +600,6 @@ function head(player, size) {
 function visibleOnline() {
   if (data.status?.state !== "active") return [];
   return data.status.players.filter((p) => p.id !== ANONYMOUS_ID);
-}
-
-// Players sorted by a stat, highest first. The board and the sheet's #1
-// notes both use it, so they always agree.
-function rankedBy(key) {
-  return [...data.players].sort((a, b) => b[key] - a[key]);
 }
 
 // Returns true the first time it's called for a key, so entrance animations

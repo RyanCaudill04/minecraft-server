@@ -26,10 +26,12 @@ test.beforeEach(async ({ context, page }) => {
   await page.clock.setFixedTime(NOW);
 });
 
-// Opens the page in a state and waits for the API data to render.
-async function open(page, state = "active") {
-  await page.goto(urlFor(state));
-  await expect(page.locator("#board li")).toHaveCount(3);
+// Opens the page in a state, with an optional hash, and waits for the API
+// data to render. The playtime board lists Alice and Bob: Carol, who has
+// stats but neither a name nor a last-seen time, is left out everywhere.
+async function open(page, state = "active", hash = "") {
+  await page.goto(urlFor(state) + hash);
+  await expect(page.locator("#board li")).toHaveCount(2);
 }
 
 test.describe("server states", () => {
@@ -81,7 +83,24 @@ test("world facts and the in-game clock", async ({ page }) => {
   await expect(fact("Spawn")).toHaveText("192, 76, -192");
   await expect(fact("Version")).toHaveText("26.2");
   await expect(fact("Last saved")).toHaveText("9h ago");
-  await expect(fact("Players")).toHaveText("3");
+  await expect(fact("Players")).toHaveText("2");
+});
+
+test("nameless players who were never seen are left out", async ({ page }) => {
+  await open(page);
+  await expect(page.locator("#player-grid .player-card .name")).toHaveText(["Alice", "Bob"]);
+  await expect(page.getByText("33333333")).toHaveCount(0);
+});
+
+test("the spawn point wraps between coordinates, never inside one", async ({ page }) => {
+  // A small phone, where the two-column facts are too narrow for one line.
+  await page.setViewportSize({ width: 330, height: 700 });
+  await open(page);
+  const spawn = page.locator(".fact").filter({ has: page.getByText("Spawn", { exact: true }) }).locator(".value");
+  await expect(spawn).toHaveText("192, 76, -192");
+  // Each number is one box on one line, wherever the value wraps.
+  const lines = await spawn.locator(".nowrap").evaluateAll((spans) => spans.map((s) => s.getClientRects().length));
+  expect(lines).toEqual([1, 1, 1]);
 });
 
 test("activity feed, newest first", async ({ page }) => {
@@ -113,17 +132,85 @@ test("leaderboard picker", async ({ page }) => {
   await expect(page.locator("#board")).toHaveAttribute("aria-label", "Playtime leaderboard");
 
   const rows = page.locator("#board li");
-  await expect(rows.locator(".name")).toHaveText(["Alice", "Bob", "33333333"]);
-  await expect(rows.first().locator(".score")).toHaveText("1h 0m");
+  await expect(rows.locator(".name")).toHaveText(["Alice", "Bob"]);
+  await expect(rows.locator(".score")).toHaveText(["1h", "30m"]);
 
   const mobKills = page.locator("#board-tabs").getByRole("button", { name: "Mob kills" });
   await mobKills.click();
   await expect(mobKills).toHaveAttribute("aria-pressed", "true");
   await expect(tabs.first()).toHaveAttribute("aria-pressed", "false");
-  await expect(rows.locator(".score")).toHaveText(["40", "5", "0"]);
+  await expect(rows.locator(".score")).toHaveText(["40", "5"]);
 
+  // Bob has no distance, so he isn't on the board.
   await page.locator("#board-tabs").getByRole("button", { name: "Distance" }).click();
-  await expect(rows.first().locator(".score")).toHaveText("750 m");
+  await expect(rows.locator(".name")).toHaveText(["Alice"]);
+  await expect(rows.locator(".score")).toHaveText(["750 m"]);
+
+  // Nobody has caught a fish.
+  await page.locator("#board-tabs").getByRole("button", { name: "Fish caught" }).click();
+  await expect(rows).toHaveCount(0);
+  await expect(page.locator("#board")).toBeHidden();
+  await expect(page.locator("#board-empty")).toHaveText("No fish caught yet.");
+
+  await page.locator("#board-tabs").getByRole("button", { name: "Deaths" }).click();
+  await expect(page.locator("#board-empty")).toBeHidden();
+  await expect(rows.locator(".name")).toHaveText(["Alice"]);
+});
+
+test("tied scores share a rank", async ({ page }) => {
+  // Made-up players: two tie for first, two for third, one has none.
+  const id = (n) => `${n}${n}${n}${n}${n}${n}${n}${n}-0000-0000-0000-000000000000`;
+  const players = [
+    ["Dana", 9],
+    ["Eve", 3],
+    ["Finn", 9],
+    ["Gus", 3],
+    ["Hal", 1],
+    ["Ivy", 0],
+  ].map(([name, mobKills], i) => ({
+    id: id(i + 4),
+    name,
+    lastSeen: "2026-10-26T00:00:00Z",
+    playTicks: 1200,
+    deaths: 0,
+    mobKills,
+    playerKills: 0,
+    blocksMined: 0,
+    distanceCm: 0,
+    jumps: 0,
+    fishCaught: 0,
+    animalsBred: 0,
+    advancements: 0,
+  }));
+  await page.route("**/api/players", (route) => route.fulfill({ json: players }));
+  await page.goto(urlFor("sleeping"));
+  await page.locator("#board-tabs").getByRole("button", { name: "Mob kills" }).click();
+  const rows = page.locator("#board li");
+  await expect(rows.locator(".name")).toHaveText(["Dana", "Finn", "Eve", "Gus", "Hal"]);
+  await expect(rows.locator(".rank")).toHaveText(["1", "1", "3", "3", "5"]);
+  // Medal colors follow the rank, so both firsts are gold.
+  const gold = await rows.nth(0).locator(".rank").evaluate((e) => getComputedStyle(e).color);
+  await expect(rows.nth(1).locator(".rank")).toHaveCSS("color", gold);
+
+  await rows.filter({ hasText: "Finn" }).click();
+  const stat = (label) => page.locator(".sheet-stats > div").filter({ has: page.getByText(label, { exact: true }) }).locator("dd");
+  await expect(stat("Mob kills")).toHaveText("9Tied #1 of 5");
+});
+
+test("leaderboard tabs stay on one line on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page);
+  const tabs = page.locator("#board-tabs button");
+  const tops = await tabs.evaluateAll((buttons) => buttons.map((b) => b.offsetTop));
+  expect(new Set(tops).size, "rows of tabs").toBe(1);
+  // They scroll sideways instead, and picking one brings it into view.
+  const strip = page.locator("#board-tabs");
+  expect(await strip.evaluate((s) => s.scrollWidth > s.clientWidth)).toBe(true);
+  await tabs.last().click();
+  await expect(tabs.last()).toHaveAttribute("aria-pressed", "true");
+  await expect(tabs.last()).toBeInViewport({ ratio: 1 });
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+  expect(overflow, "horizontal overflow in px").toBeLessThanOrEqual(0);
 });
 
 test.describe("player sheet", () => {
@@ -142,8 +229,11 @@ test.describe("player sheet", () => {
     await expect(sheet.locator("#sheet-name")).toHaveText("Alice");
     await expect(sheet.locator("#sheet-seen")).toHaveText("Online now");
     const stat = (label) => sheet.locator(".sheet-stats > div").filter({ has: page.getByText(label, { exact: true }) }).locator("dd");
-    await expect(stat("Playtime")).toHaveText("1h 0m#1 on the server");
-    await expect(stat("Jumps")).toHaveText("300#1 on the server");
+    // Ranks count the players with a score, as the leaderboards do.
+    await expect(stat("Playtime")).toHaveText("1h#1 of 2");
+    await expect(stat("Advancements")).toHaveText("5#2 of 2");
+    // Nobody else has jumped, so being first says nothing.
+    await expect(stat("Jumps")).toHaveText("300");
     // Most deaths isn't an honour.
     await expect(stat("Deaths")).toHaveText("2");
     await expect(page.locator("#sheet-close")).toBeFocused();
@@ -158,10 +248,55 @@ test.describe("player sheet", () => {
   });
 
   test("hides server firsts for a player without any", async ({ page }) => {
+    // Bob, without his diamonds badge.
+    await page.route("**/api/players", async (route) => {
+      const players = await (await route.fetch()).json();
+      for (const p of players) if (p.name === "Bob") delete p.firsts;
+      await route.fulfill({ json: players });
+    });
     await open(page, "active");
-    await page.locator("#player-grid .player-card").filter({ hasText: "33333333" }).click();
-    await expect(page.locator("#sheet-name")).toHaveText("33333333");
+    await page.locator("#player-grid .player-card").filter({ hasText: "Bob" }).click();
+    await expect(page.locator("#sheet-name")).toHaveText("Bob");
     await expect(page.locator("#sheet-firsts")).toBeHidden();
+  });
+
+  test("has a URL, and Back closes it", async ({ page }) => {
+    await open(page, "active", "#players");
+    await page.locator("#player-grid .player-card").filter({ hasText: "Alice" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page).toHaveURL(/#player\/Alice$/);
+    await page.goBack();
+    await expect(page.getByRole("dialog")).toBeHidden();
+    await expect(page).toHaveURL(/#players$/);
+    // Forward opens it again.
+    await page.goForward();
+    await expect(page.locator("#sheet-name")).toHaveText("Alice");
+  });
+
+  test("closing it from the page leaves its URL", async ({ page }) => {
+    await open(page, "active", "#players");
+    await page.locator("#player-grid .player-card").filter({ hasText: "Alice" }).click();
+    await expect(page).toHaveURL(/#player\/Alice$/);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toBeHidden();
+    await expect(page).toHaveURL(/#players$/);
+  });
+
+  test("a link opens it", async ({ page }) => {
+    // Names match without case, as in the game.
+    await open(page, "sleeping", "#player/bob");
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.locator("#sheet-name")).toHaveText("Bob");
+    // There's no page to go back to, so closing drops the hash and stays.
+    await page.locator("#sheet-close").click();
+    await expect(page.getByRole("dialog")).toBeHidden();
+    await expect(page).toHaveURL(urlFor("sleeping"));
+    await expect(page.locator("#state-title")).toHaveText("Sleeping");
+  });
+
+  test("a link to an unknown player opens nothing", async ({ page }) => {
+    await open(page, "sleeping", "#player/Nobody");
+    await expect(page.getByRole("dialog")).toBeHidden();
   });
 
   test("Esc closes it and returns focus", async ({ page }) => {

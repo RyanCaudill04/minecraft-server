@@ -19,6 +19,7 @@ import {
   fmtWhen,
   mcClock,
   phase,
+  ranked,
   weather,
 } from "../../sites/play/format.js";
 
@@ -137,12 +138,65 @@ describe("fmtPlaytime", () => {
     [MINUTE - 1, "0m"],
     [MINUTE, "1m"],
     [HOUR - 1, "59m"],
-    [HOUR, "1h 0m"],
+    [HOUR, "1h"],
+    [HOUR + MINUTE - 1, "1h"],
     [HOUR + 15 * MINUTE, "1h 15m"],
+    [100 * HOUR, "100h"],
     [100 * HOUR + 5 * MINUTE, "100h 5m"],
   ]) {
     test(`${ticks} ticks is ${want}`, () => assert.equal(fmtPlaytime(ticks), want));
   }
+});
+
+describe("ranked", () => {
+  const rows = (players, key) => ranked(players, key).map(({ player, rank }) => [player.name, rank]);
+
+  test("highest first, without zero scores", () => {
+    const players = [
+      { name: "a", kills: 5 },
+      { name: "b", kills: 0 },
+      { name: "c", kills: 40 },
+      { name: "d" }, // no value at all
+    ];
+    assert.deepEqual(rows(players, "kills"), [
+      ["c", 1],
+      ["a", 2],
+    ]);
+  });
+
+  test("ties share a rank and the next rank skips past them", () => {
+    const players = [
+      { name: "a", kills: 3 },
+      { name: "b", kills: 9 },
+      { name: "c", kills: 9 },
+      { name: "d", kills: 1 },
+      { name: "e", kills: 3 },
+    ];
+    assert.deepEqual(rows(players, "kills"), [
+      ["b", 1],
+      ["c", 1],
+      ["a", 3],
+      ["e", 3],
+      ["d", 5],
+    ]);
+  });
+
+  test("nobody with a score is an empty board", () => {
+    assert.deepEqual(ranked([{ name: "a", kills: 0 }], "kills"), []);
+    assert.deepEqual(ranked([], "kills"), []);
+  });
+
+  test("leaves the players array alone", () => {
+    const players = [
+      { name: "a", kills: 1 },
+      { name: "b", kills: 2 },
+    ];
+    ranked(players, "kills");
+    assert.deepEqual(
+      players.map((p) => p.name),
+      ["a", "b"],
+    );
+  });
 });
 
 describe("fmtHours", () => {

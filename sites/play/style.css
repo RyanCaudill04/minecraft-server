@@ -184,18 +184,27 @@
 .fact .label { color: var(--muted); font-size: 0.8125rem; font-weight: 500; }
 .fact .value { font-size: 1.25rem; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .fact .hint { color: var(--muted); font-size: 0.8125rem; }
+.fact .nowrap { white-space: nowrap; }
 
 /* Leaderboards */
+/* One line of tabs. Where they don't fit, as on a phone, the line scrolls
+   sideways instead of wrapping. */
 .segmented {
   display: inline-flex;
-  flex-wrap: wrap;
+  max-width: 100%;
   gap: 2px;
   margin-bottom: 14px;
   padding: 3px;
   border-radius: 11px;
   background: var(--border);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
 }
+.segmented::-webkit-scrollbar { display: none; }
 .segmented button {
+  flex: none;
+  white-space: nowrap;
   padding: 6px 12px;
   border: 0;
   border-radius: 8px;
@@ -229,9 +238,10 @@
 }
 .board button:hover { background: var(--bg); }
 .board .rank { color: var(--subtle); font-weight: 650; font-variant-numeric: tabular-nums; text-align: center; }
-.board li:nth-child(1) .rank { color: var(--gold); }
-.board li:nth-child(2) .rank { color: var(--silver); }
-.board li:nth-child(3) .rank { color: var(--bronze); }
+.board li[data-rank="1"] .rank { color: var(--gold); }
+.board li[data-rank="2"] .rank { color: var(--silver); }
+.board li[data-rank="3"] .rank { color: var(--bronze); }
+.board-empty { margin: 0; padding: 12px; }
 .board img { width: 32px; height: 32px; border-radius: 8px; image-rendering: pixelated; }
 .board .bar-wrap { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .board .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
