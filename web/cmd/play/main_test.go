@@ -119,19 +119,37 @@ func TestAPIWorldAndPlayers(t *testing.T) {
 	if resp := getJSON(t, ts.URL+"/api/players", &players); resp.StatusCode != http.StatusOK {
 		t.Fatalf("/api/players: status code %d", resp.StatusCode)
 	}
-	if len(players) != 3 || players[0].Name != "Bob" {
+	// Carol has neither a name nor a last-seen time, so she's left out.
+	if len(players) != 2 || players[0].Name != "Bob" || players[1].Name != "Alice" {
 		t.Errorf("/api/players = %+v", players)
 	}
+}
 
-	// Carol has no player data file, so her last-seen time is unknown. The
-	// key must be absent: Go's zero time is a truthy date string in JS.
+func TestAPIPlayersNeverSeen(t *testing.T) {
+	ts, server := newTestServer(t, nil, nil)
+	// Named in usercache.json, Carol is listed, though she has no player
+	// data file and so no last-seen time. The players cache loads on the
+	// first request, so this is in place in time.
+	cache := `[{"uuid":"` + worldtest.CarolID + `","name":"Carol"}]`
+	if err := os.WriteFile(filepath.Join(server, "usercache.json"), []byte(cache), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The key must be absent: Go's zero time is a truthy date string in JS.
 	var raw []map[string]any
 	getJSON(t, ts.URL+"/api/players", &raw)
+	found := false
 	for _, p := range raw {
-		_, has := p["lastSeen"]
-		if want := p["id"] != worldtest.CarolID; has != want {
-			t.Errorf("player %v: has lastSeen = %v, want %v", p["id"], has, want)
+		if p["id"] != worldtest.CarolID {
+			continue
 		}
+		found = true
+		if v, has := p["lastSeen"]; has {
+			t.Errorf("Carol has lastSeen %v, want the key left out", v)
+		}
+	}
+	if !found {
+		t.Errorf("Carol missing from /api/players: %v", raw)
 	}
 }
 

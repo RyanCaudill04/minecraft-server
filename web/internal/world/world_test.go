@@ -106,10 +106,8 @@ func TestReadPlayers(t *testing.T) {
 				{Advancement: "minecraft:end/elytra", At: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)},
 			},
 		},
-		{
-			ID:   worldtest.CarolID,
-			Name: "33333333", // not in usercache.json; never seen
-		},
+		// Carol isn't in usercache.json and has never been seen, so she's
+		// left out.
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ReadPlayers:\n got %+v\nwant %+v", got, want)
@@ -126,10 +124,38 @@ func TestReadPlayersWithoutUserCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Alice and Bob have been seen, so they stay, named by their UUIDs.
+	// Carol has neither a name nor a last-seen time.
+	if len(got) != 2 {
+		t.Fatalf("got %d players, want Alice and Bob: %+v", len(got), got)
+	}
 	for _, p := range got {
 		if p.Name != p.ID[:8] {
 			t.Errorf("player %s named %q, want the UUID prefix", p.ID, p.Name)
 		}
+	}
+}
+
+func TestReadPlayersNamedButNeverSeen(t *testing.T) {
+	server := worldtest.Build(t)
+	cache := `[{"uuid":"` + worldtest.CarolID + `","name":"Carol"}]`
+	if err := os.WriteFile(filepath.Join(server, "usercache.json"), []byte(cache), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := world.ReadPlayers(server, filepath.Join(server, "world"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// With a name, a player who has never been seen is still listed.
+	var carol *world.Player
+	for i := range got {
+		if got[i].ID == worldtest.CarolID {
+			carol = &got[i]
+		}
+	}
+	if carol == nil || carol.Name != "Carol" || !carol.LastSeen.IsZero() {
+		t.Errorf("Carol = %+v, want her listed by name with no last-seen time", carol)
 	}
 }
 
