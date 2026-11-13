@@ -281,6 +281,7 @@ test.describe("map previews", () => {
         expect(src.searchParams.get(p), p).toBe("false");
       }
       await expect(card(page, world).locator("a.btn")).toHaveAttribute("href", `/map/?world=${world}`);
+      await expect(card(page, world).locator("a.btn")).toBeVisible();
     }
   });
 
@@ -292,12 +293,16 @@ test.describe("map previews", () => {
     await expect(card(page, "minecraft_the_nether")).toHaveAttribute("data-ready", "false");
     await expect(card(page, "minecraft_the_nether").locator("iframe")).not.toHaveAttribute("src");
     await expect(card(page, "minecraft_the_nether").locator(".map-placeholder")).toBeVisible();
+    // /map/ has nothing for that world yet, so there's no link to it.
+    await expect(card(page, "minecraft_overworld").locator("a.btn")).toBeVisible();
+    await expect(card(page, "minecraft_the_nether").locator("a.btn")).toBeHidden();
   });
 
   test("no map at all shows every placeholder", async ({ page }) => {
     await open(page);
     await expect(page.locator(".map-placeholder:visible")).toHaveCount(3);
     await expect(page.locator(".map-card iframe[src]")).toHaveCount(0);
+    await expect(page.locator(".map-card a.btn:visible")).toHaveCount(0);
   });
 });
 

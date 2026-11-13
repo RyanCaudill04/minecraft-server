@@ -125,6 +125,9 @@
 }
 .map-foot p { margin: 0; font-size: 0.875rem; }
 .map-foot .btn { text-decoration: none; }
+/* /map/ has nothing to show until squaremap has rendered this world, so the
+   link appears with the preview. */
+.map-card:not([data-ready="true"]) .map-foot .btn { display: none; }
 
 /* Player cards */
 .player-card {
