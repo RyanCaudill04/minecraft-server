@@ -170,16 +170,14 @@ function renderWorld() {
   $("clock-sub").textContent = `Day ${fmtNum(w.day)} · ${phase(w.timeOfDay)} · ${weather(w)}`;
   placeSky(w.timeOfDay);
 
+  // Only what the rest of the page doesn't show: the day, time and weather
+  // are in the In-game time card, and the player count is the Players grid.
   const facts = [
-    ["Day", fmtNum(w.day), phase(w.timeOfDay)],
-    ["Time", mcClock(w.timeOfDay), "As of the last save"],
-    ["Weather", weather(w), w.raining ? "Bring a roof" : "Clear skies"],
     ["World age", fmtHours(w.ageTicks), "Real time the world has run"],
     ["Difficulty", capitalize(w.difficulty) + (w.hardcore ? " · Hardcore" : ""), w.hardcore ? "One life" : "Respawns on"],
     ["Spawn", w.spawn ? w.spawn.join(", ") : "Unknown", "X, Y, Z"],
     ["Version", w.version || "Unknown", "Java Edition"],
     ["Last saved", fmtAgo(w.lastSaved), w.lastSaved ? fmtWhen(w.lastSaved) : "Unknown"],
-    ["Players", fmtNum(data.players.length), "Have joined so far"],
   ];
   const appear = once("world");
   $("facts").replaceChildren(

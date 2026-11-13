@@ -81,7 +81,9 @@ test("world facts and the in-game clock", async ({ page }) => {
   await expect(fact("Spawn")).toHaveText("192, 76, -192");
   await expect(fact("Version")).toHaveText("26.2");
   await expect(fact("Last saved")).toHaveText("9h ago");
-  await expect(fact("Players")).toHaveText("3");
+  // Only facts the rest of the page doesn't show: no day, time, weather or
+  // player count, which the In-game time card and Players grid already have.
+  await expect(page.locator(".fact .label")).toHaveText(["World age", "Difficulty", "Spawn", "Version", "Last saved"]);
 });
 
 test("activity feed, newest first", async ({ page }) => {
