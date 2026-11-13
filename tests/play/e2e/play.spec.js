@@ -81,7 +81,9 @@ test("world facts and the in-game clock", async ({ page }) => {
   await expect(fact("Spawn")).toHaveText("192, 76, -192");
   await expect(fact("Version")).toHaveText("26.2");
   await expect(fact("Last saved")).toHaveText("9h ago");
-  await expect(fact("Players")).toHaveText("3");
+  // Only facts the rest of the page doesn't show: no day, time, weather or
+  // player count, which the In-game time card and Players grid already have.
+  await expect(page.locator(".fact .label")).toHaveText(["World age", "Difficulty", "Spawn", "Version", "Last saved"]);
 });
 
 test("activity feed, newest first", async ({ page }) => {
@@ -279,6 +281,7 @@ test.describe("map previews", () => {
         expect(src.searchParams.get(p), p).toBe("false");
       }
       await expect(card(page, world).locator("a.btn")).toHaveAttribute("href", `/map/?world=${world}`);
+      await expect(card(page, world).locator("a.btn")).toBeVisible();
     }
   });
 
@@ -290,12 +293,16 @@ test.describe("map previews", () => {
     await expect(card(page, "minecraft_the_nether")).toHaveAttribute("data-ready", "false");
     await expect(card(page, "minecraft_the_nether").locator("iframe")).not.toHaveAttribute("src");
     await expect(card(page, "minecraft_the_nether").locator(".map-placeholder")).toBeVisible();
+    // /map/ has nothing for that world yet, so there's no link to it.
+    await expect(card(page, "minecraft_overworld").locator("a.btn")).toBeVisible();
+    await expect(card(page, "minecraft_the_nether").locator("a.btn")).toBeHidden();
   });
 
   test("no map at all shows every placeholder", async ({ page }) => {
     await open(page);
     await expect(page.locator(".map-placeholder:visible")).toHaveCount(3);
     await expect(page.locator(".map-card iframe[src]")).toHaveCount(0);
+    await expect(page.locator(".map-card a.btn:visible")).toHaveCount(0);
   });
 });
 
