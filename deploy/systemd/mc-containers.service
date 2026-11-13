@@ -18,8 +18,11 @@ RemainAfterExit=yes
 EnvironmentFile=-%h/.config/minecraft/host.env
 ExecStart=%h/apps/current/deploy/containers/stack.sh up
 ExecStop=%h/apps/current/deploy/containers/stack.sh stop-web
-# Pulling a new image over a slow connection can take a while.
-TimeoutStartSec=15min
+# Pulling an image, stopping Paper (up to 4 minutes) and waiting for Docker
+# at boot all take time. Kept under mc-agent's 10-minute budget for a whole
+# deploy, so a slow start fails here and the agent still has time to roll
+# back.
+TimeoutStartSec=8min
 
 [Install]
 WantedBy=default.target
