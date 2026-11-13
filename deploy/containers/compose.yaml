@@ -52,10 +52,16 @@ services:
     # stand in front of it, and only the server controls use it.
     group_add:
       - "${DOCKER_GID:?run stack.sh}"
+    # raw: values are taken as written, as systemd read them for
+    # admin.service. Without it compose expands "$" (a password with "$x"
+    # in it loses that part) and strips quotes.
     env_file:
       - path: ${SECRETS_ENV:?run stack.sh}
         required: false
+        format: raw
     environment:
+      # admin prefers the MC_ name, as mc-backup.sh does.
+      MC_BACKUP_KEEP_DAYS: ${MC_BACKUP_KEEP_DAYS:-}
       BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-}
     command:
       - -server
