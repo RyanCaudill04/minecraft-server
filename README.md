@@ -35,8 +35,9 @@ The Pi runs three containers with Docker Compose
   `docker compose up` with the images the release pins in
   `deploy/images.env`, checks that LazyMC answers on 25565 (play's and
   admin's health checks pass with the server offline, so this is the
-  deploy's check on it), and removes this repo's images nothing uses any
-  more. mc-agent restarts it on every deploy (see
+  deploy's check on it), and removes this repo's images that no installed
+  release pins, so a rollback to any release mc-agent keeps needs no
+  download. mc-agent restarts it on every deploy (see
   [Releases](#releases-and-deploys)). play and admin are rebuilt for every
   release. mc-server's tag is a hash of its inputs
   ([`scripts/images.sh`](scripts/images.sh)), so the server only restarts
