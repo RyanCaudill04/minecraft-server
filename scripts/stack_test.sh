@@ -21,7 +21,7 @@ cp "$root/deploy/containers/compose.yaml" "$root/deploy/containers/stack.sh" "$r
 printf 'PLAY_IMAGE=example/play:r9\n' >"$rel/deploy/images.env"
 
 # FAKE_STATE is what "docker inspect" says about mc-server ("<status>
-# <finished at>"); empty means there's no such container. FAKE_RUNNING is
+# <finished at> <created at>"); empty means there's no such container. FAKE_RUNNING is
 # "<running> <restart count>".
 cat >"$tmp/bin/docker" <<'STUB'
 #!/usr/bin/env bash
@@ -106,26 +106,32 @@ has "SERVER_DIR=$tmp/other" "MC_SERVER_DIR wins"
 has "BACKUP_DIR=$tmp/bk" "MC_BACKUP_DIR wins"
 
 # mc-server running: a normal update.
-run FAKE_STATE="running 0001-01-01T00:00:00Z" >/dev/null || fail "running: failed"
+run FAKE_STATE="running 0001-01-01T00:00:00Z $before_boot" >/dev/null || fail "running: failed"
 has "$up_all" "running"
 
 # Stopped since this boot (from admin or docker stop): play and admin are
 # updated, mc-server is updated without starting, and nothing waits for
 # LazyMC (whose port is closed here).
-out=$(run FAKE_STATE="exited $after_boot" MC_PORT="$closed_port") || fail "stopped on purpose: failed: $out"
+out=$(run FAKE_STATE="exited $after_boot $before_boot" MC_PORT="$closed_port") || fail "stopped on purpose: failed: $out"
 grep -q "left stopped" <<<"$out" || fail "stopped on purpose: didn't say so: $out"
 has "args: $compose up --detach --remove-orphans --pull missing --quiet-pull play admin" "stopped on purpose: play and admin"
 has "args: $compose up --no-start --pull missing --quiet-pull mc-server" "stopped on purpose: mc-server not started"
 hasnt "$up_all" "stopped on purpose"
 has "$prune" "stopped on purpose prunes"
 
-# Updated but not started by an earlier up: still stopped on purpose.
-run FAKE_STATE="created 0001-01-01T00:00:00Z" MC_PORT="$closed_port" >/dev/null || fail "created: failed"
-has "args: $compose up --no-start --pull missing --quiet-pull mc-server" "created stays stopped"
+# Made but not started by an earlier up since this boot: still stopped on
+# purpose.
+run FAKE_STATE="created 0001-01-01T00:00:00Z $after_boot" MC_PORT="$closed_port" >/dev/null || fail "created: failed"
+has "args: $compose up --no-start --pull missing --quiet-pull mc-server" "created since boot stays stopped"
+
+# Made but not started before the Pi rebooted: Docker didn't start it at
+# boot, so up does, as for any stop before the boot.
+run FAKE_STATE="created 0001-01-01T00:00:00Z $before_boot" >/dev/null || fail "created before boot: failed"
+has "$up_all" "created before boot starts"
 
 # Stopped before the Pi booted (the shutdown stopped it): start it, as
 # minecraft.service did at boot.
-run FAKE_STATE="exited $before_boot" >/dev/null || fail "stopped before boot: failed"
+run FAKE_STATE="exited $before_boot $before_boot" >/dev/null || fail "stopped before boot: failed"
 has "$up_all" "stopped before boot starts"
 
 # LazyMC never answers: the deploy fails, with mc-server's log.
@@ -135,7 +141,7 @@ grep -q "fake mc-server log" <<<"$out" || fail "LazyMC down: no log in: $out"
 hasnt "$prune" "a failed up doesn't prune"
 
 # mc-server isn't running (a crash loop): the deploy fails.
-if run FAKE_STATE="restarting 0001-01-01T00:00:00Z" FAKE_RUNNING="false 7" >/dev/null 2>&1; then
+if run FAKE_STATE="restarting 0001-01-01T00:00:00Z $before_boot" FAKE_RUNNING="false 7" >/dev/null 2>&1; then
   fail "not running: want a failure"
 fi
 

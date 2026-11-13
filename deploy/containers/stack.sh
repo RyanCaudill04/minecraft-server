@@ -90,21 +90,24 @@ boot_time() {
 }
 
 # stopped_on_purpose reports whether mc-server exists, isn't running, and
-# was meant to be off: it stopped after the Pi last booted (Docker's
-# restart policy restarts a crash by itself, so that's a stop from admin or
-# docker stop), or an earlier up updated it without starting it. After a
-# reboot it starts again, as minecraft.service did.
+# was meant to be off since the Pi last booted: it stopped after the boot
+# (Docker's restart policy restarts a crash by itself, so that's a stop from
+# admin or docker stop), or an earlier up made it after the boot without
+# starting it. Either way, after a reboot it starts again, as
+# minecraft.service did. Docker doesn't start a container that was never
+# started when it boots, so a made-but-not-started one is judged by when it
+# was made.
 stopped_on_purpose() {
-  local status finished stopped booted
-  read -r status finished < <(docker inspect -f '{{.State.Status}} {{.State.FinishedAt}}' mc-server 2>/dev/null) || return 1
+  local status finished created since booted
+  read -r status finished created < <(docker inspect -f '{{.State.Status}} {{.State.FinishedAt}} {{.Created}}' mc-server 2>/dev/null) || return 1
   case $status in
-    created) return 0 ;;
-    exited | dead) ;;
+    created) since=$created ;;
+    exited | dead) since=$finished ;;
     *) return 1 ;;
   esac
-  stopped=$(to_epoch "$finished") || return 1
+  since=$(to_epoch "$since") || return 1
   booted=$(boot_time) || return 1
-  [ -n "$stopped" ] && [ -n "$booted" ] && [ "$stopped" -ge "$booted" ]
+  [ -n "$since" ] && [ -n "$booted" ] && [ "$since" -ge "$booted" ]
 }
 
 running_restarts() { docker inspect -f '{{.State.Running}} {{.RestartCount}}' mc-server 2>/dev/null; }
