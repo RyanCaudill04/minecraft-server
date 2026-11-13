@@ -7,7 +7,7 @@
 #
 #   up        Start the images the release pins (deploy/images.env), pulling
 #             any that are missing, then check that LazyMC answers and
-#             remove this repo's images that no container uses. A container
+#             remove this repo's images that no installed release pins. A container
 #             whose image and settings haven't changed keeps running, so a
 #             release that doesn't touch mc-server's image doesn't restart
 #             the Minecraft server. An mc-server stopped on purpose (from
@@ -130,12 +130,24 @@ check_server() {
   die "mc-server isn't running, or nothing answers on port $mc_port"
 }
 
-# prune removes this repo's images that no container uses, such as the
-# ones older releases pinned, so they don't fill the disk the world and
-# backups share. A rollback pulls what it needs again.
+# prune removes this repo's images that no installed release pins (the
+# ones mc-agent keeps in $APPS_DIR/releases, and this one), so images of
+# releases it has removed don't fill the disk the world and backups share.
+# Every installed release keeps its images, so a rollback to any of them
+# needs no download. Docker refuses to remove an image a container uses,
+# and those refusals are fine.
 prune() {
-  docker image prune --all --force --filter "label=$image_label" >/dev/null ||
-    echo "stack.sh: couldn't remove old images" >&2
+  local keep ref
+  # cat fails on a glob with nothing installed yet; what it read still counts.
+  keep=$({ cat "$images" "$APPS_DIR"/releases/*/deploy/images.env 2>/dev/null || true; } |
+    sed -n 's/^[A-Z_]*_IMAGE=//p' | sort -u)
+  while read -r ref; do
+    case $ref in '' | *:'<none>') continue ;; esac
+    grep -qxF -- "$ref" <<<"$keep" && continue
+    docker image rm "$ref" >/dev/null 2>&1 || true
+  done < <(docker image ls --filter "label=$image_label" --format '{{.Repository}}:{{.Tag}}')
+  # Untagged layers left when a tag moved to a newer image.
+  docker image prune --force --filter "label=$image_label" >/dev/null 2>&1 || true
 }
 
 case ${1:-} in

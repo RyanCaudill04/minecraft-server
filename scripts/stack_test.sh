@@ -42,6 +42,7 @@ case $1 in
     done >>"$DOCKER_LOG"
     ;;
   logs) echo "fake mc-server log" ;;
+  image) [ "$2" != ls ] || printf '%s\n' ${FAKE_IMAGES:-} ;;
 esac
 STUB
 chmod +x "$tmp/bin/docker"
@@ -80,7 +81,7 @@ hasnt() {
 
 compose="compose --project-name minecraft --file $rel/deploy/containers/compose.yaml --env-file $rel/deploy/images.env"
 up_all="args: $compose up --detach --remove-orphans --pull missing --quiet-pull"
-prune='args: image prune --all --force --filter label=org.opencontainers.image.source=https://github.com/RyanCaudill04/minecraft-server'
+prune='args: image prune --force --filter label=org.opencontainers.image.source=https://github.com/RyanCaudill04/minecraft-server'
 
 stack_args=(up)
 
@@ -133,6 +134,19 @@ has "$up_all" "created before boot starts"
 # minecraft.service did at boot.
 run FAKE_STATE="exited $before_boot $before_boot" >/dev/null || fail "stopped before boot: failed"
 has "$up_all" "stopped before boot starts"
+
+# Pruning keeps every image an installed release pins, so a rollback needs
+# no download, and removes the rest of this repo's images.
+mkdir -p "$tmp/apps/releases/r8/deploy"
+printf 'PLAY_IMAGE=example/play:r8\nMC_SERVER_IMAGE=example/mc-server:inputs-a\n' >"$tmp/apps/releases/r8/deploy/images.env"
+run APPS_DIR="$tmp/apps" FAKE_IMAGES="example/play:r9 example/play:r8 example/play:r7 example/mc-server:inputs-a example/mc-server:inputs-old example/play:<none>" >/dev/null ||
+  fail "prune: up failed"
+has "args: image rm example/play:r7" "prune removes an image no release pins"
+has "args: image rm example/mc-server:inputs-old" "prune removes an old mc-server image"
+for kept in example/play:r9 example/play:r8 example/mc-server:inputs-a "example/play:<none>"; do
+  hasnt "args: image rm $kept" "prune keeps $kept"
+done
+hasnt "args: image prune --all*" "prune never removes every unused image"
 
 # LazyMC never answers: the deploy fails, with mc-server's log.
 if out=$(run MC_PORT="$closed_port" 2>&1); then fail "LazyMC down: want a failure"; fi
