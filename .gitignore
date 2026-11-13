@@ -21,6 +21,7 @@ lazymc
 bin/
 
 # Machine-specific secrets and local overrides
+cloudflare.env
 server.properties.local
 server.properties
 connection.private.md
