@@ -17,8 +17,8 @@ force-pushing. Details are under "Workflow" and "Dev sites".
 | Path | What it is |
 | --- | --- |
 | `web/` | One Go module (`web/go.mod`) for every web app and the deploy agent. |
-| `web/cmd/play` | play.ryancaudill.dev: server status, world facts and player stats. Listens on `127.0.0.1:8082`. |
-| `web/cmd/admin` | admin.ryancaudill.dev: live status and the active release. Listens on `127.0.0.1:8081`. |
+| `web/cmd/play` | play.ryancaudill.dev: server status, world facts and player stats. Listens on `127.0.0.1:8082`. Runs in the `play` container. |
+| `web/cmd/admin` | admin.ryancaudill.dev: live status and the active release. Listens on `127.0.0.1:8081`. Runs in the `admin` container, where `-container mc-server` makes it control the server through the Docker socket. |
 | `web/cmd/mc-agent` | The deploy agent on the Pi: `deploy`, `rollback`, `status`, `version`. |
 | `web/cmd/pi-firmware` | Root helper admin runs through sudo to change the Pi 5's clock, voltage, temperature-limit and fan settings, tried with a one-shot tryboot first. Installed by hand, never by mc-agent (`deploy/pi-firmware/README.md`). |
 | `web/cmd/mc-players` | Small CLI that prints who is online with a status ping. |
@@ -26,16 +26,17 @@ force-pushing. Details are under "Workflow" and "Dev sites".
 | `web/internal/world/worldtest`, `web/internal/nbt/nbttest` | Synthetic test fixtures. Tests never use real player data. |
 | `sites/play`, `sites/admin` | Each site's `index.html`, `style.css`, `app.js`. |
 | `sites/shared` | `base.css`, served at `/shared/` by play and admin. |
-| `deploy/systemd/` | systemd **user** units installed on the Pi. |
+| `deploy/containers/` | The three containers the Pi runs: `web/Dockerfile` (targets `play` and `admin`), `mc-server/` (Dockerfile, entrypoint, `start.sh`, `lazymc.toml`), `compose.yaml`, and `stack.sh`, which runs compose with the release's images. |
+| `deploy/systemd/` | systemd **user** units installed on the Pi: `mc-containers.service` runs the containers; mc-agent and mc-backup stay on the host. |
 | `deploy/pi-firmware/` | The helper's sudoers rule, boot unit and watchdog config, installed by hand as root. |
 | `deploy/release.json` | Units, services, timers and health checks mc-agent applies for a release. |
-| `scripts/` | CI change detection, release notes and the release build, each with a `_test.sh` where it has logic. |
+| `scripts/` | CI change detection, release notes, the release build and the image tags (`images.sh`), each with a `_test.sh` where it has logic. |
 | `.github/workflows/ci.yml` | CI/CD: scoped checks on PRs, one required check `ci-ok`, releases from `main`, and the dev sites from `dev`. |
 | `dev/` | The dev sites on Cloudflare Workers (free plan): `worker.mjs` and a wrangler config per site. See "Dev sites" below. |
 | `.github/workflows/from-dev.yml` | The `from-dev` check: PRs into `main` must come from `dev`. |
 | `.github/workflows/review.yml`, `.github/review.md` | Optional advisory review on PRs labelled `review` (see below). |
 | `.claude/skills/` | Repo-specific agent skills, added in #105 (see "Decision: agent instructions and skills"). |
-| Repo root | The Minecraft server's own files: `lazymc.toml`, `start.sh`, `server.properties.example`, Paper/Spigot/Bukkit configs, `plugins/`, `config/`. |
+| Repo root | The Minecraft server's own files: `server.properties.example`, Paper/Spigot/Bukkit configs, `plugins/`, `config/`. LazyMC's config and `start.sh` are in `deploy/containers/mc-server/`. |
 
 ## Build and test
 
@@ -52,16 +53,23 @@ node --check sites/play/app.js
 node --check sites/admin/app.js
 
 # Scripts, workflows and the release
-shellcheck scripts/*.sh start.sh
+shellcheck scripts/*.sh deploy/backup/*.sh deploy/containers/*.sh deploy/containers/mc-server/*.sh
 scripts/ci-changes_test.sh
 scripts/release-notes_test.sh
 scripts/release-changes_test.sh
+scripts/images_test.sh
+scripts/stack_test.sh
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12   # CI pins this version
 scripts/build-release.sh <tag> <output folder> [notes.json]   # e.g. scripts/build-release.sh dev "$(mktemp -d)"
 
 # Dev sites
 node --test tests/dev/worker.test.mjs
 scripts/build-dev_test.sh
+
+# Container images (arm64, like the Pi; CI builds them on an arm64 runner)
+docker buildx build --platform linux/arm64 -f deploy/containers/web/Dockerfile --target play .
+docker buildx build --platform linux/arm64 -f deploy/containers/web/Dockerfile --target admin .
+docker buildx build --platform linux/arm64 -f deploy/containers/mc-server/Dockerfile .
 ```
 
 ### Preview play or admin locally
@@ -97,10 +105,11 @@ Fixtures are synthetic (`worldtest`, `nbttest`).
   (`.github/workflows/from-dev.yml`) fails for any other branch. Both
   branches change only through PRs that pass `ci-ok`. Never commit to,
   push to or force-push `main` or `dev`.
-- Merging to `main` deploys automatically: CI publishes a release `r<N>`
-  when anything under `web/`, `sites/`, `deploy/`, `.github/workflows/` or
-  `scripts/build-release.sh` changed, and `mc-agent.timer` on the Pi
-  installs it within minutes. Nobody edits files on the Pi, and the Pi's
+- Merging to `main` deploys automatically: CI pushes the images to GHCR and
+  publishes a release `r<N>` that pins them when anything under `web/`,
+  `sites/`, `deploy/`, `.github/workflows/`, `.dockerignore` or the release
+  and image scripts changed, and `mc-agent.timer` on the Pi installs it
+  within minutes. Nobody edits files on the Pi, and the Pi's
   git clone isn't pulled.
 - Commits: `<area>: <lowercase imperative summary>`, for example
   `site: serve static files with Cache-Control: no-cache`. Areas in use
@@ -155,18 +164,23 @@ refused, so nothing on the dev sites reaches the Pi or the server.
   synthetic.
 - `server.properties` stays untracked; edit `server.properties.example`.
 - **Don't touch production without explicit confirmation.** Never ssh to
-  the Pi, stop or restart the live server or its services, run
+  the Pi, stop or restart the live server, its containers or its services, run
   `mc-agent deploy` or `rollback`, force-push, or change repo settings or
   secrets unless the owner has said yes to that specific action.
 
 ## Pi facts
 
-- Services are systemd **user** units. Read logs with
+- play, admin and mc-server are Docker containers of those names
+  (`docker ps`, `docker logs mc-server`), run by the user unit
+  `mc-containers.service`. All three use the host's network.
+- mc-agent and mc-backup are systemd **user** units. Read logs with
   `journalctl --user-unit <name>` (`--user -u` finds nothing on this Pi).
-- Web apps run from `~/apps/current`, a link to a folder in
-  `~/apps/releases` that mc-agent switches.
+- Releases unpack to `~/apps/releases`, and `~/apps/current` links to the
+  active one, which mc-agent switches. A release pins its images in
+  `deploy/images.env`.
 - LazyMC owns port 25565 and starts Paper on demand; Paper listens only on
-  `127.0.0.1:25566`.
+  `127.0.0.1:25566`. The server folder `~/minecraft_server` is mounted into
+  the containers at `/server`.
 
 ## Advisory review (#58)
 

@@ -117,7 +117,7 @@ describe("actionHint", () => {
   // says nothing about the server controls.
   test("doesn't blame RCON when systemd is what's missing", () => {
     const me = { email: "owner@example.com", control: false, console: false, locked: "RCON isn't configured." };
-    assert.match(actionHint(me, status("active"), null), /systemd/);
+    assert.match(actionHint(me, status("active"), null), /Docker/);
   });
   for (const [unit, want] of [
     ["active", /Start is off/],
@@ -125,7 +125,7 @@ describe("actionHint", () => {
     ["failed", /Stop and Restart are off/],
     ["activating", /started/],
     ["deactivating", /stopped/],
-    [undefined, /can't read minecraft.service/],
+    [undefined, /can't read the mc-server container/],
   ]) {
     test(`explains the buttons while the unit is ${unit ?? "unreadable"}`, () => {
       assert.match(actionHint(owner, status("active", unit), null), want);

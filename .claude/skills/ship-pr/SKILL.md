@@ -44,8 +44,10 @@ scopes from `scripts/ci-changes.sh`):
 (cd web && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./...) # the Pi is arm64
 node --check sites/play/app.js                # sites/play changed
 node --check sites/admin/app.js               # sites/admin changed
-shellcheck scripts/*.sh                        # scripts/ changed
-shellcheck start.sh                            # start.sh changed
+shellcheck scripts/*.sh deploy/containers/*.sh # scripts/ or deploy/containers/ changed
+shellcheck deploy/containers/mc-server/*.sh    # the mc-server container's scripts changed
+scripts/images_test.sh && scripts/stack_test.sh # images.sh or stack.sh changed
+docker buildx build --platform linux/arm64 -f deploy/containers/mc-server/Dockerfile .  # an image's inputs changed (likewise web/Dockerfile --target play|admin)
 scripts/ci-changes_test.sh                     # ci-changes.sh changed
 scripts/release-notes_test.sh                  # release-notes.sh changed
 actionlint                                     # .github/ changed (go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12)
