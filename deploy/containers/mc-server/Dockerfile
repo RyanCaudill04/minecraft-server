@@ -11,7 +11,7 @@
 # release that doesn't change them keeps the same image and doesn't
 # restart the server.
 
-FROM eclipse-temurin:25-jre-noble@sha256:a98128a57de944a72bd31fbc79b898edd5a5864d3652071d5bbd2160ab7d7dce AS fetch
+FROM eclipse-temurin:25-jre-noble@sha256:e3b6f7887a50f20d8f07abf279d8a81a5953fb398a9555bd9edd56b9bd15968c AS fetch
 ARG TARGETARCH
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl jq \
@@ -27,7 +27,7 @@ RUN echo '{"plugins": []}' > /tmp/no-plugins.json \
     && /src/scripts/fetch-server.sh --arch "$TARGETARCH" --patch --plugins /tmp/no-plugins.json /opt/minecraft \
     && mv "/opt/minecraft/$(jq -r .paper.patched.path /src/deploy/server.json)" /opt/minecraft/paper.jar
 
-FROM eclipse-temurin:25-jre-noble@sha256:a98128a57de944a72bd31fbc79b898edd5a5864d3652071d5bbd2160ab7d7dce
+FROM eclipse-temurin:25-jre-noble@sha256:e3b6f7887a50f20d8f07abf279d8a81a5953fb398a9555bd9edd56b9bd15968c
 LABEL org.opencontainers.image.source=https://github.com/RyanCaudill04/minecraft-server
 LABEL org.opencontainers.image.description="The Minecraft server: LazyMC and Paper"
 COPY --from=fetch /opt/minecraft/lazymc /opt/minecraft/paper.jar /opt/minecraft/
